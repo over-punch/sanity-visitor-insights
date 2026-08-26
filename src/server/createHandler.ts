@@ -33,6 +33,7 @@ import { measurementHealth } from './reports/measurementHealth'
 import { acquisition } from './reports/acquisition'
 import { journey } from './reports/journey'
 import { typefaceInterest } from './reports/typefaceInterest'
+import { runDiagnostics } from './diagnostics'
 import { JOURNEY_STEPS } from './reports/journey'
 
 /** Environment variables this handler reads. Names are fixed so all three sites match. */
@@ -188,6 +189,10 @@ async function runReport(report: string, ctx: RunContext): Promise<unknown> {
 			notices.push(...coverageNotices(config.eventCutovers, JOURNEY_STEPS.map((s) => s.event), range))
 			return journey(config, ga4, range)
 		}
+
+		case 'diagnostics':
+			// Deliberately tolerates missing sources: its whole job is to report what is absent.
+			return runDiagnostics({ config, ga4, vercel, sanity })
 
 		case 'typeface-interest':
 			if (!ga4) throw new Error('GA4 is required for the typeface-interest report')

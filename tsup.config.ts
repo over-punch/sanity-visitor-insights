@@ -9,7 +9,7 @@
 import { defineConfig } from 'tsup'
 
 export default defineConfig({
-	entry: ['src/index.ts', 'src/server.ts'],
+	entry: ['src/index.ts', 'src/server.ts', 'src/testing.ts'],
 	format: ['cjs', 'esm'],
 	dts: true,
 	// Peer/host-provided packages. Node builtins used by the server entry stay external by default.

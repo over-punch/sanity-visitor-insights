@@ -11,6 +11,8 @@ import { Box, Card, Flex, Heading, Stack, Text } from '@liiift-studio/sanity-ui-
 import { ComparisonBar, MetricFigure, NoticeList, formatCount, formatPercent } from './Figure'
 import type {
 	AcquisitionData,
+	CheckStatus,
+	DiagnosticReport,
 	JourneyData,
 	MeasurementHealthData,
 	TypefaceInterestData,
@@ -228,6 +230,64 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 					</tbody>
 				</table>
 			</Box>
+		</Stack>
+	)
+}
+
+/** Sanity UI tone for each check status. Status is also always spelled out in text. */
+const CHECK_TONE: Record<CheckStatus, 'positive' | 'caution' | 'critical' | 'default'> = {
+	pass: 'positive',
+	warn: 'caution',
+	fail: 'critical',
+	skipped: 'default',
+}
+
+/** Word shown alongside the tone, so status never depends on colour alone. */
+const CHECK_WORD: Record<CheckStatus, string> = {
+	pass: 'Pass',
+	warn: 'Check',
+	fail: 'Fail',
+	skipped: 'Skipped',
+}
+
+/**
+ * Diagnostics — what to fix before trusting anything else here.
+ *
+ * Deliberately the panel that still works with nothing configured: on a site without credentials
+ * it is the only one that can say something useful, and it is the first thing worth opening once
+ * credentials land.
+ */
+export function DiagnosticsPanel({ data }: { data: DiagnosticReport }): React.ReactElement {
+	const failing = data.checks.filter((c) => c.status === 'fail').length
+	const warning = data.checks.filter((c) => c.status === 'warn').length
+
+	const summary =
+		data.verdict === 'pass'
+			? 'Everything checked out. The figures in the other panels can be taken at face value.'
+			: `${failing} failing, ${warning} worth a look. Panels depending on these will be wrong or incomplete until they are resolved.`
+
+	return (
+		<Stack space={4}>
+			<Card padding={3} radius={2} tone={CHECK_TONE[data.verdict]} border>
+				<Text size={1}>{summary}</Text>
+			</Card>
+
+			<Stack space={3}>
+				{data.checks.map((item) => (
+					<Card key={item.id} padding={3} radius={2} tone="transparent" border>
+						<Stack space={3}>
+							<Flex align="center" justify="space-between" gap={3}>
+								<Text size={1} weight="semibold">{item.label}</Text>
+								<Card padding={2} radius={2} tone={CHECK_TONE[item.status]}>
+									<Text size={0} weight="medium">{CHECK_WORD[item.status]}</Text>
+								</Card>
+							</Flex>
+							<Text size={1} muted>{item.detail}</Text>
+							{item.remedy && <Text size={1}>{item.remedy}</Text>}
+						</Stack>
+					</Card>
+				))}
+			</Stack>
 		</Stack>
 	)
 }

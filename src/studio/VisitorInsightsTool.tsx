@@ -11,7 +11,7 @@ import { Box, Button, Card, Container, Flex, Heading, Spinner, Stack, Text } fro
 import type { RangeKey, ReportName } from '../types'
 import { useReport } from './useReport'
 import { NoticeList } from './Figure'
-import { AcquisitionPanel, JourneyPanel, MeasurementHealthPanel, TypefaceInterestPanel } from './panels'
+import { AcquisitionPanel, DiagnosticsPanel, JourneyPanel, MeasurementHealthPanel, TypefaceInterestPanel } from './panels'
 
 /** Range options, in the order they appear. */
 const RANGES: Array<{ key: RangeKey; label: string }> = [
@@ -26,6 +26,7 @@ const PANELS: Array<{ report: ReportName; label: string; blurb: string }> = [
 	{ report: 'acquisition', label: 'Acquisition', blurb: 'Where visitors come from' },
 	{ report: 'journey', label: 'Journey', blurb: 'How far visitors get, and where they stop' },
 	{ report: 'typeface-interest', label: 'Typeface interest', blurb: 'Viewed, tested and bought, by family' },
+	{ report: 'diagnostics', label: 'Diagnostics', blurb: 'What to fix before trusting the numbers above' },
 ]
 
 /** Props supplied by the plugin config. */
@@ -198,6 +199,7 @@ function ReportPanel({ report, apiBaseUrl, range }: { report: ReportName; apiBas
 					{report === 'acquisition' && <AcquisitionPanel data={state.envelope.data as never} />}
 					{report === 'journey' && <JourneyPanel data={state.envelope.data as never} />}
 					{report === 'typeface-interest' && <TypefaceInterestPanel data={state.envelope.data as never} />}
+					{report === 'diagnostics' && <DiagnosticsPanel data={state.envelope.data as never} />}
 
 					<Text size={0} muted>
 						{state.envelope.range.start} to {state.envelope.range.end} ({state.envelope.range.timezone})

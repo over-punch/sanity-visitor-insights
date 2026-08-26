@@ -10,6 +10,31 @@
 import type { MetricValue } from './types'
 
 // ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+/** Outcome of one preflight check. */
+export type CheckStatus = 'pass' | 'warn' | 'fail' | 'skipped'
+
+/** One diagnostic result. */
+export interface DiagnosticCheck {
+	id: string
+	label: string
+	status: CheckStatus
+	/** What was actually observed. */
+	detail: string
+	/** What to do about it, when there is something to do. */
+	remedy?: string
+}
+
+/** A full preflight run. */
+export interface DiagnosticReport {
+	checks: DiagnosticCheck[]
+	/** Worst status across all checks, for a single at-a-glance verdict. */
+	verdict: CheckStatus
+}
+
+// ---------------------------------------------------------------------------
 // Measurement health
 // ---------------------------------------------------------------------------
 

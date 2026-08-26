@@ -37,6 +37,11 @@ export interface Ga4Report {
 	sampled: boolean
 	/** Total row count GA4 reports, which may exceed rows returned when a limit applied. */
 	rowCount: number
+	/**
+	 * The property's configured timezone, as GA4 reports it. Worth capturing because every range
+	 * is anchored to the timezone in site config, and a mismatch silently shifts day boundaries.
+	 */
+	timeZone?: string
 }
 
 /** Raw Data API response shape, narrowed to what is read here. */
@@ -46,7 +51,7 @@ interface RawReport {
 		metricValues?: Array<{ value?: string }>
 	}>
 	rowCount?: number
-	metadata?: { subjectToThresholding?: boolean; samplingMetadatas?: unknown[] }
+	metadata?: { subjectToThresholding?: boolean; samplingMetadatas?: unknown[]; timeZone?: string }
 	propertyQuota?: unknown
 }
 
@@ -75,6 +80,7 @@ function parseReport(raw: RawReport): Ga4Report {
 		thresholded: raw.metadata?.subjectToThresholding === true,
 		sampled: Array.isArray(raw.metadata?.samplingMetadatas) && raw.metadata.samplingMetadatas.length > 0,
 		rowCount: raw.rowCount ?? rows.length,
+		timeZone: raw.metadata?.timeZone,
 	}
 }
 

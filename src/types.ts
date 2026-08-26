@@ -93,6 +93,7 @@ export const REPORT_NAMES = [
 	'acquisition',
 	'journey',
 	'typeface-interest',
+	'diagnostics',
 ] as const
 
 export type ReportName = (typeof REPORT_NAMES)[number]

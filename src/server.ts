@@ -19,6 +19,8 @@ export type { JourneyData, JourneyStep, ExitPage } from './server/reports/journe
 export type { TypefaceInterestData, TypefaceInterestRow } from './server/reports/typefaceInterest'
 export { JOURNEY_STEPS } from './server/reports/journey'
 export { DESIGN_INDUSTRY_SOURCES } from './server/reports/acquisition'
+export { runDiagnostics, type DiagnosticsInput } from './server/diagnostics'
+export type { CheckStatus, DiagnosticCheck, DiagnosticReport } from './reportData'
 
 // Shared contract, re-exported so the server entry is self-sufficient.
 export * from './types'

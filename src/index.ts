@@ -78,6 +78,13 @@ export default visitorInsights
 export { VisitorInsightsTool, type VisitorInsightsToolProps } from './studio/VisitorInsightsTool'
 export { useReport, type ReportState, type UseReportOptions } from './studio/useReport'
 export { MetricFigure, ComparisonBar, NoticeList, formatCount, formatPercent } from './studio/Figure'
+export {
+	AcquisitionPanel,
+	DiagnosticsPanel,
+	JourneyPanel,
+	MeasurementHealthPanel,
+	TypefaceInterestPanel,
+} from './studio/panels'
 
 // Shared contract types, safe in the browser — no server code reachable from here.
 export * from './types'

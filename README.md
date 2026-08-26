@@ -17,6 +17,7 @@ only as a conversion anchor and a count; no revenue, and no customer data.
 | **Acquisition** | Where do visitors come from, and how many are design-industry referrals? |
 | **Journey** | How far do visitors get, and where do they stop? |
 | **Typeface interest** | Which families get viewed, tested and bought? |
+| **Diagnostics** | What to fix before trusting any of the above? |
 
 Each panel offers a week, quarter or year range.
 
@@ -57,6 +58,53 @@ apart.
 **No customer data leaves Sanity.** Order queries project `{_createdAt, orderStatus}` and, for the
 interest panel, dereference only a typeface title. Joining behavioural data to order PII would turn
 aggregate statistics into personal-data processing.
+
+---
+
+## Diagnostics — run this first
+
+The panels are only as trustworthy as the property behind them, and the ways a GA4 property
+quietly produces wrong numbers are not visible from the numbers themselves. The Diagnostics panel
+measures them:
+
+- **GA4 reachable** — distinguishes a bad service-account key from missing Viewer access.
+- **Timezone matches config** — a mismatch shifts day and week boundaries, so GA4, Vercel and
+  Sanity stop agreeing which period an event belongs to.
+- **Retention covers a year** — probes a window beyond the 2-month default rather than asking you
+  to read the Admin screen. This is the check most likely to explain an empty year range.
+- **Configured events fire** — catches a cutover map claiming an event is live when GA4 has never
+  seen it, which otherwise produces figures that look real but are not.
+- **Purchases carry `transaction_id`** — without it a GA4 purchase cannot be reconciled against a
+  Sanity order at all.
+- **GA4 purchases match orders** — a large divergence usually means `purchase` fires on a page some
+  buyers never reach, fires twice, or is being blocked.
+
+It is also the one panel that still says something useful with nothing configured, so it is worth
+opening the moment credentials land. Available in the Studio, or headless:
+
+```ts
+import { runDiagnostics } from '@liiift-studio/sanity-visitor-insights/server'
+
+const report = await runDiagnostics({ config, ga4, vercel, sanity })
+console.log(report.verdict, report.checks)
+```
+
+---
+
+## Testing without credentials
+
+Test doubles ship from a separate subpath, so a consuming site can exercise these reports before
+it has anything to point at:
+
+```ts
+import { createFakeGa4Client, makeGa4Total } from '@liiift-studio/sanity-visitor-insights/testing'
+
+const ga4 = createFakeGa4Client({ batch: () => [makeGa4Total(800), makeGa4Total(300), makeGa4Total(0)] })
+const data = await measurementHealth({ config, range, ga4, vercel: null, sanity: null })
+```
+
+The fakes record what they were asked, so a test can assert on the GROQ that ran — which is how
+this package proves no customer field is ever projected.
 
 ---
 
