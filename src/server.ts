@@ -20,6 +20,12 @@ export type { TypefaceInterestData, TypefaceInterestRow } from './server/reports
 export { JOURNEY_STEPS } from './server/reports/journey'
 export { DESIGN_INDUSTRY_SOURCES } from './server/reports/acquisition'
 export { runDiagnostics, type DiagnosticsInput } from './server/diagnostics'
+
+// Client constructors. Needed to call runDiagnostics headlessly, which the README documents —
+// without these exported that example could not actually be written.
+export { createGa4Client, type Ga4Client, type Ga4Report, type Ga4ReportRequest } from './server/ga4'
+export { createVercelClient, type VercelClient, type VercelPageviews } from './server/vercel'
+export { parseServiceAccountKey, type ServiceAccountKey } from './server/googleAuth'
 export type { CheckStatus, DiagnosticCheck, DiagnosticReport } from './reportData'
 
 // Shared contract, re-exported so the server entry is self-sufficient.
