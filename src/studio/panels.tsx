@@ -7,7 +7,7 @@
  */
 
 import React from 'react'
-import { Box, Card, Flex, Heading, Stack, Text } from '@liiift-studio/sanity-ui-compat'
+import { Badge, Box, Card, Flex, Grid, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
 import { ComparisonBar, MetricFigure, NoticeList, formatCount, formatPercent } from './Figure'
 import type {
 	AcquisitionData,
@@ -28,6 +28,8 @@ function maxOf(metrics: MetricValue[]): number {
 const tableWrap: React.CSSProperties = { overflowX: 'auto', width: '100%' }
 const table: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', minWidth: 420 }
 const cell: React.CSSProperties = { padding: '8px 12px', textAlign: 'left', borderBottom: '1px solid var(--card-border-color)' }
+// @sanity/ui ships no Table primitive, so the element is native — but every cell's content is a
+// Sanity UI component, and the table sits inside a Card, so it themes with the rest of the Studio.
 const numericCell: React.CSSProperties = { ...cell, textAlign: 'right' }
 
 /**
@@ -66,20 +68,26 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 				<Text size={1} muted>
 					Different units to the figures above, and to each other. Shown for scale, never differenced.
 				</Text>
-				<Flex gap={4} wrap="wrap">
-					<Stack space={2}>
-						<Text size={1} muted>GA4 sessions</Text>
-						<MetricFigure metric={data.ga4Sessions} label="GA4 sessions" />
-					</Stack>
-					<Stack space={2}>
-						<Text size={1} muted>Orders</Text>
-						<MetricFigure metric={data.orders} label="Orders" />
-					</Stack>
-					<Stack space={2}>
-						<Text size={1} muted>Consent granted</Text>
-						<MetricFigure metric={data.consentRate} label="Consent granted, percent of sessions" />
-					</Stack>
-				</Flex>
+				<Grid columns={[1, 3]} gap={4}>
+					<Card padding={3} radius={2} tone="transparent" border>
+						<Stack space={3}>
+							<Label size={1} muted>GA4 sessions</Label>
+							<MetricFigure metric={data.ga4Sessions} label="GA4 sessions" />
+						</Stack>
+					</Card>
+					<Card padding={3} radius={2} tone="transparent" border>
+						<Stack space={3}>
+							<Label size={1} muted>Orders</Label>
+							<MetricFigure metric={data.orders} label="Orders" />
+						</Stack>
+					</Card>
+					<Card padding={3} radius={2} tone="transparent" border>
+						<Stack space={3}>
+							<Label size={1} muted>Consent granted</Label>
+							<MetricFigure metric={data.consentRate} label="Consent granted, percent of sessions" />
+						</Stack>
+					</Card>
+				</Grid>
 			</Stack>
 		</Stack>
 	)
@@ -89,35 +97,41 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 export function AcquisitionPanel({ data }: { data: AcquisitionData }): React.ReactElement {
 	return (
 		<Stack space={4}>
-			<Flex gap={4} wrap="wrap">
-				<Stack space={2}>
-					<Text size={1} muted>Sessions</Text>
-					<Text size={4}>{formatCount(data.totalSessions)}</Text>
-				</Stack>
-				{data.designIndustryShare !== null && (
-					<Stack space={2}>
-						<Text size={1} muted>From design-industry referrers</Text>
-						<Text size={4}>{formatPercent(data.designIndustryShare, 1)}</Text>
+			<Grid columns={[1, 3]} gap={4}>
+				<Card padding={3} radius={2} tone="transparent" border>
+					<Stack space={3}>
+						<Label size={1} muted>Sessions</Label>
+						<Text size={4}>{formatCount(data.totalSessions)}</Text>
 					</Stack>
+				</Card>
+				{data.designIndustryShare !== null && (
+					<Card padding={3} radius={2} tone="transparent" border>
+						<Stack space={3}>
+							<Label size={1} muted>From design-industry referrers</Label>
+							<Text size={4}>{formatPercent(data.designIndustryShare, 1)}</Text>
+						</Stack>
+					</Card>
 				)}
 				{data.unattributedShare !== null && (
-					<Stack space={2}>
-						<Text size={1} muted>Unattributed</Text>
-						<Text size={4}>{formatPercent(data.unattributedShare, 1)}</Text>
-					</Stack>
+					<Card padding={3} radius={2} tone="transparent" border>
+						<Stack space={3}>
+							<Label size={1} muted>Unattributed</Label>
+							<Text size={4}>{formatPercent(data.unattributedShare, 1)}</Text>
+						</Stack>
+					</Card>
 				)}
-			</Flex>
+			</Grid>
 
-			<Box style={tableWrap}>
+			<Card radius={2} tone="transparent" border style={tableWrap}>
 				<table style={table}>
 					<caption style={{ textAlign: 'left', paddingBottom: 8 }}>
 						<Text size={1} muted>Traffic sources by sessions</Text>
 					</caption>
 					<thead>
 						<tr>
-							<th scope="col" style={cell}><Text size={1} weight="semibold">Source</Text></th>
-							<th scope="col" style={cell}><Text size={1} weight="semibold">Channel</Text></th>
-							<th scope="col" style={numericCell}><Text size={1} weight="semibold">Sessions</Text></th>
+							<th scope="col" style={cell}><Label size={1} muted>Source</Label></th>
+							<th scope="col" style={cell}><Label size={1} muted>Channel</Label></th>
+							<th scope="col" style={numericCell}><Label size={1} muted>Sessions</Label></th>
 						</tr>
 					</thead>
 					<tbody>
@@ -126,8 +140,8 @@ export function AcquisitionPanel({ data }: { data: AcquisitionData }): React.Rea
 								<th scope="row" style={cell}>
 									<Flex gap={2} align="center">
 										<Text size={1}>{row.source}</Text>
-										{row.designIndustry && <Text size={0} muted>· design industry</Text>}
-										{row.unattributed && <Text size={0} muted>· unattributed</Text>}
+										{row.designIndustry && <Badge tone="primary" fontSize={0}>design industry</Badge>}
+										{row.unattributed && <Badge tone="caution" fontSize={0}>unattributed</Badge>}
 									</Flex>
 								</th>
 								<td style={cell}><Text size={1} muted>{row.channel}</Text></td>
@@ -136,7 +150,7 @@ export function AcquisitionPanel({ data }: { data: AcquisitionData }): React.Rea
 						))}
 					</tbody>
 				</table>
-			</Box>
+			</Card>
 
 			{data.rowsWithheld && (
 				<NoticeList notices={['GA4 withheld some low-traffic rows for privacy, so this list is shorter than reality.']} />
@@ -169,12 +183,12 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 			{data.topExitPages.length > 0 && (
 				<Stack space={3}>
 					<Heading size={1}>Where sessions ended</Heading>
-					<Box style={tableWrap}>
+					<Card radius={2} tone="transparent" border style={tableWrap}>
 						<table style={table}>
 							<thead>
 								<tr>
-									<th scope="col" style={cell}><Text size={1} weight="semibold">Page</Text></th>
-									<th scope="col" style={numericCell}><Text size={1} weight="semibold">Exits</Text></th>
+									<th scope="col" style={cell}><Label size={1} muted>Page</Label></th>
+									<th scope="col" style={numericCell}><Label size={1} muted>Exits</Label></th>
 								</tr>
 							</thead>
 							<tbody>
@@ -186,7 +200,7 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 								))}
 							</tbody>
 						</table>
-					</Box>
+					</Card>
 				</Stack>
 			)}
 		</Stack>
@@ -201,18 +215,18 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 				<Text size={1} muted>{data.interpretationNote}</Text>
 			</Card>
 
-			<Box style={tableWrap}>
+			<Card radius={2} tone="transparent" border style={tableWrap}>
 				<table style={table}>
 					<caption style={{ textAlign: 'left', paddingBottom: 8 }}>
 						<Text size={1} muted>Engagement by typeface</Text>
 					</caption>
 					<thead>
 						<tr>
-							<th scope="col" style={cell}><Text size={1} weight="semibold">Typeface</Text></th>
-							<th scope="col" style={numericCell}><Text size={1} weight="semibold">Viewed</Text></th>
-							<th scope="col" style={numericCell}><Text size={1} weight="semibold">Tested</Text></th>
-							<th scope="col" style={numericCell}><Text size={1} weight="semibold">Bought</Text></th>
-							<th scope="col" style={numericCell}><Text size={1} weight="semibold">Test rate</Text></th>
+							<th scope="col" style={cell}><Label size={1} muted>Typeface</Label></th>
+							<th scope="col" style={numericCell}><Label size={1} muted>Viewed</Label></th>
+							<th scope="col" style={numericCell}><Label size={1} muted>Tested</Label></th>
+							<th scope="col" style={numericCell}><Label size={1} muted>Bought</Label></th>
+							<th scope="col" style={numericCell}><Label size={1} muted>Test rate</Label></th>
 						</tr>
 					</thead>
 					<tbody>
@@ -229,7 +243,7 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 						))}
 					</tbody>
 				</table>
-			</Box>
+			</Card>
 		</Stack>
 	)
 }
@@ -278,9 +292,7 @@ export function DiagnosticsPanel({ data }: { data: DiagnosticReport }): React.Re
 						<Stack space={3}>
 							<Flex align="center" justify="space-between" gap={3}>
 								<Text size={1} weight="semibold">{item.label}</Text>
-								<Card padding={2} radius={2} tone={CHECK_TONE[item.status]}>
-									<Text size={0} weight="medium">{CHECK_WORD[item.status]}</Text>
-								</Card>
+								<Badge tone={CHECK_TONE[item.status]} fontSize={0}>{CHECK_WORD[item.status]}</Badge>
 							</Flex>
 							<Text size={1} muted>{item.detail}</Text>
 							{item.remedy && <Text size={1}>{item.remedy}</Text>}

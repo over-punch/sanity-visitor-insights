@@ -10,7 +10,7 @@
  */
 
 import React from 'react'
-import { Badge, Box, Flex, Stack, Text, Tooltip } from '@liiift-studio/sanity-ui-compat'
+import { Badge, Box, Card, Flex, Stack, Text, Tooltip } from '@liiift-studio/sanity-ui-compat'
 import type { MetricValue, UnavailableReason } from '../types'
 
 /** Human-readable explanation for each unavailable reason. */
@@ -109,39 +109,19 @@ export function ComparisonBar({ label, metric, max, tone = 'default' }: Comparis
 
 			{value === null ? (
 				// A dashed rail, not a zero-width bar: absence must not read as a measured zero.
-				<Box
+				<Card
 					aria-hidden="true"
-					style={{
-						height: 8,
-						borderRadius: 4,
-						border: '1px dashed var(--card-border-color)',
-					}}
+					radius={2}
+					tone="transparent"
+					border
+					style={{ height: 8, borderStyle: 'dashed' }}
 				/>
 			) : (
-				<Box
-					aria-hidden="true"
-					style={{
-						height: 8,
-						borderRadius: 4,
-						background: 'var(--card-border-color)',
-						overflow: 'hidden',
-					}}
-				>
-					<Box
-						style={{
-							width: `${width}%`,
-							height: '100%',
-							background:
-								tone === 'primary'
-									? 'var(--card-focus-ring-color)'
-									: tone === 'positive'
-										? 'var(--card-badge-positive-dot-color, var(--card-focus-ring-color))'
-										: tone === 'caution'
-											? 'var(--card-badge-caution-dot-color, var(--card-muted-fg-color))'
-											: 'var(--card-muted-fg-color)',
-						}}
-					/>
-				</Box>
+				// Track and fill are both Cards so the palette comes from the Studio theme tokens
+				// rather than hand-picked CSS variables, and follows light/dark without extra work.
+				<Card aria-hidden="true" radius={2} tone="transparent" border style={{ height: 8, overflow: 'hidden' }}>
+					<Card tone={tone === 'default' ? 'default' : tone} radius={2} style={{ width: `${width}%`, height: '100%' }} />
+				</Card>
 			)}
 		</Stack>
 	)
@@ -165,10 +145,12 @@ export function NoticeList({ notices }: NoticeListProps): React.ReactElement | n
 		<ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 }}>
 			{notices.map((notice) => (
 				<li key={notice}>
-					<Flex gap={2} align="flex-start">
-						<Text size={1} muted aria-hidden="true">⚠</Text>
-						<Text size={1} muted>{notice}</Text>
-					</Flex>
+					<Card padding={3} radius={2} tone="caution" border>
+						<Flex gap={3} align="flex-start">
+							<Badge tone="caution" fontSize={0}>Caveat</Badge>
+							<Text size={1}>{notice}</Text>
+						</Flex>
+					</Card>
 				</li>
 			))}
 		</ul>
