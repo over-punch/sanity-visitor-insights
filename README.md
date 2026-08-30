@@ -37,6 +37,13 @@ like with like and labels the remainder unexplained.
 the GA4/Vercel gap into a real number. Until a site instruments it, the panel says so instead of
 guessing.
 
+**Outages are recorded, not just start dates.** An event can exist in the code and still stop
+reaching GA4 — Darden's ecommerce events did exactly that for nine months after a script-loading
+change. Every one of those days returns an honest zero from the API, and a yearly funnel would
+render it as a collapse in trade rather than a gap in measurement. `eventCutovers` therefore accepts
+`{ from, outages: [{ start, until, reason }] }`, and a range inside an outage reports as unavailable
+rather than as zero.
+
 **A missing metric is never zero.** Every figure is a `MetricValue` tagged union, so an
 uninstrumented event cannot silently coerce to `0` and be charted as a real trough. Unavailable
 figures render as an em dash with a stated reason.

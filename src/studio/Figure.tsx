@@ -18,6 +18,7 @@ const REASON_TEXT: Record<UnavailableReason, string> = {
 	not_instrumented: 'Not tracked on this site',
 	before_cutover: 'Not tracked during this period',
 	suppressed: 'Withheld by GA4 for privacy',
+	outage: 'Not recorded during part of this period',
 	source_error: 'Source did not respond',
 	not_applicable: 'Does not apply to this site',
 }

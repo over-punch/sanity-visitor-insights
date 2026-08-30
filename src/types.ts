@@ -16,6 +16,8 @@ export type UnavailableReason =
 	| 'before_cutover'
 	/** GA4 suppressed the row for privacy thresholding. A real number exists; we may not see it. */
 	| 'suppressed'
+	/** The event exists in the code but stopped reaching GA4 for this period. Not a real zero. */
+	| 'outage'
 	/** The upstream source errored or timed out. Retryable, unlike the others. */
 	| 'source_error'
 	/** The metric is not defined for this site at all (e.g. a flow that does not exist there). */

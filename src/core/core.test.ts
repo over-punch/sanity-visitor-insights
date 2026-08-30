@@ -49,7 +49,9 @@ describe('coverageForRange', () => {
 	it('reports partial coverage when the range straddles the cutover', () => {
 		expect(coverageForRange(cutovers, 'begin_checkout', { start: '2026-08-01', end: '2026-10-01' })).toEqual({
 			status: 'partial',
+			reason: 'spans_cutover',
 			cutover: '2026-09-01',
+			outages: [],
 		})
 	})
 
@@ -69,7 +71,7 @@ describe('applyCoverage', () => {
 	})
 
 	it('marks a straddling range as partial rather than complete', () => {
-		const metric = applyCoverage(120, { status: 'partial', cutover: '2026-09-01' })
+		const metric = applyCoverage(120, { status: 'partial', reason: 'spans_cutover', cutover: '2026-09-01', outages: [] })
 		expect(metric.status).toBe('partial')
 		expect(valueOrNull(metric)).toBe(120)
 	})
@@ -94,6 +96,68 @@ describe('coverageNotices', () => {
 		expect(notices).toHaveLength(2)
 		expect(notices.some((n) => n.includes('begin_checkout') && n.includes('2026-09-01'))).toBe(true)
 		expect(notices.some((n) => n.includes('tester_engaged'))).toBe(true)
+	})
+})
+
+describe('outages', () => {
+	// Darden's real case: ecommerce events kept firing in code but stopped reaching GA4 for
+	// nine months. Every one of those days returns an honest zero from the API.
+	const withOutage: Record<string, EventCutover> = {
+		purchase: {
+			from: PREEXISTING,
+			outages: [{ start: '2025-11-20', until: '2026-08-30', reason: 'gtag loader moved to lazyOnload' }],
+		},
+		still_broken: {
+			from: PREEXISTING,
+			outages: [{ start: '2026-01-01', until: null }],
+		},
+	}
+
+	it('reports a range sitting entirely inside an outage as unavailable, not zero', () => {
+		const coverage = coverageForRange(withOutage, 'purchase', { start: '2026-01-01', end: '2026-03-01' })
+		expect(coverage.status).toBe('none')
+		expect(coverage).toMatchObject({ reason: 'outage' })
+
+		// The crucial assertion: a real GA4 zero must not become a charted zero.
+		const metric = applyCoverage(0, coverage)
+		expect(metric.status).toBe('unavailable')
+		expect(valueOrNull(metric)).toBeNull()
+	})
+
+	it('reports a range straddling the end of an outage as partial and undercounted', () => {
+		const coverage = coverageForRange(withOutage, 'purchase', { start: '2026-08-01', end: '2026-09-30' })
+		expect(coverage).toMatchObject({ status: 'partial', reason: 'spans_outage' })
+
+		const metric = applyCoverage(12, coverage)
+		expect(metric.status).toBe('partial')
+		if (metric.status === 'partial') expect(metric.note).toContain('Undercounted')
+	})
+
+	it('treats a range fully after the outage as complete', () => {
+		expect(coverageForRange(withOutage, 'purchase', { start: '2026-09-01', end: '2026-09-30' })).toEqual({ status: 'full' })
+	})
+
+	it('treats a range fully before the outage as complete', () => {
+		expect(coverageForRange(withOutage, 'purchase', { start: '2025-06-01', end: '2025-11-01' })).toEqual({ status: 'full' })
+	})
+
+	it('treats an unresolved outage as ongoing', () => {
+		const coverage = coverageForRange(withOutage, 'still_broken', { start: '2026-06-01', end: '2026-08-30' })
+		expect(coverage).toMatchObject({ status: 'none', reason: 'outage' })
+	})
+
+	it('still accepts the plain shorthand forms', () => {
+		expect(coverageForRange({ a: PREEXISTING }, 'a', { start: '2026-01-01', end: '2026-02-01' })).toEqual({ status: 'full' })
+		expect(coverageForRange({ a: null }, 'a', { start: '2026-01-01', end: '2026-02-01' })).toEqual({
+			status: 'none', reason: 'not_instrumented',
+		})
+	})
+
+	it('explains an outage in the notices rather than leaving a silent dip', () => {
+		const notices = coverageNotices(withOutage, ['purchase'], { start: '2026-08-01', end: '2026-09-30' })
+		expect(notices).toHaveLength(1)
+		expect(notices[0]).toContain('not a real decline')
+		expect(notices[0]).toContain('lazyOnload')
 	})
 })
 

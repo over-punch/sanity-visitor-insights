@@ -23,7 +23,7 @@ export { runDiagnostics, type DiagnosticsInput } from './server/diagnostics'
 
 // Client constructors. Needed to call runDiagnostics headlessly, which the README documents —
 // without these exported that example could not actually be written.
-export { createGa4Client, type Ga4Client, type Ga4Report, type Ga4ReportRequest } from './server/ga4'
+export { createGa4Client, eventNameFilter, sumFirstMetric, type Ga4Client, type Ga4Report, type Ga4ReportRequest } from './server/ga4'
 export { createVercelClient, type VercelClient, type VercelPageviews } from './server/vercel'
 export { parseServiceAccountKey, type ServiceAccountKey } from './server/googleAuth'
 export type { CheckStatus, DiagnosticCheck, DiagnosticReport } from './reportData'
