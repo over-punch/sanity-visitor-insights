@@ -442,3 +442,17 @@ describe('per-site event names', () => {
 		expect(JSON.stringify(ga4.batchCalls[0]?.map((r) => r.dimensionFilter))).toContain('tester_engaged')
 	})
 })
+
+describe('journey counts people, not events', () => {
+	it('asks GA4 for users rather than event counts', async () => {
+		// add_to_cart fires on every selection change on two of the three sites — 5.0 and 3.4
+		// events per user — so an event-count funnel divides an engagement-inflated number by one
+		// that fires once per order, and calls the result a conversion rate.
+		const ga4 = createFakeGa4Client({ batch: (requests) => requests.map(() => makeGa4Total(10)) })
+		await journey(siteConfig(), ga4, range)
+
+		const metrics = ga4.batchCalls[0]?.flatMap((r) => (r.metrics ?? []).map((m) => m.name))
+		expect(metrics).not.toContain('eventCount')
+		expect(new Set(metrics)).toEqual(new Set(['totalUsers']))
+	})
+})

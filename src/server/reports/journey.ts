@@ -13,6 +13,10 @@
  * A step whose event is not instrumented on this site reports as unavailable, never as zero. On a
  * site missing `begin_checkout`, the cart-to-checkout drop-off is not "100% drop-off" — it is
  * unmeasured, and the two must not look alike.
+ *
+ * Steps count distinct users rather than events. Several of these events fire repeatedly per
+ * visitor — `add_to_cart` runs on every selection change on two of the three sites — so an
+ * event-count funnel compares a number that inflates with engagement against one that does not.
  */
 
 import type { JourneyData, JourneyStep, ExitPage } from '../../reportData'
@@ -69,7 +73,12 @@ export async function journey(config: SiteAnalyticsConfig, ga4: Ga4Client, range
 	// events onto one step gets them summed, since they describe the same interaction.
 	const reports = await ga4.batchRunReports(
 		queryable.map((entry) => ({
-			metrics: [{ name: 'eventCount' }],
+			// totalUsers, not eventCount. A funnel step means "how many people got this far", and
+			// these events do not fire once per person: add_to_cart runs on every selection change
+			// on MCKL and TDF, measured at 5.0 and 3.4 events per user over 90 days, while purchase
+			// fires once per order. Dividing raw event counts between those steps produced a
+			// conversion rate that was really a ratio of two different things.
+			metrics: [{ name: 'totalUsers' }],
 			dateRanges: [{ startDate: range.start, endDate: range.end }],
 			dimensionFilter: eventNamesFilter(entry.events),
 		})),

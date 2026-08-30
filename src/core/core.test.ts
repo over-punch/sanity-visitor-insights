@@ -254,3 +254,16 @@ describe('vercel granularity', () => {
 		expect(granularityFor('2025-08-30', '2026-08-30')).toBe('month')
 	})
 })
+
+describe('site caveats', () => {
+	it('accepts declared measurement quirks on the config', () => {
+		const problems = validateSiteConfig({
+			siteId: 'mckl', label: 'MCKL',
+			ga4: { propertyId: '361046782', timezone: 'UTC' },
+			orders: { documentType: 'order', typefacesField: 'typefaces' },
+			eventCutovers: {},
+			caveats: ['add_to_cart fires on every selection change here, not on a discrete cart action.'],
+		})
+		expect(problems).toEqual([])
+	})
+})

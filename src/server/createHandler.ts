@@ -148,6 +148,9 @@ export function createVisitorInsightsHandler(options: HandlerOptions) {
 				const provisional = provisionalNotice(range)
 				if (provisional) notices.push(provisional)
 
+				// Site-declared quirks accompany every report, not just the one they came from.
+				notices.push(...(config.caveats ?? []))
+
 				const data = await runReport(reportName, { config, range, ga4, vercel, sanity, notices })
 
 				return { report: reportName, range, sources, notices, data }

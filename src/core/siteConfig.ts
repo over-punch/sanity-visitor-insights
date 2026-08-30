@@ -77,6 +77,15 @@ export interface SiteAnalyticsConfig {
 	 * Names listed here must also appear in `eventCutovers`, or they report as unknown events.
 	 */
 	eventNames?: EventNameMap
+	/**
+	 * Known measurement quirks for this site, shown with every report.
+	 *
+	 * Some differences between sites are semantic and cannot be normalised away — MCKL and TDF fire
+	 * `add_to_cart` on every selection change rather than on a discrete cart action, so their cart
+	 * step counts a different act from a site that fires it once. Stating that beside the figure is
+	 * the only honest option; silently comparing them is not.
+	 */
+	caveats?: string[]
 	/** Origins allowed to call this site's handler cross-origin, e.g. a separately deployed Studio. */
 	allowedStudioOrigins?: string[]
 }
