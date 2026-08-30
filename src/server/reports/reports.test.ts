@@ -342,3 +342,46 @@ describe('typefaceInterest', () => {
 		expect(data.interpretationNote).toContain('not individual journeys')
 	})
 })
+
+describe('data-quality flags reach the surface', () => {
+	it('reports GA4 thresholding on the typeface table instead of claiming it is complete', async () => {
+		// This was hardcoded false, so quiet families vanished and the table read as exhaustive.
+		const ga4 = createFakeGa4Client({
+			single: () => makeGa4Report([{ dimensions: ['Omnes'], metrics: [10] }], { thresholded: true }),
+		})
+
+		const data = await typefaceInterest({ config: siteConfig(), range, ga4, sanity: null })
+		expect(data.rowsWithheld).toBe(true)
+	})
+
+	it('warns when GA4 answered from a sample rather than presenting estimates as exact', async () => {
+		const notices: string[] = []
+		const ga4 = createFakeGa4Client({
+			single: () => makeGa4Report([{ dimensions: ['google', 'Organic Search'], metrics: [10] }], { sampled: true }),
+		})
+
+		await acquisition(ga4, range, 25, notices)
+		expect(notices.some((n) => n.includes('sample'))).toBe(true)
+	})
+
+	it('warns about sampling in the funnel too', async () => {
+		const notices: string[] = []
+		const ga4 = createFakeGa4Client({
+			batch: (requests) => requests.map(() => makeGa4Report([{ metrics: [10] }], { sampled: true })),
+		})
+
+		await journey(siteConfig(), ga4, range, notices)
+		expect(notices.some((n) => n.includes('sample'))).toBe(true)
+	})
+
+	it('stays quiet when nothing was sampled or withheld', async () => {
+		const notices: string[] = []
+		const ga4 = createFakeGa4Client({
+			single: () => makeGa4Report([{ dimensions: ['google', 'Organic Search'], metrics: [10] }]),
+		})
+
+		const data = await acquisition(ga4, range, 25, notices)
+		expect(notices).toEqual([])
+		expect(data.rowsWithheld).toBe(false)
+	})
+})

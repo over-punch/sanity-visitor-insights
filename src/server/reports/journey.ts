@@ -44,7 +44,7 @@ const APPROXIMATION_NOTE =
  * All step queries go in one batched call rather than one request per step, which would otherwise
  * make this the most quota-expensive panel in the tool.
  */
-export async function journey(config: SiteAnalyticsConfig, ga4: Ga4Client, range: DateRange): Promise<JourneyData> {
+export async function journey(config: SiteAnalyticsConfig, ga4: Ga4Client, range: DateRange, notices?: string[]): Promise<JourneyData> {
 	// Only query steps whose event could return data; skip the rest to save quota.
 	const coverages = JOURNEY_STEPS.map((step) => ({
 		step,
@@ -62,10 +62,15 @@ export async function journey(config: SiteAnalyticsConfig, ga4: Ga4Client, range
 	)
 
 	const countsByEvent = new Map<string, number>()
+	let sampled = false
 	queryable.forEach((entry, index) => {
 		const report = reports[index]
-		if (report) countsByEvent.set(entry.step.event, sumFirstMetric(report))
+		if (!report) return
+		if (report.sampled) sampled = true
+		countsByEvent.set(entry.step.event, sumFirstMetric(report))
 	})
+
+	if (sampled) notices?.push('GA4 answered part of this funnel from a sample, so the step counts are estimates.')
 
 	const steps: JourneyStep[] = []
 	let previousMeasurable: number | null = null

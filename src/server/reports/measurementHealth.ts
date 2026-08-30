@@ -38,6 +38,8 @@ export interface MeasurementHealthInput {
 	ga4: Ga4Client | null
 	vercel: VercelClient | null
 	sanity: SanityQueryClient | null
+	/** Report-level caveats. Sampling is pushed here so the panel shows it without extra plumbing. */
+	notices?: string[]
 }
 
 /** Build the plain-language reading shown beneath the figures. */
@@ -106,6 +108,9 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 
 			if (views) ga4Pageviews = ok(sumFirstMetric(views))
 			if (sessions) ga4Sessions = ok(sumFirstMetric(sessions))
+			if (views?.sampled || sessions?.sampled) {
+				input.notices?.push('GA4 answered from a sample, so its pageview and session figures are estimates — treat a small gap against Vercel as noise.')
+			}
 
 			const consentCoverage = coverageForRange(config.eventCutovers, CONSENT_EVENT, range)
 			if (consentCoverage.status === 'full' && consent && ga4Sessions.status === 'ok' && ga4Sessions.value > 0) {

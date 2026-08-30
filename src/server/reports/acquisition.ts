@@ -47,7 +47,7 @@ function isDesignIndustry(source: string): boolean {
  * @param range - the requested range
  * @param limit - maximum source rows to return
  */
-export async function acquisition(ga4: Ga4Client, range: DateRange, limit = 25): Promise<AcquisitionData> {
+export async function acquisition(ga4: Ga4Client, range: DateRange, limit = 25, notices?: string[]): Promise<AcquisitionData> {
 	const report = await ga4.runReport({
 		dimensions: [{ name: 'sessionSource' }, { name: 'sessionDefaultChannelGroup' }],
 		metrics: [{ name: 'sessions' }],
@@ -55,6 +55,10 @@ export async function acquisition(ga4: Ga4Client, range: DateRange, limit = 25):
 		orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
 		limit,
 	})
+
+	// Sampling was captured from the response and then never shown, so a sampled report rendered
+	// with the same authority as an exact one.
+	if (report.sampled) notices?.push('GA4 answered this acquisition report from a sample, so the session counts are estimates.')
 
 	const rows: SourceRow[] = report.rows.map((row) => {
 		const source = row.dimensions[0] ?? '(not set)'

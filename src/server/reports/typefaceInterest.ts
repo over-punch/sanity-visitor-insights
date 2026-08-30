@@ -45,6 +45,7 @@ async function countsByItem(
 	ga4: Ga4Client,
 	range: DateRange,
 	eventName: string,
+	quality: { thresholded: boolean; sampled: boolean },
 ): Promise<Map<string, number> | null> {
 	if (coverageForRange(config.eventCutovers, eventName, range).status === 'none') return null
 
@@ -56,6 +57,12 @@ async function countsByItem(
 		orderBys: [{ metric: { metricName: 'eventCount' }, desc: true }],
 		limit: 100,
 	})
+
+	// GA4 withholds low-count rows entirely rather than returning them as zero, so a quiet family
+	// simply vanishes. Reporting the table as complete when that happened is the same lie as
+	// rendering a missing value as zero.
+	if (report.thresholded) quality.thresholded = true
+	if (report.sampled) quality.sampled = true
 
 	const counts = new Map<string, number>()
 	for (const row of report.rows) {
@@ -73,15 +80,18 @@ export interface TypefaceInterestInput {
 	range: DateRange
 	ga4: Ga4Client
 	sanity: SanityQueryClient | null
+	/** Report-level caveats. Sampling is pushed here so the panel shows it without extra plumbing. */
+	notices?: string[]
 }
 
 /** Run the typeface-interest report. */
 export async function typefaceInterest(input: TypefaceInterestInput): Promise<TypefaceInterestData> {
 	const { config, range, ga4, sanity } = input
 
+	const quality = { thresholded: false, sampled: false }
 	const [viewed, tested] = await Promise.all([
-		countsByItem(config, ga4, range, VIEW_EVENT),
-		countsByItem(config, ga4, range, TEST_EVENT),
+		countsByItem(config, ga4, range, VIEW_EVENT, quality),
+		countsByItem(config, ga4, range, TEST_EVENT, quality),
 	])
 
 	let bought: Map<string, number> | null = null
@@ -134,7 +144,11 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 		return bv - av
 	})
 
-	return { rows, interpretationNote: INTERPRETATION_NOTE, rowsWithheld: false }
+	if (quality.sampled) {
+		input.notices?.push('GA4 answered the typeface breakdown from a sample, so these counts are estimates.')
+	}
+
+	return { rows, interpretationNote: INTERPRETATION_NOTE, rowsWithheld: quality.thresholded }
 }
 
 export type { TypefaceInterestData, TypefaceInterestRow } from '../../reportData'

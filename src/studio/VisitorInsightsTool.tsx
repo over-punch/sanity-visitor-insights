@@ -8,9 +8,10 @@
 
 import React, { useCallback, useRef, useState } from 'react'
 import { Box, Button, Card, Container, Flex, Heading, Spinner, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import type { RangeKey, ReportName } from '../types'
+import type { RangeKey, ReportName, SourceName, SourceStatus } from '../types'
 import { useReport } from './useReport'
 import { NoticeList } from './Figure'
+import { Badge } from '@liiift-studio/sanity-ui-compat'
 import { AcquisitionPanel, DiagnosticsPanel, JourneyPanel, MeasurementHealthPanel, TypefaceInterestPanel } from './panels'
 
 /** Range options, in the order they appear. */
@@ -89,6 +90,46 @@ function RangeSelector({ value, onChange }: { value: RangeKey; onChange: (next: 
 				)
 			})}
 		</Flex>
+	)
+}
+
+/** Human labels for the upstreams, so the row does not read as internal jargon. */
+const SOURCE_LABEL: Record<SourceName, string> = {
+	ga4: 'Google Analytics',
+	vercel: 'Vercel',
+	sanity: 'Orders',
+}
+
+/**
+ * Which sources answered.
+ *
+ * The envelope has carried this from the start and nothing displayed it, so a panel built on two
+ * of three sources looked identical to one built on all three. Partial failure is the normal case
+ * here — an unconfigured Vercel project, an expired service account — and the difference between
+ * "this number is low" and "we could not ask" has to be visible.
+ *
+ * Renders nothing when everything answered, so the healthy case stays quiet.
+ */
+function SourceStatusRow({ sources }: { sources: Partial<Record<SourceName, SourceStatus>> }): React.ReactElement | null {
+	const degraded = (Object.entries(sources) as Array<[SourceName, SourceStatus]>).filter(([, s]) => s.status !== 'ok')
+	if (degraded.length === 0) return null
+
+	return (
+		<Card padding={3} radius={2} tone="caution" border>
+			<Flex gap={3} align="center" wrap="wrap">
+				<Text size={1} weight="semibold">Incomplete data:</Text>
+				{degraded.map(([name, status]) => (
+					<Flex key={name} gap={2} align="center">
+						<Badge tone={status.status === 'error' ? 'critical' : 'default'} fontSize={0}>
+							{SOURCE_LABEL[name]}
+						</Badge>
+						<Text size={1} muted>
+							{status.status === 'error' ? status.message : 'not configured for this site'}
+						</Text>
+					</Flex>
+				))}
+			</Flex>
+		</Card>
 	)
 }
 
@@ -193,6 +234,7 @@ function ReportPanel({ report, apiBaseUrl, range }: { report: ReportName; apiBas
 
 			{state.status === 'ready' && (
 				<Stack space={4}>
+					<SourceStatusRow sources={state.envelope.sources} />
 					<NoticeList notices={state.envelope.notices} />
 
 					{report === 'measurement-health' && <MeasurementHealthPanel data={state.envelope.data as never} />}

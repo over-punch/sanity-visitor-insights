@@ -178,16 +178,16 @@ async function runReport(report: string, ctx: RunContext): Promise<unknown> {
 
 	switch (report) {
 		case 'measurement-health':
-			return measurementHealth({ config, range, ga4, vercel, sanity })
+			return measurementHealth({ config, range, ga4, vercel, sanity, notices })
 
 		case 'acquisition':
 			if (!ga4) throw new Error('GA4 is required for the acquisition report')
-			return acquisition(ga4, range)
+			return acquisition(ga4, range, 25, notices)
 
 		case 'journey': {
 			if (!ga4) throw new Error('GA4 is required for the journey report')
 			notices.push(...coverageNotices(config.eventCutovers, JOURNEY_STEPS.map((s) => s.event), range))
-			return journey(config, ga4, range)
+			return journey(config, ga4, range, notices)
 		}
 
 		case 'diagnostics':
@@ -196,7 +196,7 @@ async function runReport(report: string, ctx: RunContext): Promise<unknown> {
 
 		case 'typeface-interest':
 			if (!ga4) throw new Error('GA4 is required for the typeface-interest report')
-			return typefaceInterest({ config, range, ga4, sanity })
+			return typefaceInterest({ config, range, ga4, sanity, notices })
 
 		default:
 			throw new Error(`Unhandled report: ${report}`)
