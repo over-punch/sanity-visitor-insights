@@ -28,6 +28,22 @@ export interface VercelClient {
 	pageviews(start: string, end: string): Promise<VercelPageviews>
 }
 
+/**
+ * Pick a time granularity the aggregate endpoint will accept.
+ *
+ * It rejects any grouping that would return more than 62 buckets — a quarter or a year grouped by
+ * day is a 400, not an empty result. Stepping the granularity up keeps long ranges working instead
+ * of failing outright, which is what the year view needs.
+ */
+export function granularityFor(start: string, end: string): 'day' | 'week' | 'month' {
+	const days = Math.round((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86_400_000) + 1
+	// Measured against the live API: day is capped at 62 days, week at 26 weeks. Both limits are
+	// on buckets returned, and exceeding either is a 400 rather than a truncated result.
+	if (days <= 62) return 'day'
+	if (days <= 26 * 7) return 'week'
+	return 'month'
+}
+
 /** Shape of the aggregate response rows. */
 interface AggregateRow {
 	timestamp?: string
@@ -65,6 +81,7 @@ export function createVercelClient(projectId: string, token: string, teamId?: st
 			// Two calls on purpose. The count endpoint gives range totals with visitors deduped
 			// across the whole window; summing the daily rows would overcount visitors, because a
 			// person returning on three days is three daily visitors but one range visitor.
+			// It also has no range limit, unlike the aggregate below.
 			const [totals, series] = await Promise.all([
 				query<{ data?: { pageviews?: number; visitors?: number } }>('visits/count', {
 					since: start,
@@ -73,8 +90,13 @@ export function createVercelClient(projectId: string, token: string, teamId?: st
 				query<{ data?: AggregateRow[] }>('visits/aggregate', {
 					since: start,
 					until: end,
-					by: 'day',
+					by: granularityFor(start, end),
 					limit: '100',
+				}).catch((e: Error) => {
+					// The series is supplementary — it feeds sparklines, not the headline figure.
+					// Losing it must not cost the totals, which is what the panel actually compares.
+					console.error('Visitor insights: Vercel series unavailable:', e.message)
+					return { data: [] as AggregateRow[] }
 				}),
 			])
 

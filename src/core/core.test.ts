@@ -237,3 +237,20 @@ describe('validateSiteConfig', () => {
 		expect(validateSiteConfig({}).length).toBeGreaterThan(1)
 	})
 })
+
+describe('vercel granularity', () => {
+	it('picks a granularity the API will actually accept', async () => {
+		const { granularityFor } = await import('../server/vercel')
+		// Limits measured against the live API: day caps at 62 days, week at 26 weeks. Exceeding
+		// either is a 400, not a truncated series, so the year view fails outright if this is wrong.
+		expect(granularityFor('2026-08-01', '2026-08-30')).toBe('day')
+		expect(granularityFor('2026-07-01', '2026-08-31')).toBe('day')
+		expect(granularityFor('2026-06-01', '2026-08-30')).toBe('week')
+		// Exact boundaries: 62 days is still day, 63 is not; 182 days is still week, 183 is not.
+		expect(granularityFor('2026-01-01', '2026-03-03')).toBe('day')
+		expect(granularityFor('2026-01-01', '2026-03-04')).toBe('week')
+		expect(granularityFor('2026-01-01', '2026-07-01')).toBe('week')
+		expect(granularityFor('2026-01-01', '2026-07-02')).toBe('month')
+		expect(granularityFor('2025-08-30', '2026-08-30')).toBe('month')
+	})
+})
