@@ -52,16 +52,19 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 				<ComparisonBar label="GA4 pageviews" metric={data.ga4Pageviews} max={pageviewMax} tone="default" />
 			</Stack>
 
-			{data.shortfallRatio !== null && (
-				<Card padding={3} radius={2} tone="transparent" border>
-					<Stack space={2}>
+			{/* The reading is always shown. It used to be nested inside the shortfall block, so a
+			    range where only one source answered rendered bare numbers and no explanation of why
+			    there was nothing to compare — the state where the explanation matters most. */}
+			<Card padding={3} radius={2} tone="transparent" border>
+				<Stack space={2}>
+					{data.shortfallRatio !== null && (
 						<Text size={1} weight="semibold">
 							GA4 shortfall: {formatPercent(Math.abs(data.shortfallRatio), 1)}
 						</Text>
-						<Text size={1} muted>{data.interpretation}</Text>
-					</Stack>
-				</Card>
-			)}
+					)}
+					<Text size={1} muted>{data.interpretation}</Text>
+				</Stack>
+			</Card>
 
 			<Stack space={3}>
 				<Heading size={1}>Context</Heading>
