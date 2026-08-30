@@ -18,8 +18,11 @@
 import type { JourneyData, JourneyStep, ExitPage } from '../../reportData'
 import type { DateRange, MetricValue } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
-import { applyCoverage, coverageForRange } from '../../core/cutover'
-import { eventNameFilter, sumFirstMetric, type Ga4Client } from '../ga4'
+import { applyCoverage, coverageForAny, coverageForRange } from '../../core/cutover'
+import { eventNamesFilter, sumFirstMetric, type Ga4Client } from '../ga4'
+
+/** Default tester event, used when a site does not name its own. */
+const TESTER_DEFAULT = 'tester_engaged'
 
 /** The funnel, in order. Each entry names the GA4 event that evidences the step. */
 export const JOURNEY_STEPS = [
@@ -45,19 +48,30 @@ const APPROXIMATION_NOTE =
  * make this the most quota-expensive panel in the tool.
  */
 export async function journey(config: SiteAnalyticsConfig, ga4: Ga4Client, range: DateRange, notices?: string[]): Promise<JourneyData> {
-	// Only query steps whose event could return data; skip the rest to save quota.
-	const coverages = JOURNEY_STEPS.map((step) => ({
-		step,
-		coverage: coverageForRange(config.eventCutovers, step.event, range),
-	}))
+	// The tester step is whatever this site calls it. TDF emits five distinct tester events and
+	// has for a long time; forcing a single canonical name on every site would throw that away.
+	const testerEvents = config.eventNames?.tester ?? [TESTER_DEFAULT]
+
+	const coverages = JOURNEY_STEPS.map((step) => {
+		const events = step.event === TESTER_DEFAULT ? testerEvents : [step.event]
+		return {
+			step,
+			events,
+			coverage: events.length > 1
+				? coverageForAny(config.eventCutovers, events, range)
+				: coverageForRange(config.eventCutovers, events[0] ?? step.event, range),
+		}
+	})
 
 	const queryable = coverages.filter((entry) => entry.coverage.status !== 'none')
 
+	// One request per step, filtered to that step's event or events. A site mapping several
+	// events onto one step gets them summed, since they describe the same interaction.
 	const reports = await ga4.batchRunReports(
 		queryable.map((entry) => ({
 			metrics: [{ name: 'eventCount' }],
 			dateRanges: [{ startDate: range.start, endDate: range.end }],
-			dimensionFilter: eventNameFilter(entry.step.event),
+			dimensionFilter: eventNamesFilter(entry.events),
 		})),
 	)
 

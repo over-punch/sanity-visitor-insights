@@ -18,8 +18,8 @@ import type { TypefaceInterestData, TypefaceInterestRow } from '../../reportData
 import type { DateRange, MetricValue } from '../../types'
 import { ok, unavailable } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
-import { coverageForRange } from '../../core/cutover'
-import { eventNameFilter, type Ga4Client } from '../ga4'
+import { coverageForAny } from '../../core/cutover'
+import { eventNamesFilter, type Ga4Client } from '../ga4'
 import { countOrdersByTypeface, type SanityQueryClient } from '../orders'
 
 /** GA4 event evidencing a typeface page view. */
@@ -44,16 +44,16 @@ async function countsByItem(
 	config: SiteAnalyticsConfig,
 	ga4: Ga4Client,
 	range: DateRange,
-	eventName: string,
+	eventNames: string[],
 	quality: { thresholded: boolean; sampled: boolean },
 ): Promise<Map<string, number> | null> {
-	if (coverageForRange(config.eventCutovers, eventName, range).status === 'none') return null
+	if (coverageForAny(config.eventCutovers, eventNames, range).status === 'none') return null
 
 	const report = await ga4.runReport({
 		dimensions: [{ name: 'itemName' }],
 		metrics: [{ name: 'eventCount' }],
 		dateRanges: [{ startDate: range.start, endDate: range.end }],
-		dimensionFilter: eventNameFilter(eventName),
+		dimensionFilter: eventNamesFilter(eventNames),
 		orderBys: [{ metric: { metricName: 'eventCount' }, desc: true }],
 		limit: 100,
 	})
@@ -89,10 +89,21 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 	const { config, range, ga4, sanity } = input
 
 	const quality = { thresholded: false, sampled: false }
-	const [viewed, tested] = await Promise.all([
-		countsByItem(config, ga4, range, VIEW_EVENT, quality),
-		countsByItem(config, ga4, range, TEST_EVENT, quality),
+	// Tester events are per-site; TDF names five of them. Counts are summed across whichever
+	// this site emits, so the tested column means the same thing everywhere.
+	const testerEvents = config.eventNames?.tester ?? [TEST_EVENT]
+	const [viewed, ...testedParts] = await Promise.all([
+		countsByItem(config, ga4, range, [VIEW_EVENT], quality),
+		...testerEvents.map((event) => countsByItem(config, ga4, range, [event], quality)),
 	])
+
+	// Null only when every tester event is unusable; otherwise sum what did return.
+	const tested = testedParts.some((m) => m !== null)
+		? testedParts.reduce<Map<string, number>>((acc, part) => {
+				for (const [name, count] of part ?? []) acc.set(name, (acc.get(name) ?? 0) + count)
+				return acc
+			}, new Map())
+		: null
 
 	let bought: Map<string, number> | null = null
 	if (sanity) {

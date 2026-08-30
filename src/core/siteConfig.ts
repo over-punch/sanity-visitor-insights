@@ -39,6 +39,22 @@ export interface OrdersConfig {
 	excludeFilter?: string
 }
 
+/**
+ * Which of this site's events carry a given meaning.
+ *
+ * Sites do not converge on one name. TDF already emits five distinct type-tester events
+ * (`variable_font_change`, `variable_style_change`, `style_change`, `feature_change`,
+ * `opentype_feature`) and has done for a long time; inventing a `tester_engaged` for it would
+ * discard that history and measure the same thing twice. Each entry is a list, and the counts are
+ * summed, so a site can map several of its own events onto one concept.
+ */
+export interface EventNameMap {
+	/** Events that count as genuine type-tester engagement — a change from the default state. */
+	tester?: string[]
+	/** Events fired when a visitor grants analytics consent. */
+	consent?: string[]
+}
+
 /** One site's complete description of itself. */
 export interface SiteAnalyticsConfig {
 	/** Stable machine id, e.g. `darden`. */
@@ -56,6 +72,11 @@ export interface SiteAnalyticsConfig {
 	 * which implies it is merely pending.
 	 */
 	eventCutovers: Record<string, EventCutover>
+	/**
+	 * This site's own names for the events the reports look for. Omit to use the defaults.
+	 * Names listed here must also appear in `eventCutovers`, or they report as unknown events.
+	 */
+	eventNames?: EventNameMap
 	/** Origins allowed to call this site's handler cross-origin, e.g. a separately deployed Studio. */
 	allowedStudioOrigins?: string[]
 }

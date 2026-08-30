@@ -165,6 +165,27 @@ export function applyCoverage(count: number | null, coverage: Coverage): MetricV
 	return { status: 'ok', value: count }
 }
 
+/**
+ * Coverage across several events that mean the same thing, taking the best of them.
+ *
+ * A site mapping five tester events onto one concept has usable data if any one of them has it,
+ * so the strongest coverage wins rather than the weakest.
+ */
+export function coverageForAny(
+	cutovers: Readonly<Record<string, EventCutover>>,
+	eventNames: readonly string[],
+	range: Pick<DateRange, 'start' | 'end'>,
+): Coverage {
+	if (eventNames.length === 0) return { status: 'none', reason: 'unknown_event' }
+
+	const all = eventNames.map((name) => coverageForRange(cutovers, name, range))
+	return (
+		all.find((c) => c.status === 'full') ??
+		all.find((c) => c.status === 'partial') ??
+		all[0] ?? { status: 'none', reason: 'unknown_event' }
+	)
+}
+
 /** One-line description of an outage, for display beside an affected figure. */
 export function describeOutage(outage: EventOutage | undefined): string {
 	if (!outage) return 'an outage affected part of this range'

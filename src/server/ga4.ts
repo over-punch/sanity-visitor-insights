@@ -146,6 +146,20 @@ export function eventNameFilter(eventName: string): unknown {
 	}
 }
 
+/**
+ * Build a dimension filter matching any of several event names.
+ * Falls back to a single exact match when only one name is given, which is the common case.
+ */
+export function eventNamesFilter(eventNames: readonly string[]): unknown {
+	if (eventNames.length === 1) return eventNameFilter(eventNames[0] as string)
+	return {
+		filter: {
+			fieldName: 'eventName',
+			inListFilter: { values: [...eventNames] },
+		},
+	}
+}
+
 /** Sum a report's first metric across all rows, ignoring suppressed cells. */
 export function sumFirstMetric(report: Ga4Report): number {
 	return report.rows.reduce((total, row) => {

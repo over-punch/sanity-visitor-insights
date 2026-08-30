@@ -22,8 +22,8 @@ import type { MeasurementHealthData } from '../../reportData'
 import type { DateRange, MetricValue } from '../../types'
 import { ok, unavailable } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
-import { coverageForRange } from '../../core/cutover'
-import { sumFirstMetric, type Ga4Client } from '../ga4'
+import { coverageForAny } from '../../core/cutover'
+import { eventNamesFilter, sumFirstMetric, type Ga4Client } from '../ga4'
 import type { VercelClient } from '../vercel'
 import { countOrders, type SanityQueryClient } from '../orders'
 
@@ -76,6 +76,8 @@ function interpret(ga4Views: MetricValue, vercelViews: MetricValue, shortfall: n
  */
 export async function measurementHealth(input: MeasurementHealthInput): Promise<MeasurementHealthData> {
 	const { config, range, ga4, vercel, sanity } = input
+	// Consent event names are per-site, like tester events.
+	const consentEvents = config.eventNames?.consent ?? [CONSENT_EVENT]
 
 	let ga4Pageviews: MetricValue = unavailable('source_error', 'GA4 not configured')
 	let ga4Sessions: MetricValue = unavailable('source_error', 'GA4 not configured')
@@ -97,12 +99,7 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 					metrics: [{ name: 'eventCount' }],
 					dimensions: [{ name: 'eventName' }],
 					dateRanges: [{ startDate: range.start, endDate: range.end }],
-					dimensionFilter: {
-						filter: {
-							fieldName: 'eventName',
-							stringFilter: { matchType: 'EXACT', value: CONSENT_EVENT },
-						},
-					},
+					dimensionFilter: eventNamesFilter(consentEvents),
 				},
 			])
 
@@ -112,7 +109,7 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 				input.notices?.push('GA4 answered from a sample, so its pageview and session figures are estimates — treat a small gap against Vercel as noise.')
 			}
 
-			const consentCoverage = coverageForRange(config.eventCutovers, CONSENT_EVENT, range)
+			const consentCoverage = coverageForAny(config.eventCutovers, consentEvents, range)
 			if (consentCoverage.status === 'full' && consent && ga4Sessions.status === 'ok' && ga4Sessions.value > 0) {
 				// Expressed as a percentage of sessions, capped since one session can fire it twice.
 				const rate = Math.min(100, (sumFirstMetric(consent) / ga4Sessions.value) * 100)

@@ -385,3 +385,60 @@ describe('data-quality flags reach the surface', () => {
 		expect(data.rowsWithheld).toBe(false)
 	})
 })
+
+describe('per-site event names', () => {
+	// TDF's real situation: five long-standing tester events and no `tester_engaged`.
+	const tdfTesterEvents = ['variable_font_change', 'variable_style_change', 'style_change', 'feature_change', 'opentype_feature']
+
+	function tdfConfig(): SiteAnalyticsConfig {
+		return siteConfig({
+			eventNames: { tester: tdfTesterEvents },
+			eventCutovers: {
+				page_view: PREEXISTING, view_item: PREEXISTING, add_to_cart: PREEXISTING,
+				begin_checkout: PREEXISTING, purchase: PREEXISTING,
+				...Object.fromEntries(tdfTesterEvents.map((e) => [e, PREEXISTING])),
+			},
+		})
+	}
+
+	it('treats a site’s own tester events as the tester step', async () => {
+		const ga4 = createFakeGa4Client({ batch: (requests) => requests.map(() => makeGa4Total(500)) })
+		const data = await journey(tdfConfig(), ga4, range)
+
+		const tester = data.steps.find((s) => s.key === 'tested')
+		// Without the mapping this would be unavailable, discarding data the site already has.
+		expect(tester?.count.status).toBe('ok')
+	})
+
+	it('queries GA4 for the site’s events rather than the canonical name', async () => {
+		const ga4 = createFakeGa4Client({ batch: (requests) => requests.map(() => makeGa4Total(10)) })
+		await journey(tdfConfig(), ga4, range)
+
+		const filters = JSON.stringify(ga4.batchCalls[0]?.map((r) => r.dimensionFilter))
+		expect(filters).toContain('variable_font_change')
+		expect(filters).not.toContain('tester_engaged')
+	})
+
+	it('sums tester counts per typeface across the site’s events', async () => {
+		const ga4 = createFakeGa4Client({
+			single: (request) => {
+				const f = JSON.stringify(request.dimensionFilter)
+				if (f.includes('view_item')) return makeGa4Report([{ dimensions: ['Bogart'], metrics: [400] }])
+				// Each of the five tester events contributes 20 for the same family.
+				return makeGa4Report([{ dimensions: ['Bogart'], metrics: [20] }])
+			},
+		})
+
+		const data = await typefaceInterest({ config: tdfConfig(), range, ga4, sanity: null })
+		const row = data.rows.find((r) => r.typeface === 'Bogart')
+		expect(row?.tested).toEqual({ status: 'ok', value: 100 })
+		expect(row?.testRate).toBeCloseTo(0.25, 5)
+	})
+
+	it('still uses the default name when a site does not map its own', async () => {
+		const ga4 = createFakeGa4Client({ batch: (requests) => requests.map(() => makeGa4Total(10)) })
+		await journey(siteConfig(), ga4, range)
+
+		expect(JSON.stringify(ga4.batchCalls[0]?.map((r) => r.dimensionFilter))).toContain('tester_engaged')
+	})
+})
