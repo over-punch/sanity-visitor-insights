@@ -1,6 +1,6 @@
 {
   "name": "@liiift-studio/sanity-visitor-insights",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Visitor-behaviour analytics for type-foundry Sanity Studios — GA4, Vercel and order data reconciled honestly",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

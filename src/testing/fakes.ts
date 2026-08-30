@@ -98,11 +98,19 @@ export function createFakeVercelClient(
 	}
 }
 
-/** Build a Vercel pageviews fixture. */
-export function makeVercelPageviews(byDate: Record<string, number>): VercelPageviews {
+/**
+ * Build a Vercel pageviews fixture.
+ *
+ * `visitors` defaults to roughly two thirds of pageviews rather than to the pageview total,
+ * because they are genuinely different numbers — a fixture where they match would let a bug that
+ * confuses the two pass unnoticed.
+ */
+export function makeVercelPageviews(byDate: Record<string, number>, visitors?: number): VercelPageviews {
+	const total = Object.values(byDate).reduce((sum, n) => sum + n, 0)
 	return {
 		byDate,
-		total: Object.values(byDate).reduce((sum, n) => sum + n, 0),
+		total,
+		visitors: visitors ?? Math.round(total * 0.66),
 	}
 }
 
