@@ -32,7 +32,7 @@ vi.mock('sanity', () => ({
 	definePlugin: (definition: unknown) => definition,
 }))
 import visitorInsights from '../index'
-import { MetricFigure, NoticeList } from './Figure'
+import { MetricFigure, NoticeList, TrendChart } from './Figure'
 import { ok, partial, unavailable } from '../types'
 import { UI } from '@liiift-studio/sanity-ui-compat'
 
@@ -105,7 +105,7 @@ describe('MeasurementHealthPanel', () => {
 				data={{
 					ga4Pageviews: ok(33486), vercelPageviews: ok(33597), shortfallRatio: 0.0033,
 					ga4Sessions: ok(22781), orders: ok(64), consentRate: ok(78.4),
-					interpretation: 'Sources agree.',
+					interpretation: 'Sources agree.', daily: [],
 				}}
 			/>,
 		)
@@ -119,7 +119,8 @@ describe('MeasurementHealthPanel', () => {
 				data={{
 					ga4Pageviews: unavailable('source_error'), vercelPageviews: ok(2620), shortfallRatio: null,
 					ga4Sessions: unavailable('source_error'), orders: ok(12), consentRate: unavailable('source_error'),
-					interpretation: 'Only one pageview source answered.',
+					daily: [],
+			interpretation: 'Only one pageview source answered.',
 				}}
 			/>,
 		)
@@ -322,5 +323,56 @@ describe('MetricFigure units', () => {
 		const html = render(<MetricFigure metric={ok(2356)} label="Vercel pageviews" />)
 		expect(html).toContain('2,356')
 		expect(html).not.toContain('%')
+	})
+})
+
+/**
+ * The daily trend.
+ *
+ * These exist because of a real incident. Darden's GA4 fell 86% below Vercel overnight on
+ * 2026-08-24 and stayed there for over a week while Vercel ran flat. Every number the panel showed
+ * was correct; none of them could distinguish that cliff from a gap that had always been there,
+ * and diagnosing it meant exporting both series by hand.
+ */
+describe('TrendChart', () => {
+	const series = [
+		{ date: '2026-08-20', ga4: 471, vercel: 494 },
+		{ date: '2026-08-21', ga4: 422, vercel: 503 },
+		{ date: '2026-08-22', ga4: 389, vercel: 387 },
+		{ date: '2026-08-23', ga4: 390, vercel: 438 },
+		{ date: '2026-08-24', ga4: 70, vercel: 490 },
+	]
+
+	it('draws a line for each source', () => {
+		const html = render(<TrendChart points={series} />)
+		expect(html).toContain('<svg')
+		// Two paths: one solid, one dashed.
+		expect((html.match(/<path/g) ?? []).length).toBe(2)
+		expect(html).toContain('stroke-dasharray')
+	})
+
+	it('breaks the line where a day has no figure, rather than drawing through zero', () => {
+		const gapped = [
+			{ date: '2026-08-20', ga4: 471, vercel: 494 },
+			{ date: '2026-08-21', ga4: null, vercel: 503 },
+			{ date: '2026-08-22', ga4: 389, vercel: 387 },
+		]
+		const html = render(<TrendChart points={gapped} />)
+		// A break restarts the path with a second moveto. One M means the gap was drawn through.
+		const ga4Path = (html.match(/d="([^"]*)"/g) ?? [])[1] ?? ''
+		expect((ga4Path.match(/M/g) ?? []).length).toBe(2)
+	})
+
+	it('renders nothing when there are too few points to show a shape', () => {
+		// Rendered without the `render` helper, which asserts non-empty output — the whole point
+		// here is that the component declines to draw rather than showing a two-point "trend".
+		const html = renderToStaticMarkup(
+			<ThemeProvider theme={theme}><TrendChart points={series.slice(0, 2)} /></ThemeProvider>,
+		)
+		expect(html).not.toContain('<svg')
+	})
+
+	it('describes itself for screen readers', () => {
+		expect(render(<TrendChart points={series} />)).toContain('2026-08-20 to 2026-08-24')
 	})
 })

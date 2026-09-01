@@ -8,7 +8,7 @@
 
 import React from 'react'
 import { Badge, Box, Card, Flex, Grid, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ComparisonBar, MetricFigure, NoticeList, formatCount, formatPercent } from './Figure'
+import { ComparisonBar, MetricFigure, NoticeList, TrendChart, formatCount, formatPercent } from './Figure'
 import type {
 	AcquisitionData,
 	CheckStatus,
@@ -59,12 +59,33 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 				<Stack space={2}>
 					{data.shortfallRatio !== null && (
 						<Text size={1} weight="semibold">
-							GA4 shortfall: {formatPercent(Math.abs(data.shortfallRatio), 1)}
+							{/* Named by direction rather than always as a GA4 shortfall. The ratio goes
+							    negative whenever GA4 sees more than Vercel — routine where Vercel's
+							    collection started later than the range, as on MCKL — and the label used
+							    to read "GA4 shortfall" over an absolute value, stating the opposite of
+							    the truth while the sentence below it said "more". */}
+							{data.shortfallRatio >= 0
+								? `GA4 saw ${formatPercent(data.shortfallRatio, 1)} fewer pageviews than Vercel`
+								: `GA4 saw ${formatPercent(-data.shortfallRatio, 1)} more pageviews than Vercel`}
 						</Text>
 					)}
 					<Text size={1} muted>{data.interpretation}</Text>
 				</Stack>
 			</Card>
+
+			{/* The daily series. A scalar gap cannot tell a stable difference from one that opened
+			    overnight, and those need opposite responses. Rendered only when there are enough
+			    points to show a shape, and only when both sources reported by day. */}
+			{data.daily.length >= 3 && (
+				<Stack space={3}>
+					<Heading size={1}>Day by day</Heading>
+					<Text size={1} muted>
+						A gap that has always been there is consent and blocking. A gap that opens on one
+						day is an incident.
+					</Text>
+					<TrendChart points={data.daily} />
+				</Stack>
+			)}
 
 			<Stack space={3}>
 				<Heading size={1}>Context</Heading>

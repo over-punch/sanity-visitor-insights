@@ -170,3 +170,87 @@ export function NoticeList({ notices }: NoticeListProps): React.ReactElement | n
 		</ul>
 	)
 }
+
+/** Props for TrendChart. */
+export interface TrendChartProps {
+	/** Daily points, oldest first. */
+	points: Array<{ date: string; ga4: number | null; vercel: number | null }>
+	/** Accessible description of what the two lines are. */
+	label?: string
+}
+
+/**
+ * Two daily lines, GA4 against Vercel, drawn as inline SVG.
+ *
+ * This is the panel's most useful element and the reason is specific. A scalar shortfall cannot
+ * distinguish a gap that has been stable for a year from one that opened overnight, and those need
+ * opposite responses — the first is a fact about consent and blocking, the second is an incident.
+ * On 2026-08-24 Darden's GA4 fell 86% below Vercel and stayed there for over a week; the panel
+ * showed the magnitude faithfully and gave no way to see it was a cliff. Diagnosing it meant
+ * exporting both series by hand.
+ *
+ * Inline SVG rather than a charting library: one dependency-free element, no bundle cost in a Studio
+ * that already loads a lot, and it renders identically on the server for tests.
+ */
+export function TrendChart({ points, label = 'Daily pageviews, GA4 against Vercel' }: TrendChartProps): React.ReactElement | null {
+	// Two points cannot show a trend, and one cannot show anything.
+	if (points.length < 3) return null
+
+	const W = 720
+	const H = 132
+	const PAD = 4
+
+	const values = points.flatMap((p) => [p.ga4, p.vercel]).filter((v): v is number => typeof v === 'number')
+	if (values.length === 0) return null
+	const max = Math.max(...values, 1)
+
+	const x = (i: number) => PAD + (i / Math.max(1, points.length - 1)) * (W - PAD * 2)
+	const y = (v: number) => H - PAD - (v / max) * (H - PAD * 2)
+
+	/**
+	 * Build a path, breaking it wherever a source has no figure for a day.
+	 * A gap must read as absent, not as a line drawn through zero — the same rule the metric
+	 * formatting follows.
+	 */
+	const path = (pick: (p: { ga4: number | null; vercel: number | null }) => number | null) => {
+		let d = ''
+		let penDown = false
+		points.forEach((p, i) => {
+			const v = pick(p)
+			if (typeof v !== 'number') { penDown = false; return }
+			d += `${penDown ? 'L' : 'M'}${x(i).toFixed(1)} ${y(v).toFixed(1)} `
+			penDown = true
+		})
+		return d.trim()
+	}
+
+	const vercelPath = path((p) => p.vercel)
+	const ga4Path = path((p) => p.ga4)
+	const first = points[0]?.date ?? ''
+	const last = points[points.length - 1]?.date ?? ''
+
+	return (
+		<Stack space={2}>
+			<Box>
+				<svg
+					viewBox={`0 0 ${W} ${H}`}
+					width="100%"
+					height={H}
+					role="img"
+					aria-label={`${label}, ${first} to ${last}. Peak ${Math.round(max)} pageviews in a day.`}
+					preserveAspectRatio="none"
+					style={{ display: 'block', overflow: 'visible' }}
+				>
+					<path d={vercelPath} fill="none" stroke="currentColor" strokeOpacity="0.85" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+					<path d={ga4Path} fill="none" stroke="currentColor" strokeOpacity="0.85" strokeWidth="2" strokeDasharray="5 3" vectorEffect="non-scaling-stroke" />
+				</svg>
+			</Box>
+			<Flex gap={3} align="center" wrap="wrap">
+				<Text size={0} muted>&#9473;&#9473; Vercel</Text>
+				<Text size={0} muted>&#9476;&#9476; GA4</Text>
+				<Text size={0} muted>{first} to {last}</Text>
+				<Text size={0} muted>peak {formatCount(max)}/day</Text>
+			</Flex>
+		</Stack>
+	)
+}

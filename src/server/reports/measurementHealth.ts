@@ -18,7 +18,7 @@
  * and the panel says why.
  */
 
-import type { MeasurementHealthData } from '../../reportData'
+import type { MeasurementHealthData, DailyPoint } from '../../reportData'
 import type { DateRange, MetricValue } from '../../types'
 import { ok, unavailable } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
@@ -26,6 +26,12 @@ import { coverageForAny } from '../../core/cutover'
 import { eventNamesFilter, sumFirstMetric, type Ga4Client } from '../ga4'
 import type { VercelClient } from '../vercel'
 import { countOrders, type SanityQueryClient } from '../orders'
+
+/** Whole days covered by a range, inclusive of both ends. */
+function daysInRange(range: DateRange): number {
+	const ms = Date.parse(`${range.end}T00:00:00Z`) - Date.parse(`${range.start}T00:00:00Z`)
+	return Number.isFinite(ms) ? Math.round(ms / 86400000) + 1 : 0
+}
 
 /** The event whose presence turns the consent share from a guess into a measurement. */
 const CONSENT_EVENT = 'consent_granted'
@@ -60,6 +66,22 @@ function interpret(ga4Views: MetricValue, vercelViews: MetricValue, shortfall: n
 	const direction = shortfall > 0 ? 'fewer' : 'more'
 	const base = `GA4 recorded ${percent}% ${direction} pageviews than Vercel.`
 
+	// Above this, the gap is larger than consent refusal and ad-blocking can plausibly account for,
+	// and the honest reading changes from "some loss is expected" to "something is broken".
+	//
+	// This exists because of a real failure. Darden's GA4 fell 86% below Vercel overnight on
+	// 2026-08-24 and stayed there for over a week while Vercel ran flat. The panel reported the
+	// magnitude accurately and framed it, as it framed every other magnitude, as expected loss with
+	// an unexplained remainder — so a total measurement outage read as a slightly worse than usual
+	// week. A tool called Measurement Health has to be able to say when measurement has failed.
+	if (shortfall > 0.6) {
+		return `${base} That is far more than consent refusal and ad-blocking can account for — those `
+			+ `typically cost tens of percent, not most of the traffic. Treat this as a measurement `
+			+ `failure until proven otherwise: check that the tag still fires on a real page load, and `
+			+ `whether a GA4 data filter or stream setting changed. The daily series below will show `
+			+ `whether the gap opened on a particular day, which distinguishes a break from a drift.`
+	}
+
 	if (consent.status === 'unavailable') {
 		return `${base} How much of that is consent refusal cannot be measured until the consent_granted event is instrumented, so the difference is currently unexplained rather than attributed.`
 	}
@@ -82,11 +104,15 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	let ga4Pageviews: MetricValue = unavailable('source_error', 'GA4 not configured')
 	let ga4Sessions: MetricValue = unavailable('source_error', 'GA4 not configured')
 	let consentRate: MetricValue = unavailable('not_instrumented')
+	/** Daily GA4 pageviews keyed by ISO date, for the trend. */
+	const ga4ByDate = new Map<string, number>()
+	/** Daily Vercel pageviews keyed by ISO date. Already fetched; previously discarded. */
+	let vercelByDate: Record<string, number> = {}
 
 	if (ga4) {
 		try {
 			// One batched call rather than three separate quota-charged requests.
-			const [views, sessions, consent] = await ga4.batchRunReports([
+			const [views, sessions, consent, daily] = await ga4.batchRunReports([
 				{
 					metrics: [{ name: 'screenPageViews' }],
 					dateRanges: [{ startDate: range.start, endDate: range.end }],
@@ -101,7 +127,26 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 					dateRanges: [{ startDate: range.start, endDate: range.end }],
 					dimensionFilter: eventNamesFilter(consentEvents),
 				},
+				// The daily series. Same batch, so it costs one row in an existing request rather
+				// than another quota-charged call.
+				{
+					metrics: [{ name: 'screenPageViews' }],
+					dimensions: [{ name: 'date' }],
+					dateRanges: [{ startDate: range.start, endDate: range.end }],
+					orderBys: [{ dimension: { dimensionName: 'date' } }],
+					limit: 400,
+				},
 			])
+
+			// GA4 returns dates as YYYYMMDD; the Vercel side and the UI both use ISO.
+			if (daily) {
+				for (const row of daily.rows) {
+					const raw = row.dimensions[0]
+					const value = row.metrics[0]
+					if (!raw || raw.length !== 8 || !Number.isFinite(value)) continue
+					ga4ByDate.set(`${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`, value as number)
+				}
+			}
 
 			if (views) ga4Pageviews = ok(sumFirstMetric(views))
 			if (sessions) ga4Sessions = ok(sumFirstMetric(sessions))
@@ -129,6 +174,7 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		try {
 			const result = await vercel.pageviews(range.start, range.end)
 			vercelPageviews = ok(result.total)
+			vercelByDate = result.byDate
 		} catch (e) {
 			console.error('Visitor insights: Vercel query failed:', (e as Error).message)
 			vercelPageviews = unavailable('source_error')
@@ -158,6 +204,22 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 			? (vercelPageviews.value - ga4Pageviews.value) / vercelPageviews.value
 			: null
 
+	// One row per day either source reported, oldest first. Vercel's byDate is only daily on short
+	// ranges — granularityFor drops to week or month beyond 62 days — so the series is built only
+	// when its keys look like consecutive days. A weekly bucket plotted against a daily one would
+	// draw a 7x cliff that is purely an artefact of bucketing.
+	const vercelDates = Object.keys(vercelByDate)
+	const vercelIsDaily = vercelDates.length === 0 || vercelDates.length > (daysInRange(range) * 0.7)
+	const daily: DailyPoint[] = vercelIsDaily
+		? Array.from(new Set([...ga4ByDate.keys(), ...vercelDates]))
+			.sort()
+			.map((date) => ({
+				date,
+				ga4: ga4ByDate.has(date) ? (ga4ByDate.get(date) as number) : null,
+				vercel: typeof vercelByDate[date] === 'number' ? vercelByDate[date] : null,
+			}))
+		: []
+
 	return {
 		ga4Pageviews,
 		vercelPageviews,
@@ -166,6 +228,7 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		orders,
 		consentRate,
 		interpretation: interpret(ga4Pageviews, vercelPageviews, shortfallRatio, consentRate),
+		daily,
 	}
 }
 

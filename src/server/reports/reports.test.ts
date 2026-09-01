@@ -456,3 +456,99 @@ describe('journey counts people, not events', () => {
 		expect(new Set(metrics)).toEqual(new Set(['totalUsers']))
 	})
 })
+
+/**
+ * The daily series.
+ *
+ * Built because a scalar shortfall could not distinguish Darden's overnight 86% measurement failure
+ * on 2026-08-24 from a gap that had always been there. The two need opposite responses.
+ */
+describe('measurementHealth daily series', () => {
+	const threeDays: DateRange = { key: 'week', start: '2026-08-20', end: '2026-08-22', timezone: 'UTC' }
+
+	it('pairs the two sources by date, oldest first', async () => {
+		const data = await measurementHealth({
+			config: siteConfig(),
+			range: threeDays,
+			ga4: createFakeGa4Client({
+				batch: () => [
+					makeGa4Total(1282),
+					makeGa4Total(800),
+					makeGa4Total(0),
+					makeGa4Report([
+						{ dimensions: ['20260820'], metrics: [471] },
+						{ dimensions: ['20260821'], metrics: [422] },
+						{ dimensions: ['20260822'], metrics: [389] },
+					]),
+				],
+			}),
+			vercel: createFakeVercelClient(makeVercelPageviews({
+				'2026-08-20': 494, '2026-08-21': 503, '2026-08-22': 387,
+			})),
+			sanity: null,
+		})
+
+		expect(data.daily).toEqual([
+			{ date: '2026-08-20', ga4: 471, vercel: 494 },
+			{ date: '2026-08-21', ga4: 422, vercel: 503 },
+			{ date: '2026-08-22', ga4: 389, vercel: 387 },
+		])
+	})
+
+	it('reports a day a source did not answer as null, never as zero', async () => {
+		const data = await measurementHealth({
+			config: siteConfig(),
+			range: threeDays,
+			ga4: createFakeGa4Client({
+				batch: () => [
+					makeGa4Total(860),
+					makeGa4Total(500),
+					makeGa4Total(0),
+					makeGa4Report([
+						{ dimensions: ['20260820'], metrics: [471] },
+						{ dimensions: ['20260822'], metrics: [389] },
+					]),
+				],
+			}),
+			vercel: createFakeVercelClient(makeVercelPageviews({
+				'2026-08-20': 494, '2026-08-21': 503, '2026-08-22': 387,
+			})),
+			sanity: null,
+		})
+
+		const middle = data.daily.find((d) => d.date === '2026-08-21')
+		expect(middle?.ga4).toBeNull()
+		expect(middle?.vercel).toBe(503)
+	})
+})
+
+/**
+ * The implausibility band. A gap larger than consent and blocking can account for has to be named
+ * as a probable measurement failure, not framed as expected loss with an unexplained remainder.
+ * Darden ran at 86% for over a week and the panel's wording never changed.
+ */
+describe('measurementHealth interpretation', () => {
+	it('calls a very large gap a measurement failure', async () => {
+		const data = await measurementHealth({
+			config: siteConfig(),
+			range,
+			ga4: createFakeGa4Client({ batch: () => [makeGa4Total(475), makeGa4Total(357), makeGa4Total(0), makeGa4Report([])] }),
+			vercel: createFakeVercelClient(makeVercelPageviews({ '2026-08-20': 2356 })),
+			sanity: null,
+		})
+
+		expect(data.interpretation).toContain('measurement failure')
+	})
+
+	it('still frames a modest gap as expected loss', async () => {
+		const data = await measurementHealth({
+			config: siteConfig(),
+			range,
+			ga4: createFakeGa4Client({ batch: () => [makeGa4Total(900), makeGa4Total(700), makeGa4Total(0), makeGa4Report([])] }),
+			vercel: createFakeVercelClient(makeVercelPageviews({ '2026-08-20': 1000 })),
+			sanity: null,
+		})
+
+		expect(data.interpretation).not.toContain('measurement failure')
+	})
+})

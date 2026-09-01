@@ -57,6 +57,26 @@ export interface MeasurementHealthData {
 	consentRate: MetricValue
 	/** Plain-language reading of the numbers above, for a non-analyst audience. */
 	interpretation: string
+	/**
+	 * Daily pageviews from both sources, oldest first.
+	 *
+	 * The single most useful thing this report holds, and it used to be fetched and discarded.
+	 * A scalar shortfall cannot distinguish a gap that has been stable for a year from one that
+	 * opened on a Tuesday — and those need opposite responses. Darden's GA4 fell 86% below Vercel
+	 * overnight on 2026-08-24 and stayed there for over a week; the panel reported the magnitude
+	 * faithfully and gave no way to see that it was a cliff.
+	 *
+	 * Empty when either source could not answer by day.
+	 */
+	daily: DailyPoint[]
+}
+
+/** One day's pageviews from each source. `null` where that source has no figure for the day. */
+export interface DailyPoint {
+	/** ISO date, YYYY-MM-DD. */
+	date: string
+	ga4: number | null
+	vercel: number | null
 }
 
 // ---------------------------------------------------------------------------
