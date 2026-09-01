@@ -30,10 +30,25 @@ const PANELS: Array<{ report: ReportName; label: string; blurb: string }> = [
 	{ report: 'diagnostics', label: 'Diagnostics', blurb: 'What to fix before trusting the numbers above' },
 ]
 
-/** Props supplied by the plugin config. */
+/** Options supplied by the plugin config, carried on the Sanity tool definition. */
 export interface VisitorInsightsToolProps {
 	apiBaseUrl: string
 	siteLabel: string
+}
+
+/**
+ * What Sanity actually hands a tool component.
+ *
+ * Sanity does NOT spread a tool's `options` onto its component's props — it passes the whole tool
+ * definition as `tool`, with the options nested inside. Destructuring `apiBaseUrl` straight off
+ * props therefore yields undefined, and the first thing useReport does with it is call .replace(),
+ * so every panel failed with "Cannot read properties of undefined (reading 'replace')".
+ *
+ * Both shapes are accepted: the nested one because that is what the Studio passes, and the flat one
+ * because the component is exported for direct use and is mounted that way in tests.
+ */
+export interface VisitorInsightsToolComponentProps extends Partial<VisitorInsightsToolProps> {
+	tool?: { options?: Partial<VisitorInsightsToolProps> }
 }
 
 /**
@@ -253,7 +268,12 @@ function ReportPanel({ report, apiBaseUrl, range }: { report: ReportName; apiBas
 }
 
 /** The tool itself. */
-export function VisitorInsightsTool({ apiBaseUrl, siteLabel }: VisitorInsightsToolProps): React.ReactElement {
+export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): React.ReactElement {
+	// Nested options win, since that is the shape the Studio supplies; the flat props are the
+	// direct-use fallback. See VisitorInsightsToolComponentProps for why both exist.
+	const apiBaseUrl = props.tool?.options?.apiBaseUrl ?? props.apiBaseUrl ?? ''
+	const siteLabel = props.tool?.options?.siteLabel ?? props.siteLabel ?? ''
+
 	const [range, setRange] = useState<RangeKey>('week')
 	const [activePanel, setActivePanel] = useState<ReportName>('measurement-health')
 

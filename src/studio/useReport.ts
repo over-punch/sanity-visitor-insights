@@ -67,7 +67,12 @@ export function useReport<T>({ apiBaseUrl, report, range }: UseReportOptions): {
 			}
 
 			try {
-				const url = `${apiBaseUrl.replace(/\/$/, '')}/api/visitor-insights/${report}?range=${range}`
+				// Coerced rather than assumed. An empty base is legitimate — it means the Studio is
+				// served from the same origin as the site — but an undefined one used to reach
+				// .replace() directly and crash every panel with a stack trace instead of a
+				// message. Treating a missing base as same-origin degrades to the common case.
+				const base = typeof apiBaseUrl === 'string' ? apiBaseUrl.replace(/\/$/, '') : ''
+				const url = `${base}/api/visitor-insights/${report}?range=${range}`
 				const response = await fetch(url, {
 					headers: { Authorization: `Bearer ${token}` },
 					signal: controller.signal,

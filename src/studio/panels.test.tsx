@@ -11,7 +11,7 @@
  * an unavailable metric rendering as "0" and being read as a real measurement.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import React from 'react'
 import {
@@ -21,6 +21,17 @@ import {
 	MeasurementHealthPanel,
 	TypefaceInterestPanel,
 } from './panels'
+import { VisitorInsightsTool } from './VisitorInsightsTool'
+
+// The tool mounts a panel, and the panel's hook calls useClient(), which needs a Studio source
+// context these tests deliberately do not build. The contract under test is the props shape, so the
+// client is stubbed with a token present — enough for the hook to get past its own guards and
+// attempt a fetch, which never resolves here and does not need to.
+vi.mock('sanity', () => ({
+	useClient: () => ({ config: () => ({ token: 'test-token' }) }),
+	definePlugin: (definition: unknown) => definition,
+}))
+import visitorInsights from '../index'
 import { MetricFigure, NoticeList } from './Figure'
 import { ok, partial, unavailable } from '../types'
 import { UI } from '@liiift-studio/sanity-ui-compat'
@@ -218,5 +229,71 @@ describe('DiagnosticsPanel', () => {
 			<DiagnosticsPanel data={{ verdict: 'pass', checks: [{ id: 'a', label: 'GA4 reachable', status: 'pass', detail: 'Answered.' }] }} />,
 		)
 		expect(html).toContain('Everything checked out')
+	})
+})
+
+/**
+ * The tool component's props contract.
+ *
+ * These exist because the tool shipped broken and the whole suite stayed green. Sanity does NOT
+ * spread a tool's `options` onto its component — it passes the tool definition as `tool`, with the
+ * options nested. The component destructured `apiBaseUrl` straight off props, so it was always
+ * undefined in a real Studio, and the first thing useReport did with it was call `.replace()`.
+ * Every panel rendered "Cannot read properties of undefined (reading 'replace')".
+ *
+ * Nothing caught it because no test ever mounted this component, and the plugin's own tool
+ * definition was never exercised. Passing props in the shape the code expected would have proved
+ * nothing either — the shape was the bug. So these mount it the way the Studio does.
+ */
+describe('VisitorInsightsTool props contract', () => {
+	it('reads options from the nested tool prop, the way Sanity passes them', () => {
+		const html = render(
+			React.createElement(VisitorInsightsTool, {
+				tool: { options: { apiBaseUrl: 'https://example.com', siteLabel: 'Example Foundry' } },
+			}),
+		)
+		expect(html).toContain('Example Foundry')
+	})
+
+	it('still accepts flat props, for direct use outside a Studio', () => {
+		const html = render(
+			React.createElement(VisitorInsightsTool, {
+				apiBaseUrl: 'https://example.com',
+				siteLabel: 'Flat Props Foundry',
+			}),
+		)
+		expect(html).toContain('Flat Props Foundry')
+	})
+
+	it('renders rather than throwing when no options arrive at all', () => {
+		// A misconfigured plugin should show its shell and let the panel report the failure, not
+		// take the whole tab down with a stack trace.
+		expect(() => render(React.createElement(VisitorInsightsTool, {}))).not.toThrow()
+	})
+})
+
+/**
+ * The plugin's tool definition must carry the options the component reads.
+ *
+ * The two halves were written separately and never checked against each other: the plugin put
+ * options on the tool, the component looked for them on props, and both were internally consistent.
+ */
+describe('plugin tool definition', () => {
+	it('puts apiBaseUrl and siteLabel in tool.options', () => {
+		const plugin = visitorInsights({ apiBaseUrl: 'https://example.com', siteLabel: 'Example Foundry' })
+		const toolsHook = (plugin as unknown as { tools?: unknown }).tools
+			?? ((plugin as unknown as { plugins?: Array<{ tools?: unknown }> }).plugins ?? [])
+				.map((p) => p?.tools).find(Boolean)
+
+		const resolve = typeof toolsHook === 'function'
+			? (toolsHook as (prev: unknown[], ctx: unknown) => Array<{ name: string; options?: Record<string, unknown> }>)
+			: null
+		expect(resolve).toBeTypeOf('function')
+
+		const tools = resolve!([], { currentUser: { roles: [{ name: 'administrator' }] } })
+		const tool = tools.find((t) => t.name === 'visitor-insights')
+		expect(tool).toBeDefined()
+		expect(tool?.options?.apiBaseUrl).toBe('https://example.com')
+		expect(tool?.options?.siteLabel).toBe('Example Foundry')
 	})
 })
