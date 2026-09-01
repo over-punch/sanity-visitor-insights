@@ -297,3 +297,30 @@ describe('plugin tool definition', () => {
 		expect(tool?.options?.siteLabel).toBe('Example Foundry')
 	})
 })
+
+/**
+ * Units on figures.
+ *
+ * MetricValue carries availability but not unit, so a percentage and a count reach MetricFigure
+ * indistinguishable. The consent rate is a 0-100 percentage and was rendered with the count
+ * formatter: "84.3" became "84", sitting in a row beside "GA4 sessions 357" and "Orders 7" where
+ * the natural reading is 84 of 357. The missing suffix inverted the conclusion — 84% consent read
+ * as 24%.
+ */
+describe('MetricFigure units', () => {
+	it('writes a percentage with its sign and keeps one decimal', () => {
+		const html = render(<MetricFigure metric={ok(84.3)} label="Consent granted" unit="percent" />)
+		expect(html).toContain('84.3%')
+	})
+
+	it('does not round a percentage into a bare integer', () => {
+		const html = render(<MetricFigure metric={ok(84.3)} label="Consent granted" unit="percent" />)
+		expect(html).not.toMatch(/>84</)
+	})
+
+	it('still formats counts with thousands separators and no suffix', () => {
+		const html = render(<MetricFigure metric={ok(2356)} label="Vercel pageviews" />)
+		expect(html).toContain('2,356')
+		expect(html).not.toContain('%')
+	})
+})

@@ -87,7 +87,7 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 					<Card padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
 							<Label size={1} muted>Consent granted</Label>
-							<MetricFigure metric={data.consentRate} label="Consent granted, percent of sessions" />
+							<MetricFigure metric={data.consentRate} label="Consent granted, percent of sessions" unit="percent" />
 						</Stack>
 					</Card>
 				</Grid>

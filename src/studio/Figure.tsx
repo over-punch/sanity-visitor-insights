@@ -39,13 +39,25 @@ export interface MetricFigureProps {
 	/** Accessible label describing what this number counts. */
 	label: string
 	size?: number
+	/**
+	 * What the number IS, which decides how it is written.
+	 *
+	 * MetricValue carries availability but not unit, so a percentage and a count arrive here
+	 * indistinguishable and both used to be written with the count formatter. The consent rate is a
+	 * 0-100 percentage: it rendered as a bare "84" beside "GA4 sessions 357" and "Orders 7", where
+	 * the obvious reading is 84 sessions out of 357 — a quarter — when the truth is 84%. A missing
+	 * suffix inverted the conclusion.
+	 *
+	 * 'percent' expects a 0-100 value, matching what measurementHealth produces.
+	 */
+	unit?: 'count' | 'percent'
 }
 
 /**
  * Render a metric value, handling the absent case visibly.
  * Screen readers get the reason text rather than an unexplained dash.
  */
-export function MetricFigure({ metric, label, size = 4 }: MetricFigureProps): React.ReactElement {
+export function MetricFigure({ metric, label, size = 4, unit = 'count' }: MetricFigureProps): React.ReactElement {
 	if (metric.status === 'unavailable') {
 		const reason = REASON_TEXT[metric.reason]
 		const detail = metric.detail ? `${reason}. ${metric.detail}` : reason
@@ -59,7 +71,9 @@ export function MetricFigure({ metric, label, size = 4 }: MetricFigureProps): Re
 		)
 	}
 
-	const formatted = formatCount(metric.value)
+	// Percentages keep one decimal, since that is the precision the server produced; rounding to a
+	// whole number here would make a 0.4-point move look like no move at all.
+	const formatted = unit === 'percent' ? `${metric.value.toFixed(1)}%` : formatCount(metric.value)
 
 	if (metric.status === 'partial') {
 		return (
