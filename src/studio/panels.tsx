@@ -204,22 +204,24 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 				))}
 			</Stack>
 
-			{data.topExitPages.length > 0 && (
+			{/* Entries, not exits. GA4 exposes landingPage and has never had an exits metric; the
+			    previous version of this table queried one and rendered nothing, ever. */}
+			{data.topLandingPages.length > 0 && (
 				<Stack space={3}>
-					<Heading size={1}>Where sessions ended</Heading>
+					<Heading size={1}>Where sessions began</Heading>
 					<Card radius={2} tone="transparent" border style={tableWrap}>
 						<table style={table}>
 							<thead>
 								<tr>
 									<th scope="col" style={cell}><Label size={1} muted>Page</Label></th>
-									<th scope="col" style={numericCell}><Label size={1} muted>Exits</Label></th>
+									<th scope="col" style={numericCell}><Label size={1} muted>Sessions</Label></th>
 								</tr>
 							</thead>
 							<tbody>
-								{data.topExitPages.map((page) => (
+								{data.topLandingPages.map((page) => (
 									<tr key={page.path}>
 										<th scope="row" style={cell}><Text size={1}>{page.path}</Text></th>
-										<td style={numericCell}><Text size={1}>{formatCount(page.exits)}</Text></td>
+										<td style={numericCell}><Text size={1}>{formatCount(page.sessions)}</Text></td>
 									</tr>
 								))}
 							</tbody>

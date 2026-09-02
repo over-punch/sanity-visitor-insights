@@ -86,6 +86,16 @@ export interface SiteAnalyticsConfig {
 	 * the only honest option; silently comparing them is not.
 	 */
 	caveats?: string[]
+
+	/**
+	 * Studio roles allowed to read these reports, enforced server-side.
+	 *
+	 * Must match the `roles` given to the plugin, which only controls whether the tab is shown.
+	 * Omit to allow any authenticated Studio user of this project. These panels expose order-derived
+	 * conversion figures, so gating to administrators is usually right — and unlike the plugin
+	 * option, setting it here actually prevents a direct call to the API route.
+	 */
+	roles?: readonly string[]
 	/** Origins allowed to call this site's handler cross-origin, e.g. a separately deployed Studio. */
 	allowedStudioOrigins?: string[]
 }

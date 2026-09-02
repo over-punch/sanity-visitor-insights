@@ -141,7 +141,7 @@ describe('JourneyPanel', () => {
 			{ key: 'began_checkout', label: 'Began checkout', event: 'begin_checkout', count: unavailable('outage', 'not recorded 2025-11-20 onwards'), conversionFromPrevious: null },
 			{ key: 'purchased', label: 'Purchased', event: 'purchase', count: partial(64, '2026-08-30', 'Undercounted: outage'), conversionFromPrevious: 0.035 },
 		],
-		topExitPages: [{ path: '/', exits: 8940 }],
+		topLandingPages: [{ path: '/', sessions: 8940 }],
 	}
 
 	it('renders a funnel mixing working, uninstrumented and outage rungs', () => {
@@ -168,7 +168,7 @@ describe('AcquisitionPanel', () => {
 		const html = render(
 			<AcquisitionPanel
 				data={{
-					totalSessions: 1000, designIndustryShare: 0.3, unattributedShare: 0.1, rowsWithheld: true,
+					totalSessions: 1000, designIndustryShare: 0.3, unattributedShare: 0.1, rowsWithheld: true, rowsTruncated: false,
 					rows: [
 						{ source: 'fontsinuse.com', channel: 'Referral', sessions: 300, designIndustry: true, unattributed: false },
 						{ source: '(not set)', channel: 'Unassigned', sessions: 100, designIndustry: false, unattributed: true },

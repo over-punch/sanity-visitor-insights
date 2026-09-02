@@ -51,10 +51,16 @@ async function countsByItem(
 
 	const report = await ga4.runReport({
 		dimensions: [{ name: 'itemName' }],
-		metrics: [{ name: 'eventCount' }],
+		// totalUsers, not eventCount. These events do not fire once per person: a tester emits one
+		// per slider drag and per dropdown change, and TDF maps five separate change events onto
+		// the tester step. Dividing that by a per-pageview view count produced a "test rate" that
+		// was events over events, unbounded above 100%, and higher for a family whose page happens
+		// to carry more tester rows or whose variable font has more axes. It ranked layout, not
+		// interest. journey.ts made this switch and explained why; this file did not get the lesson.
+		metrics: [{ name: 'totalUsers' }],
 		dateRanges: [{ startDate: range.start, endDate: range.end }],
 		dimensionFilter: eventNamesFilter(eventNames),
-		orderBys: [{ metric: { metricName: 'eventCount' }, desc: true }],
+		orderBys: [{ metric: { metricName: 'totalUsers' }, desc: true }],
 		limit: 100,
 	})
 
@@ -92,6 +98,8 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 	// Tester events are per-site; TDF names five of them. Counts are summed across whichever
 	// this site emits, so the tested column means the same thing everywhere.
 	const testerEvents = config.eventNames?.tester ?? [TEST_EVENT]
+	/** How many events feed the tester figure. Above one, the summed count is not a person count. */
+	const testerEventCount = testerEvents.length
 	const [viewed, ...testedParts] = await Promise.all([
 		countsByItem(config, ga4, range, [VIEW_EVENT], quality),
 		...testerEvents.map((event) => countsByItem(config, ga4, range, [event], quality)),
@@ -138,12 +146,20 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 		const testedMetric = metric(tested, family, 'not_instrumented')
 		const boughtMetric = bought === null ? unavailable('not_applicable', 'Orders do not resolve to typefaces on this site') : ok(bought.get(family) ?? 0)
 
-		const testRate =
+		// Withheld where it cannot be a proportion.
+		//
+		// Summing distinct-user counts across several events double-counts anyone who fired more
+		// than one of them, so on a site mapping multiple events onto the tester step the ratio is
+		// not a rate and must not be printed as one. Clamped rather than shown above 1 in the
+		// single-event case too: a value over 100% is evidence the inputs disagree, not a finding.
+		const rateIsProportion = testerEventCount === 1
+		const rawRate =
 			viewedMetric.status !== 'unavailable' &&
 			testedMetric.status !== 'unavailable' &&
 			viewedMetric.value > 0
 				? testedMetric.value / viewedMetric.value
 				: null
+		const testRate = rateIsProportion && rawRate !== null ? Math.min(1, rawRate) : null
 
 		return { typeface: family, viewed: viewedMetric, tested: testedMetric, bought: boughtMetric, testRate }
 	})

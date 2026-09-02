@@ -15,7 +15,7 @@ export { clearCache } from './server/cache'
 // Report result shapes, so a consuming site can type a custom surface against them.
 export type { MeasurementHealthData } from './server/reports/measurementHealth'
 export type { AcquisitionData, SourceRow } from './server/reports/acquisition'
-export type { JourneyData, JourneyStep, ExitPage } from './server/reports/journey'
+export type { JourneyData, JourneyStep, LandingPage } from './server/reports/journey'
 export type { TypefaceInterestData, TypefaceInterestRow } from './server/reports/typefaceInterest'
 export { JOURNEY_STEPS } from './server/reports/journey'
 export { DESIGN_INDUSTRY_SOURCES } from './server/reports/acquisition'

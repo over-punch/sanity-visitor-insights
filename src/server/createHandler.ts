@@ -90,7 +90,7 @@ export function createVisitorInsightsHandler(options: HandlerOptions) {
 		}
 
 		const sanityProjectId = options.sanityProjectId ?? process.env.SANITY_STUDIO_PROJECT_ID ?? ''
-		const user = await requireStudioUser(req, res, sanityProjectId)
+		const user = await requireStudioUser(req, res, sanityProjectId, options.config.roles)
 		if (!user) return
 
 		// Strict allow-list. The report name selects from a fixed set and is never used to build

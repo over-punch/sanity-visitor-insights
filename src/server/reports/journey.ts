@@ -1,5 +1,5 @@
 /**
- * Journey — how far visitors get, and where they stop.
+ * Journey — how far visitors get, and where they arrive.
  *
  * This is an ordered step funnel, not a path graph, and that is a deliberate limit rather than a
  * simplification. GA4's Data API has no path-exploration endpoint; Path Exploration is a UI-only
@@ -19,7 +19,7 @@
  * event-count funnel compares a number that inflates with engagement against one that does not.
  */
 
-import type { JourneyData, JourneyStep, ExitPage } from '../../reportData'
+import type { JourneyData, JourneyStep, LandingPage } from '../../reportData'
 import type { DateRange, MetricValue } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
 import { applyCoverage, coverageForAny, coverageForRange } from '../../core/cutover'
@@ -115,26 +115,38 @@ export async function journey(config: SiteAnalyticsConfig, ga4: Ga4Client, range
 		if (current !== null) previousMeasurable = current
 	}
 
-	let topExitPages: ExitPage[] = []
+	// Where sessions BEGIN, not where they end.
+	//
+	// This block queried `metrics: [{ name: 'exits' }]` for a "where sessions ended" table. `exits`
+	// and `exitRate` are Universal Analytics metrics that GA4 never shipped — the Data API answers
+	// "Field exits is not a valid metric", verified against the live API on 2026-09-01. The request
+	// 400'd on every call for the life of the package, the catch swallowed it, and the table never
+	// rendered once. Nothing surfaced that, because a silent empty array looks like a quiet week.
+	//
+	// GA4's asymmetry is the thing to design around: it exposes entries and not exits. `landingPage`
+	// is the page a session started on, which answers the more useful half anyway — pair it with a
+	// referrer and it says which page a source actually delivers people to.
+	let topLandingPages: LandingPage[] = []
 	try {
-		const exits = await ga4.runReport({
-			dimensions: [{ name: 'pagePath' }],
-			metrics: [{ name: 'exits' }],
+		const landings = await ga4.runReport({
+			dimensions: [{ name: 'landingPage' }],
+			metrics: [{ name: 'sessions' }],
 			dateRanges: [{ startDate: range.start, endDate: range.end }],
-			orderBys: [{ metric: { metricName: 'exits' }, desc: true }],
+			orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
 			limit: 10,
 		})
 
-		topExitPages = exits.rows.map((row) => ({
+		topLandingPages = landings.rows.map((row) => ({
 			path: row.dimensions[0] ?? '(unknown)',
-			exits: Number.isFinite(row.metrics[0]) ? (row.metrics[0] as number) : 0,
+			sessions: Number.isFinite(row.metrics[0]) ? (row.metrics[0] as number) : 0,
 		}))
 	} catch (e) {
-		// Exit pages are supplementary; losing them should not fail the funnel.
-		console.error('Visitor insights: exit-page query failed:', (e as Error).message)
+		// Supplementary; losing it must not cost the funnel. Logged loudly rather than swallowed,
+		// which is how the previous version of this block stayed broken indefinitely.
+		console.error('Visitor insights: landing-page query failed:', (e as Error).message)
 	}
 
-	return { steps, topExitPages, approximate: true, approximationNote: APPROXIMATION_NOTE }
+	return { steps, topLandingPages, approximate: true, approximationNote: APPROXIMATION_NOTE }
 }
 
-export type { JourneyData, JourneyStep, ExitPage } from '../../reportData'
+export type { JourneyData, JourneyStep, LandingPage } from '../../reportData'

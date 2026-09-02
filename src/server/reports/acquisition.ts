@@ -54,6 +54,11 @@ export async function acquisition(ga4: Ga4Client, range: DateRange, limit = 25, 
 		dateRanges: [{ startDate: range.start, endDate: range.end }],
 		orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
 		limit,
+		// The denominator has to span every row, not the ones that fit under `limit`. Summing the
+		// returned rows gave the top-25 subtotal, and dividing a share by it inflated that share —
+		// systematically, because a design-industry referrer large enough to matter is almost
+		// always inside the top 25 while the long tail it should be measured against is not.
+		metricAggregations: ['TOTAL'],
 	})
 
 	// Sampling was captured from the response and then never shown, so a sampled report rendered
@@ -73,16 +78,23 @@ export async function acquisition(ga4: Ga4Client, range: DateRange, limit = 25, 
 		}
 	})
 
-	const totalSessions = sumFirstMetric(report)
+	// GA4's own total across all rows. Falls back to the row sum only if the totals block is
+	// missing, in which case the shares below are withheld rather than computed against a subtotal.
+	const totalSessions = report.metricTotal ?? sumFirstMetric(report)
+	const totalIsComplete = report.metricTotal !== undefined || report.rowCount <= report.rows.length
 	const sumWhere = (predicate: (row: SourceRow) => boolean) =>
 		rows.filter(predicate).reduce((total, row) => total + row.sessions, 0)
 
 	return {
 		rows,
 		totalSessions,
-		designIndustryShare: totalSessions > 0 ? sumWhere((r) => r.designIndustry) / totalSessions : null,
-		unattributedShare: totalSessions > 0 ? sumWhere((r) => r.unattributed) / totalSessions : null,
+		// Withheld, not approximated, when the denominator cannot be trusted. A share of an unknown
+		// whole is not a smaller truth, it is a different number wearing a percent sign.
+		designIndustryShare: totalIsComplete && totalSessions > 0 ? sumWhere((r) => r.designIndustry) / totalSessions : null,
+		unattributedShare: totalIsComplete && totalSessions > 0 ? sumWhere((r) => r.unattributed) / totalSessions : null,
 		rowsWithheld: report.thresholded,
+		/** True when GA4 held more source rows than were returned under `limit`. */
+		rowsTruncated: report.rowCount > report.rows.length,
 	}
 }
 

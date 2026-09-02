@@ -21,6 +21,7 @@ import {
 	makeOrders,
 	makeVercelPageviews,
 } from '../../testing/fakes'
+import { hasRequiredRole } from '../auth'
 import { measurementHealth } from './measurementHealth'
 import { acquisition } from './acquisition'
 import { journey } from './journey'
@@ -261,7 +262,7 @@ describe('journey', () => {
 
 		const data = await journey(siteConfig(), ga4, range)
 		expect(data.steps.length).toBeGreaterThan(0)
-		expect(data.topExitPages).toEqual([])
+		expect(data.topLandingPages).toEqual([])
 	})
 })
 
@@ -432,7 +433,38 @@ describe('per-site event names', () => {
 		const data = await typefaceInterest({ config: tdfConfig(), range, ga4, sanity: null })
 		const row = data.rows.find((r) => r.typeface === 'Bogart')
 		expect(row?.tested).toEqual({ status: 'ok', value: 100 })
-		expect(row?.testRate).toBeCloseTo(0.25, 5)
+
+		// No rate, deliberately. This assertion used to expect 0.25. Summing distinct-user counts
+		// across five events double-counts anyone who fired more than one of them, so the ratio is
+		// not a proportion and printing it as a percentage under a column headed "Test rate" states
+		// something the data cannot support. The tested count itself is still useful and still shown.
+		expect(row?.testRate).toBeNull()
+	})
+
+	it('does give a rate when one event serves the tester step', async () => {
+		const ga4 = createFakeGa4Client({
+			single: (request) => {
+				const f = JSON.stringify(request.dimensionFilter)
+				if (f.includes('view_item')) return makeGa4Report([{ dimensions: ['Bogart'], metrics: [400] }])
+				return makeGa4Report([{ dimensions: ['Bogart'], metrics: [100] }])
+			},
+		})
+
+		const data = await typefaceInterest({ config: siteConfig(), range, ga4, sanity: null })
+		expect(data.rows.find((r) => r.typeface === 'Bogart')?.testRate).toBeCloseTo(0.25, 5)
+	})
+
+	it('never reports a test rate above 100%', async () => {
+		const ga4 = createFakeGa4Client({
+			single: (request) => {
+				const f = JSON.stringify(request.dimensionFilter)
+				if (f.includes('view_item')) return makeGa4Report([{ dimensions: ['Bogart'], metrics: [10] }])
+				return makeGa4Report([{ dimensions: ['Bogart'], metrics: [40] }])
+			},
+		})
+
+		const data = await typefaceInterest({ config: siteConfig(), range, ga4, sanity: null })
+		expect(data.rows.find((r) => r.typeface === 'Bogart')?.testRate).toBe(1)
 	})
 
 	it('still uses the default name when a site does not map its own', async () => {
@@ -550,5 +582,73 @@ describe('measurementHealth interpretation', () => {
 		})
 
 		expect(data.interpretation).not.toContain('measurement failure')
+	})
+})
+
+/**
+ * Denominators and rates.
+ *
+ * Three numbers the tool used to print that were wrong rather than merely imprecise. Each was
+ * flagged independently by more than one reviewer in the 2026-09-01 design review.
+ */
+describe('shares are measured against the whole, or withheld', () => {
+	it('uses GA4 total across all rows, not the sum of the returned ones', async () => {
+		const ga4 = createFakeGa4Client({
+			single: () => ({
+				...makeGa4Report([
+					{ dimensions: ['fontsinuse.com', 'Referral'], metrics: [100] },
+					{ dimensions: ['google', 'Organic Search'], metrics: [100] },
+				]),
+				// GA4 held 1,000 sessions in total; the query returned the top two rows.
+				rowCount: 40,
+				metricTotal: 1000,
+			}),
+		})
+
+		const data = await acquisition(ga4, range)
+
+		expect(data.totalSessions).toBe(1000)
+		// 100 of 1,000, not 100 of the 200 that came back.
+		expect(data.designIndustryShare).toBeCloseTo(0.1, 5)
+		expect(data.rowsTruncated).toBe(true)
+	})
+
+	it('withholds the shares when the true total is unavailable and rows were truncated', async () => {
+		const ga4 = createFakeGa4Client({
+			single: () => ({
+				...makeGa4Report([{ dimensions: ['fontsinuse.com', 'Referral'], metrics: [100] }]),
+				rowCount: 40,
+			}),
+		})
+
+		const data = await acquisition(ga4, range)
+
+		// A share of an unknown whole is not a smaller truth; it is a different number.
+		expect(data.designIndustryShare).toBeNull()
+		expect(data.unattributedShare).toBeNull()
+	})
+})
+
+/**
+ * Role enforcement. The plugin option only hid the tab; the route itself was open to any Studio
+ * user of the project, while the README said otherwise.
+ */
+describe('hasRequiredRole', () => {
+	const user = (roles: string[]) => ({ id: 'u1', roles: roles.map((name) => ({ name })) })
+
+	it('admits a user holding one of the required roles', () => {
+		expect(hasRequiredRole(user(['editor', 'administrator']), ['administrator'])).toBe(true)
+	})
+
+	it('refuses a user holding none of them', () => {
+		expect(hasRequiredRole(user(['editor']), ['administrator'])).toBe(false)
+	})
+
+	it('refuses a user with no roles at all — absence is not permission', () => {
+		expect(hasRequiredRole({ id: 'u1' }, ['administrator'])).toBe(false)
+	})
+
+	it('admits anyone when no roles are required', () => {
+		expect(hasRequiredRole({ id: 'u1' }, [])).toBe(true)
 	})
 })

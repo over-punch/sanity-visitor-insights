@@ -20,6 +20,14 @@ export interface Ga4ReportRequest {
 	orderBys?: unknown
 	limit?: number
 	keepEmptyRows?: boolean
+	/**
+	 * Ask GA4 for aggregate totals across ALL rows, not just the ones returned.
+	 *
+	 * Needed wherever a share is computed against a limited report: summing the returned rows gives
+	 * the top-N subtotal, so every share divided by it is inflated. GA4 returns these separately
+	 * from the row set, which is exactly what makes them safe as a denominator.
+	 */
+	metricAggregations?: Array<'TOTAL' | 'MINIMUM' | 'MAXIMUM' | 'COUNT'>
 }
 
 /** A parsed report row: dimension values and metric values, positionally aligned to the request. */
@@ -38,6 +46,12 @@ export interface Ga4Report {
 	/** Total row count GA4 reports, which may exceed rows returned when a limit applied. */
 	rowCount: number
 	/**
+	 * First metric's total across every row GA4 held, present only when metricAggregations asked
+	 * for it. Undefined means "not requested", never zero — a caller must not read an absent total
+	 * as an empty property.
+	 */
+	metricTotal?: number
+	/**
 	 * The property's configured timezone, as GA4 reports it. Worth capturing because every range
 	 * is anchored to the timezone in site config, and a mismatch silently shifts day boundaries.
 	 */
@@ -51,6 +65,7 @@ interface RawReport {
 		metricValues?: Array<{ value?: string }>
 	}>
 	rowCount?: number
+	totals?: Array<{ metricValues?: Array<{ value?: string }> }>
 	metadata?: { subjectToThresholding?: boolean; samplingMetadatas?: unknown[]; timeZone?: string }
 	propertyQuota?: unknown
 }
@@ -80,6 +95,13 @@ function parseReport(raw: RawReport): Ga4Report {
 		thresholded: raw.metadata?.subjectToThresholding === true,
 		sampled: Array.isArray(raw.metadata?.samplingMetadatas) && raw.metadata.samplingMetadatas.length > 0,
 		rowCount: raw.rowCount ?? rows.length,
+		// Left undefined rather than NaN when GA4 returned no totals block, so a caller can tell
+		// "not requested" from a real figure. toMetricNumber yields NaN for absent, which would
+		// otherwise propagate into a share as a silent wrong answer.
+		metricTotal: (() => {
+			const parsed = toMetricNumber(raw.totals?.[0]?.metricValues?.[0]?.value)
+			return Number.isFinite(parsed) ? parsed : undefined
+		})(),
 		timeZone: raw.metadata?.timeZone,
 	}
 }

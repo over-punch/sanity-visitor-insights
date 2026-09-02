@@ -118,16 +118,50 @@ export function applyCors(req: HandlerRequest, res: HandlerResponse, allowedOrig
  *
  * @returns the verified user, or null when the request has already been answered with a 401
  */
+/**
+ * Whether a Studio user holds at least one of the required roles.
+ *
+ * Pure and exported so the decision can be tested without a network round trip, and so a consumer
+ * can apply the same rule to its own routes. A user with no roles array holds nothing — absence is
+ * never treated as permission.
+ *
+ * @param user - the verified Studio user
+ * @param requiredRoles - roles that grant access; any one is enough
+ */
+export function hasRequiredRole(user: StudioUser, requiredRoles: readonly string[]): boolean {
+	if (requiredRoles.length === 0) return true
+	const held = user.roles?.map((role) => role.name) ?? []
+	return held.some((role) => requiredRoles.includes(role))
+}
+
 export async function requireStudioUser(
 	req: HandlerRequest,
 	res: HandlerResponse,
 	sanityProjectId: string,
+	requiredRoles?: readonly string[],
 ): Promise<StudioUser | null> {
 	const result = await verifyStudioRequest(req, sanityProjectId)
 
-	if (result.ok) return result.user
+	if (!result.ok) {
+		console.error(`Visitor insights: rejected unauthenticated request (${result.reason}) on ${req.url ?? 'unknown'}`)
+		res.status(401).json({ error: 'Not authorised. Sign in to the Studio and try again.' })
+		return null
+	}
 
-	console.error(`Visitor insights: rejected unauthenticated request (${result.reason}) on ${req.url ?? 'unknown'}`)
-	res.status(401).json({ error: 'Not authorised. Sign in to the Studio and try again.' })
-	return null
+	// Role enforcement, server-side.
+	//
+	// The plugin's `roles` option filtered the tool out of the Studio's navigation and nothing more,
+	// while the README told operators it protected the order-derived figures. It did not: the
+	// handler read the user's identity and never looked at their roles, so any Studio user of any
+	// role could read their own session token out of the browser and call every report directly.
+	// Hiding a tool from a menu is not access control.
+	if (requiredRoles && requiredRoles.length > 0) {
+		if (!hasRequiredRole(result.user, requiredRoles)) {
+			console.error(`Visitor insights: rejected ${result.user.id} lacking any of [${requiredRoles.join(', ')}] on ${req.url ?? 'unknown'}`)
+			res.status(403).json({ error: 'Your Studio account does not have access to these reports.' })
+			return null
+		}
+	}
+
+	return result.user
 }

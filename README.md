@@ -169,6 +169,8 @@ export default createVisitorInsightsHandler({
       tester_engaged: null,
     },
     // Only needed where the Studio is on a different origin.
+    // Enforced server-side, unlike the plugin option of the same name. Set both, to the same list.
+    roles: ['administrator'],
     allowedStudioOrigins: ['https://mckl.sanity.studio'],
   },
 })

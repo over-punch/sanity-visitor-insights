@@ -106,6 +106,11 @@ export interface AcquisitionData {
 	unattributedShare: number | null
 	/** True when GA4 withheld low-count rows, so the tail is shorter than reality. */
 	rowsWithheld: boolean
+	/**
+	 * True when GA4 held more source rows than the query returned.
+	 * The shares above are null in that case rather than divided by a partial total.
+	 */
+	rowsTruncated: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -125,16 +130,20 @@ export interface JourneyStep {
 	conversionFromPrevious: number | null
 }
 
-/** A page where sessions commonly ended. */
-export interface ExitPage {
+/** One landing page and the sessions that began on it. */
+export interface LandingPage {
 	path: string
-	exits: number
+	sessions: number
 }
 
 /** How far visitors get. Per-step totals, never an observed path. */
 export interface JourneyData {
 	steps: JourneyStep[]
-	topExitPages: ExitPage[]
+	/**
+	 * Where sessions began, busiest first. GA4 exposes entries but not exits — the previous
+	 * `topExitPages` queried a metric GA4 has never had and was permanently empty.
+	 */
+	topLandingPages: LandingPage[]
 	/** Always true. The UI must not present these steps as a tracked journey. */
 	approximate: true
 	/** Why it is approximate, in words the panel can show directly. */
