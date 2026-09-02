@@ -9,7 +9,7 @@
  *      accessible label, so the figure survives greyscale, colour blindness and both Studio themes.
  */
 
-import React from 'react'
+import React, { useRef, useState } from 'react'
 import { Badge, Box, Card, Flex, Stack, Text, Tooltip } from '@liiift-studio/sanity-ui-compat'
 import type { MetricValue, UnavailableReason } from '../types'
 
@@ -140,6 +140,167 @@ export function ComparisonBar({ label, metric, max, tone = 'default' }: Comparis
 		</Stack>
 	)
 }
+
+/** One rung of the funnel, already filtered to steps that are actually measured. */
+export interface FunnelStage {
+	key: string
+	label: string
+	/** Distinct users at this step. */
+	value: number
+	/** Share of the previous shown step, or null when it could not be computed. */
+	conversionFromPrevious: number | null
+}
+
+/** Props for FunnelChart. */
+export interface FunnelChartProps {
+	stages: FunnelStage[]
+	/**
+	 * Whether the stages are a tracked sequence or independent totals. The drawing is the same
+	 * shape either way, but the words between stages are not: a fallback's gap is a difference
+	 * between two counts, not people who dropped out.
+	 */
+	measurement: 'sequence' | 'independent-totals'
+}
+
+/**
+ * A funnel.
+ *
+ * Widths are a share of the FIRST stage rather than of the largest, which is what makes it read as
+ * a funnel: every rung answers "of everyone who arrived, how many got this far". Anchoring to the
+ * max instead would make the widest stage full-width wherever it sat, and a mid-funnel step wider
+ * than entry — which happens on the independent-totals fallback, where `add_to_cart` can exceed
+ * `page_view` — would silently rescale everything above it.
+ *
+ * Stages are focusable so the figures are reachable without a pointer; the readout is rendered as
+ * text under the stage rather than as a floating tooltip so it is also visible on touch.
+ */
+export function FunnelChart({ stages, measurement }: FunnelChartProps): React.ReactElement | null {
+	const [activeKey, setActiveKey] = useState<string | null>(null)
+	const refs = useRef<Array<HTMLDivElement | null>>([])
+
+	const entry = stages[0]?.value ?? 0
+	if (stages.length === 0) return null
+
+	const onKeyDown = (event: React.KeyboardEvent, index: number) => {
+		let next: number | null = null
+		if (event.key === 'ArrowDown' || event.key === 'ArrowRight') next = Math.min(index + 1, stages.length - 1)
+		if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') next = Math.max(index - 1, 0)
+		if (event.key === 'Home') next = 0
+		if (event.key === 'End') next = stages.length - 1
+		if (next === null) return
+		event.preventDefault()
+		refs.current[next]?.focus()
+	}
+
+	return (
+		<ol style={funnelList}>
+			{stages.map((stage, index) => {
+				const previous = index > 0 ? stages[index - 1] : null
+				// The share is printed unclamped and the WIDTH is clamped separately. Clamping the
+				// share itself printed a fallback stage of 500 against an entry of 100 as "100.0%
+				// of landed" — the one reading that hides the anomaly the caveat exists to explain.
+				const share = entry > 0 ? stage.value / entry : 0
+				const width = Math.max(1.5, Math.min(1, share) * 100)
+				const active = activeKey === stage.key
+				const delta = previous ? previous.value - stage.value : 0
+
+				return (
+					<li key={stage.key} style={funnelItem}>
+						{previous && (
+							<div style={funnelGap} aria-hidden="true">
+								<Text size={0} muted>{gapLabel(delta, measurement)}</Text>
+							</div>
+						)}
+
+						<div
+							ref={(el: HTMLDivElement | null) => {
+								refs.current[index] = el
+							}}
+							tabIndex={0}
+							role="listitem"
+							style={funnelStage(active)}
+							onMouseEnter={() => setActiveKey(stage.key)}
+							onMouseLeave={() => setActiveKey(null)}
+							onFocus={() => setActiveKey(stage.key)}
+							onBlur={() => setActiveKey(null)}
+							onKeyDown={(e) => onKeyDown(e, index)}
+						>
+							<div style={barHeader}>
+								<Text size={1} weight="medium">{stage.label}</Text>
+								<Text size={1} weight="semibold">{formatCount(stage.value)}</Text>
+							</div>
+
+							<Card aria-hidden="true" radius={2} tone="transparent" border style={funnelTrack}>
+								<Card tone="primary" radius={2} style={{ width: `${width}%`, height: '100%' }} />
+							</Card>
+
+							{/* Both ratios where they differ — the panel used to print only the
+							    step-to-step one, and a reader comparing two adjacent small
+							    percentages had no way to see how narrow the funnel had already
+							    become. On stage two the previous step IS entry, so printing both
+							    read as "100.0% of landed · 500.0% of landed". */}
+							<Text size={0} muted>
+								{index === 0
+									? 'entry step'
+									: `${formatPercent(share, 1)} of ${stages[0]?.label.toLowerCase()}`}
+								{index > 1 && stage.conversionFromPrevious !== null && previous
+									? ` · ${formatPercent(stage.conversionFromPrevious, 1)} of ${previous.label.toLowerCase()}`
+									: ''}
+							</Text>
+						</div>
+					</li>
+				)
+			})}
+		</ol>
+	)
+}
+
+/**
+ * The words in the gap between two rungs.
+ *
+ * A tracked funnel loses people; independent totals merely differ, and a later total can exceed an
+ * earlier one — `add_to_cart` fires per selection on two of the three sites, so the cart step can
+ * sit above `page_view`. That case must not print as "no difference", which is what a
+ * greater-than-zero test alone produced.
+ *
+ * @param delta - previous step's value minus this one's; negative means this step is larger
+ */
+function gapLabel(delta: number, measurement: 'sequence' | 'independent-totals'): string {
+	if (delta === 0) return measurement === 'sequence' ? 'no drop-off' : 'no difference'
+	if (delta > 0) return measurement === 'sequence' ? `−${formatCount(delta)} did not continue` : `${formatCount(delta)} fewer`
+	// A closed funnel cannot grow, so a negative here means the fallback is in use and the two
+	// counts are of different acts, not of the same people continuing.
+	return `${formatCount(-delta)} more — not a subset of the step above`
+}
+
+/** The funnel's list wrapper. Numbering is suppressed — the rungs are already in order visually. */
+const funnelList: React.CSSProperties = { listStyle: 'none', margin: 0, padding: 0 }
+
+/** One rung and its preceding gap. */
+const funnelItem: React.CSSProperties = { display: 'grid', gap: 4 }
+
+/** The space between two rungs, where the drop-off is named. */
+const funnelGap: React.CSSProperties = {
+	display: 'flex',
+	justifyContent: 'flex-end',
+	padding: '4px 2px',
+}
+
+/** One rung. The active state is a background and a border, so it survives a forced-colours mode. */
+function funnelStage(active: boolean): React.CSSProperties {
+	return {
+		display: 'grid',
+		gap: 6,
+		padding: '8px 10px',
+		borderRadius: 3,
+		border: `1px solid ${active ? 'currentColor' : 'transparent'}`,
+		background: active ? 'var(--card-bg-color, rgba(128,128,128,0.08))' : 'transparent',
+		cursor: 'default',
+	}
+}
+
+/** The rung's track. */
+const funnelTrack: React.CSSProperties = { height: 10, overflow: 'hidden' }
 
 /** Chart frame, so the hover readout can sit over the plot. */
 const chartFrame: React.CSSProperties = { position: 'relative', width: '100%' }

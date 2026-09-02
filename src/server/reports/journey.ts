@@ -1,14 +1,23 @@
 /**
  * Journey — how far visitors get, and where they arrive.
  *
- * This is an ordered step funnel, not a path graph, and that is a deliberate limit rather than a
- * simplification. GA4's Data API has no path-exploration endpoint; Path Exploration is a UI-only
- * feature. What is available is per-event totals and `runFunnelReport`, an alpha surface that
- * returns step-conversion marginals — not observed sequences. Rendering ribbons from marginals
- * would assert that a given visitor went A to B to C when no such co-occurrence was ever measured.
+ * Two ways of measuring this, and the report says which one it used.
  *
- * So each step is reported as its own honest total, adjacent drop-off is derived between steps, and
- * the response is explicitly flagged as an approximation for the UI to display.
+ * `runFunnelReport` is preferred and is tried first. It returns an ORDERED, CLOSED funnel: a user
+ * must have entered at step one, and each later step counts only users for whom the earlier steps
+ * actually happened. That is a real observed sequence.
+ *
+ * An earlier version of this file asserted that the endpoint "returns step-conversion marginals —
+ * not observed sequences" and built independent per-step totals instead. That was wrong, and it
+ * meant the panel displayed a prominent caution card describing a GA4 limitation that does not
+ * exist. The endpoint is v1alpha and Google documents it as subject to breaking change, and it
+ * draws on a separate quota — those are the real reasons for caution, and they are reasons to keep
+ * a fallback, not reasons to avoid it.
+ *
+ * When the funnel call fails, the per-step totals remain as the fallback. They are honest but
+ * weaker: a visitor counted at one step is not necessarily the visitor counted at the next. The
+ * response carries `measurement` so the UI can say which one the reader is looking at rather than
+ * describing both the same way.
  *
  * A step whose event is not instrumented on this site reports as unavailable, never as zero. On a
  * site missing `begin_checkout`, the cart-to-checkout drop-off is not "100% drop-off" — it is
@@ -40,6 +49,11 @@ export const JOURNEY_STEPS = [
 
 
 
+
+/** How the funnel figures were obtained, so the UI can describe them accurately. */
+const SEQUENCE_NOTE =
+	'A tracked funnel. Each step counts users who reached it having completed the earlier steps, ' +
+	'so this is an observed sequence rather than a set of independent totals.'
 
 const APPROXIMATION_NOTE =
 	'These are independent per-step totals, not tracked journeys. GA4 cannot report the actual path a ' +
@@ -126,6 +140,57 @@ export async function journey(config: SiteAnalyticsConfig, ga4: Ga4Client, range
 	// GA4's asymmetry is the thing to design around: it exposes entries and not exits. `landingPage`
 	// is the page a session started on, which answers the more useful half anyway — pair it with a
 	// referrer and it says which page a source actually delivers people to.
+	// A real, ordered funnel where the endpoint allows it.
+	//
+	// Only rungs this site instruments are included — asking GA4 for a step whose event never fires
+	// would close the funnel at that point and report zero for everything after it, which reads as
+	// a catastrophic drop-off rather than as an uninstrumented site.
+	let sequencedSteps: JourneyStep[] | null = null
+	const funnelRungs = coverages
+		.filter((entry) => entry.coverage.status !== 'none')
+		.map((entry) => ({ step: entry.step, events: entry.events, coverage: entry.coverage }))
+
+	if (funnelRungs.length >= 2) {
+		try {
+			const funnel = await ga4.runFunnelReport(
+				funnelRungs.map((rung) => ({ name: rung.step.label, eventNames: rung.events })),
+				{ startDate: range.start, endDate: range.end },
+			)
+
+			if (funnel.sampled) {
+				notices?.push('GA4 answered this funnel from a sample, so the step counts are estimates.')
+			}
+
+			// Matched by name rather than by position: GA4 echoes the names it was given, and a
+			// mismatch means the response does not describe the funnel that was asked for — better
+			// to fall back than to line up rows that may not correspond.
+			const byName = new Map(funnel.steps.map((row) => [row.name, row]))
+			if (funnelRungs.every((rung) => byName.has(rung.step.label))) {
+				sequencedSteps = funnelRungs.map((rung, index) => {
+					const row = byName.get(rung.step.label) as NonNullable<ReturnType<typeof byName.get>>
+					const previous = index > 0 ? byName.get(funnelRungs[index - 1]!.step.label) : undefined
+					return {
+						key: rung.step.key,
+						label: rung.step.label,
+						event: rung.step.event,
+						count: applyCoverage(row.activeUsers, rung.coverage),
+						// GA4's own completion rate where it gave one; otherwise derived from the
+						// adjacent step, which in a closed funnel is a genuine continuation rate.
+						conversionFromPrevious: index === 0
+							? null
+							: row.completionRate ?? (previous && previous.activeUsers > 0
+								? row.activeUsers / previous.activeUsers
+								: null),
+					}
+				})
+			}
+		} catch (e) {
+			// Expected on any property where the alpha endpoint is unavailable or the funnel quota
+			// is spent. The per-step totals below still answer the question, less precisely.
+			console.warn('Visitor insights: funnel report unavailable, using per-step totals:', (e as Error).message)
+		}
+	}
+
 	let topLandingPages: LandingPage[] = []
 	try {
 		const landings = await ga4.runReport({
@@ -146,7 +211,13 @@ export async function journey(config: SiteAnalyticsConfig, ga4: Ga4Client, range
 		console.error('Visitor insights: landing-page query failed:', (e as Error).message)
 	}
 
-	return { steps, topLandingPages, approximate: true, approximationNote: APPROXIMATION_NOTE }
+	return {
+		steps: sequencedSteps ?? steps,
+		topLandingPages,
+		measurement: sequencedSteps ? 'sequence' : 'independent-totals',
+		approximate: !sequencedSteps,
+		approximationNote: sequencedSteps ? SEQUENCE_NOTE : APPROXIMATION_NOTE,
+	}
 }
 
 export type { JourneyData, JourneyStep, LandingPage } from '../../reportData'

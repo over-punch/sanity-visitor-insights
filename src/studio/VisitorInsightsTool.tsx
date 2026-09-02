@@ -64,7 +64,42 @@ function tabStyle(selected: boolean): React.CSSProperties {
 	}
 }
 
-/** Range options, in the order they appear. */
+/** One range button. Selected state carries weight and a border, never colour alone. */
+function rangeButton(selected: boolean): React.CSSProperties {
+	return {
+		appearance: 'none',
+		background: 'transparent',
+		border: `1px solid ${selected ? 'currentColor' : 'var(--card-border-color, rgba(128,128,128,0.3))'}`,
+		borderRadius: 3,
+		color: 'inherit',
+		opacity: selected ? 1 : 0.7,
+		font: 'inherit',
+		fontSize: '0.85em',
+		fontWeight: selected ? 600 : 400,
+		padding: '5px 10px',
+		cursor: 'pointer',
+		whiteSpace: 'nowrap',
+	}
+}
+
+/** The custom-range form, wrapping on a narrow pane. */
+const pickerRow: React.CSSProperties = { display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }
+
+/** A labelled date field. */
+const pickerField: React.CSSProperties = { display: 'grid', gap: 2 }
+
+/** Native date input, inheriting the Studio's type and colours. */
+const dateInput: React.CSSProperties = {
+	font: 'inherit',
+	fontSize: '0.85em',
+	padding: '4px 6px',
+	borderRadius: 3,
+	border: '1px solid var(--card-border-color, rgba(128,128,128,0.3))',
+	background: 'transparent',
+	color: 'inherit',
+	colorScheme: 'light dark',
+}
+
 /**
  * Range options.
  *
@@ -73,10 +108,11 @@ function tabStyle(selected: boolean): React.CSSProperties {
  * comparing them against anything calendar-aligned would have been comparing different things
  * without being told. The dates each one resolves to are shown beside the buttons.
  */
-const RANGES: Array<{ key: RangeKey; label: string; span: string }> = [
-	{ key: 'week', label: '7 days', span: 'the last 7 days' },
-	{ key: 'quarter', label: '91 days', span: 'the last 91 days' },
-	{ key: 'year', label: '365 days', span: 'the last 365 days' },
+const RANGES: Array<{ key: Exclude<RangeKey, 'custom'>; label: string; span: string }> = [
+	{ key: 'week', label: 'Week', span: 'the last 7 days' },
+	{ key: 'month', label: 'Month', span: 'the last 30 days' },
+	{ key: 'quarter', label: 'Quarter', span: 'the last 91 days' },
+	{ key: 'year', label: 'Year', span: 'the last 365 days' },
 ]
 
 /** Panels, in the order they appear. */
@@ -122,8 +158,19 @@ export interface VisitorInsightsToolComponentProps extends Partial<VisitorInsigh
  * Arrow keys move between options and select as they go, which is the expected behaviour for a
  * radiogroup; Tab enters and leaves the group as a single stop.
  */
-function RangeSelector({ value, onChange }: { value: RangeKey; onChange: (next: RangeKey) => void }): React.ReactElement {
+function RangeSelector({
+	value,
+	custom,
+	onChange,
+	onCustomChange,
+}: {
+	value: RangeKey
+	custom: { start: string; end: string }
+	onChange: (next: RangeKey) => void
+	onCustomChange: (next: { start: string; end: string }) => void
+}): React.ReactElement {
 	const refs = useRef<Array<HTMLButtonElement | null>>([])
+	const [pickerOpen, setPickerOpen] = useState(value === 'custom')
 
 	const onKeyDown = useCallback(
 		(event: React.KeyboardEvent) => {
@@ -141,6 +188,7 @@ function RangeSelector({ value, onChange }: { value: RangeKey; onChange: (next: 
 			const next = RANGES[nextIndex]
 			if (!next) return
 
+			setPickerOpen(false)
 			onChange(next.key)
 			refs.current[nextIndex]?.focus()
 		},
@@ -148,30 +196,83 @@ function RangeSelector({ value, onChange }: { value: RangeKey; onChange: (next: 
 	)
 
 	return (
-		<Flex role="radiogroup" aria-label="Date range" gap={1} onKeyDown={onKeyDown}>
-			{RANGES.map((range, index) => {
-				const selected = range.key === value
-				return (
-					<Button
-						key={range.key}
-						ref={(el: HTMLButtonElement | null) => {
-							refs.current[index] = el
-						}}
-						role="radio"
-						aria-checked={selected}
-						// Only the selected option is in the tab order, so the group is one stop.
-						tabIndex={selected ? 0 : -1}
-						mode={selected ? 'default' : 'bleed'}
-						tone={selected ? 'primary' : 'default'}
-						text={range.label}
-						title={`Ending today, covering ${range.span}`}
-						onClick={() => onChange(range.key)}
-						fontSize={1}
-						padding={3}
-					/>
-				)
-			})}
-		</Flex>
+		<Stack space={2}>
+			<div role="radiogroup" aria-label="Date range" style={controlRow} onKeyDown={onKeyDown}>
+				{RANGES.map((range, index) => {
+					const selected = range.key === value
+					return (
+						// Plain buttons rather than the UI kit's: the compat shim's DOM fallback does not
+						// forward `text`, which renders the whole selector as blank boxes on any Studio
+						// version where it cannot resolve Button.
+						<button
+							key={range.key}
+							type="button"
+							ref={(el: HTMLButtonElement | null) => {
+								refs.current[index] = el
+							}}
+							role="radio"
+							aria-checked={selected}
+							// Only the selected option is in the tab order, so the group is one stop.
+							tabIndex={selected ? 0 : -1}
+							title={`Ending today, covering ${range.span}`}
+							style={rangeButton(selected)}
+							onClick={() => {
+								setPickerOpen(false)
+								onChange(range.key)
+							}}
+						>
+							{range.label}
+						</button>
+					)
+				})}
+
+				{/* Custom sits outside the radiogroup deliberately: it opens a form rather than
+				    selecting a value, so arrowing onto it would open and close the picker. */}
+				<button
+					type="button"
+					style={rangeButton(value === 'custom')}
+					aria-expanded={pickerOpen}
+					onClick={() => setPickerOpen((open) => !open)}
+				>
+					{value === 'custom' ? `${custom.start} to ${custom.end}` : 'Custom…'}
+				</button>
+			</div>
+
+			{pickerOpen && (
+				<div style={pickerRow}>
+					<label style={pickerField}>
+						<Text size={0} muted>From</Text>
+						<input
+							type="date"
+							value={custom.start}
+							max={custom.end || undefined}
+							style={dateInput}
+							onChange={(e) => onCustomChange({ ...custom, start: e.currentTarget.value })}
+						/>
+					</label>
+					<label style={pickerField}>
+						<Text size={0} muted>To</Text>
+						<input
+							type="date"
+							value={custom.end}
+							min={custom.start || undefined}
+							style={dateInput}
+							onChange={(e) => onCustomChange({ ...custom, end: e.currentTarget.value })}
+						/>
+					</label>
+					<button
+						type="button"
+						style={rangeButton(true)}
+						// Applied on submit, not on each keystroke: a half-typed year is a valid-looking
+						// date, and refetching per character would fire a run of requests nobody asked for.
+						disabled={!custom.start || !custom.end}
+						onClick={() => onChange('custom')}
+					>
+						Apply
+					</button>
+				</div>
+			)}
+		</Stack>
 	)
 }
 
@@ -278,8 +379,18 @@ function PanelTabs({ value, onChange }: { value: ReportName; onChange: (next: Re
 }
 
 /** Renders one report panel, including its loading, error and empty states. */
-function ReportPanel({ report, apiBaseUrl, range }: { report: ReportName; apiBaseUrl: string; range: RangeKey }): React.ReactElement {
-	const { state, reload } = useReport<unknown>({ apiBaseUrl, report, range })
+function ReportPanel({
+	report,
+	apiBaseUrl,
+	range,
+	custom,
+}: {
+	report: ReportName
+	apiBaseUrl: string
+	range: RangeKey
+	custom: { start: string; end: string }
+}): React.ReactElement {
+	const { state, reload } = useReport<unknown>({ apiBaseUrl, report, range, custom })
 
 	// Announced to screen readers when figures change, so a range switch is perceivable without
 	// re-navigating the whole panel.
@@ -287,7 +398,7 @@ function ReportPanel({ report, apiBaseUrl, range }: { report: ReportName; apiBas
 		state.status === 'loading'
 			? 'Loading report'
 			: state.status === 'ready'
-				? `${report} updated for the selected ${range}`
+				? `${report} updated for ${range === 'custom' ? `${custom.start} to ${custom.end}` : `the selected ${range}`}`
 				: state.status === 'error'
 					? `Report failed: ${state.message}`
 					: ''
@@ -336,27 +447,46 @@ function ReportPanel({ report, apiBaseUrl, range }: { report: ReportName; apiBas
 	)
 }
 
+/**
+ * An ISO date N days before today, in the viewer's local zone.
+ *
+ * @param days - how many days back; 0 is today
+ */
+function isoDaysAgo(days: number): string {
+	const date = new Date()
+	date.setDate(date.getDate() - days)
+	return date.toISOString().slice(0, 10)
+}
+
 /** The tool itself. */
 export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): React.ReactElement {
 	// Nested options win, since that is the shape the Studio supplies; the flat props are the
 	// direct-use fallback. See VisitorInsightsToolComponentProps for why both exist.
 	const apiBaseUrl = props.tool?.options?.apiBaseUrl ?? props.apiBaseUrl ?? ''
+	// Kept for the document title and accessible naming, no longer printed as a subtitle.
 	const siteLabel = props.tool?.options?.siteLabel ?? props.siteLabel ?? ''
 
 	const [range, setRange] = useState<RangeKey>('week')
+	// Seeded with the trailing month so the picker opens on a valid range rather than on two empty
+	// fields. Local dates, not the property's: this is only the form's starting value, and the
+	// server re-resolves whatever is submitted against the property timezone.
+	const [custom, setCustom] = useState(() => ({ start: isoDaysAgo(30), end: isoDaysAgo(0) }))
 	const [activePanel, setActivePanel] = useState<ReportName>('acquisition')
 
 	const active = PANELS.find((p) => p.report === activePanel) ?? PANELS[0]
 
 	return (
-		<Container width={4} padding={4}>
+		// Named for assistive technology even though the name is not printed: a Studio user with
+		// several tabs open hears which site's figures these are, without the heading repeating
+		// what the Studio navigation already says.
+		<Container width={4} padding={4} as="section" aria-label={siteLabel ? `Visitor insights for ${siteLabel}` : 'Visitor insights'}>
 			<Stack space={5}>
 				<Flex align="flex-start" justify="space-between" gap={4} wrap="wrap">
-					<Stack space={2}>
-						<Heading size={2}>Visitor insights</Heading>
-						<Text size={1} muted>{siteLabel}</Text>
-					</Stack>
-					<RangeSelector value={range} onChange={setRange} />
+					{/* No site name. The tool is mounted inside that site's own Studio, which already
+					    says whose it is in the navigation — repeating it was a line of chrome
+					    where the range and its dates are the useful context. */}
+					<Heading size={2}>Visitor insights</Heading>
+					<RangeSelector value={range} custom={custom} onChange={setRange} onCustomChange={setCustom} />
 				</Flex>
 
 				<PanelTabs value={activePanel} onChange={setActivePanel} />
@@ -371,7 +501,7 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 				>
 					<Stack space={4}>
 						{active && <Text size={1} muted>{active.blurb}</Text>}
-						<ReportPanel report={activePanel} apiBaseUrl={apiBaseUrl} range={range} />
+						<ReportPanel report={activePanel} apiBaseUrl={apiBaseUrl} range={range} custom={custom} />
 					</Stack>
 				</Box>
 			</Stack>

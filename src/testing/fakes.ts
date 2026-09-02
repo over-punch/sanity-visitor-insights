@@ -11,7 +11,7 @@
  * fakes in its own integration tests before wiring real credentials.
  */
 
-import type { Ga4Client, Ga4Report, Ga4ReportRequest, Ga4Row } from '../server/ga4'
+import type { Ga4Client, Ga4Report, Ga4ReportRequest, Ga4Row, Ga4FunnelStep, Ga4FunnelReport } from '../server/ga4'
 import type { VercelClient, VercelPageviews } from '../server/vercel'
 import type { SanityQueryClient } from '../server/orders'
 
@@ -44,6 +44,8 @@ export interface FakeGa4Client extends Ga4Client {
 	batchCalls: Ga4ReportRequest[][]
 	/** Every runReport call. */
 	singleCalls: Ga4ReportRequest[]
+	/** Every runFunnelReport call, so a test can assert the funnel it asked for. */
+	funnelCalls: Array<{ steps: Ga4FunnelStep[]; range: { startDate: string; endDate: string } }>
 }
 
 /** Script controlling what the GA4 fake returns. */
@@ -52,6 +54,8 @@ export interface Ga4Script {
 	batch?: (requests: Ga4ReportRequest[]) => Ga4Report[]
 	/** Handles runReport. */
 	single?: (request: Ga4ReportRequest) => Ga4Report
+	/** Handles runFunnelReport. Omit to make funnels unavailable, exercising the fallback. */
+	funnel?: (steps: readonly Ga4FunnelStep[], range: { startDate: string; endDate: string }) => Ga4FunnelReport
 	/** When set, every call rejects with this error instead. */
 	failWith?: Error
 }
@@ -65,9 +69,11 @@ export interface Ga4Script {
 export function createFakeGa4Client(script: Ga4Script = {}): FakeGa4Client {
 	const batchCalls: Ga4ReportRequest[][] = []
 	const singleCalls: Ga4ReportRequest[] = []
+	const funnelCalls: FakeGa4Client['funnelCalls'] = []
 
 	return {
 		batchCalls,
+		funnelCalls,
 		singleCalls,
 
 		async batchRunReports(requests) {
@@ -82,6 +88,17 @@ export function createFakeGa4Client(script: Ga4Script = {}): FakeGa4Client {
 			if (script.failWith) throw script.failWith
 			if (script.single) return script.single(request)
 			return makeGa4Report([])
+		},
+
+		/**
+		 * Funnel fake. Rejects unless a script supplies one, so a test that does not opt in
+		 * exercises the fallback path — which is the behaviour on any property where the alpha
+		 * endpoint is unavailable or out of quota.
+		 */
+		async runFunnelReport(steps, range) {
+			funnelCalls.push({ steps: [...steps], range })
+			if (!script.funnel) throw new Error('Funnel report unavailable in this fake')
+			return script.funnel(steps, range)
 		},
 	}
 }

@@ -144,8 +144,17 @@ export interface JourneyData {
 	 * `topExitPages` queried a metric GA4 has never had and was permanently empty.
 	 */
 	topLandingPages: LandingPage[]
-	/** Always true. The UI must not present these steps as a tracked journey. */
-	approximate: true
+	/**
+	 * How the step figures were obtained.
+	 *
+	 * `sequence` is a tracked, closed funnel from runFunnelReport: each step counts users who got
+	 * there having completed the earlier ones. `independent-totals` is the fallback, where each
+	 * step is its own count and a visitor at one is not necessarily the visitor at the next. The
+	 * two must not be described the same way.
+	 */
+	measurement: 'sequence' | 'independent-totals'
+	/** True only for the independent-totals fallback. A tracked funnel is not an approximation. */
+	approximate: boolean
 	/** Why it is approximate, in words the panel can show directly. */
 	approximationNote: string
 }

@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { PREEXISTING, applyCoverage, coverageForRange, coverageNotices, type EventCutover } from './cutover'
-import { daysBetween, formatInTimeZone, previousRange, provisionalNotice, resolveRange, shiftDays } from './ranges'
+import { RANGE_DAYS, daysBetween, formatInTimeZone, previousRange, provisionalNotice, resolveCustomRange, resolveRange, shiftDays } from './ranges'
 import { validateSiteConfig } from './siteConfig'
 import { valueOrNull } from '../types'
 
@@ -265,5 +265,67 @@ describe('site caveats', () => {
 			caveats: ['add_to_cart fires on every selection change here, not on a discrete cart action.'],
 		})
 		expect(problems).toEqual([])
+	})
+})
+
+describe('named ranges', () => {
+	// The set is the whole selector: adding a key here without a day count would silently resolve
+	// to NaN days and produce an Invalid Date start.
+	it('gives every selectable range a day count', () => {
+		expect(RANGE_DAYS).toEqual({ week: 7, month: 30, quarter: 91, year: 365 })
+	})
+
+	it('anchors month to the trailing 30 days ending today', () => {
+		const range = resolveRange('month', 'UTC', new Date('2026-08-26T12:00:00Z'))
+		expect(range).toMatchObject({ key: 'month', start: '2026-07-28', end: '2026-08-26' })
+	})
+})
+
+describe('resolveCustomRange', () => {
+	const now = new Date('2026-08-26T12:00:00Z')
+
+	it('accepts a well-formed past range', () => {
+		expect(resolveCustomRange('2026-06-01', '2026-06-30', 'UTC', now)).toEqual({
+			range: { key: 'custom', start: '2026-06-01', end: '2026-06-30', timezone: 'UTC' },
+		})
+	})
+
+	it('accepts a single day', () => {
+		const result = resolveCustomRange('2026-06-01', '2026-06-01', 'UTC', now)
+		expect(result).toHaveProperty('range')
+	})
+
+	it('refuses anything that is not YYYY-MM-DD', () => {
+		// GA4 would accept "2026-6-1" for some values and reject others; refusing here means the
+		// reader is told what to change rather than seeing an opaque 502.
+		expect(resolveCustomRange('01/06/2026', '2026-06-30', 'UTC', now)).toHaveProperty('error')
+		expect(resolveCustomRange('', '', 'UTC', now)).toHaveProperty('error')
+	})
+
+	it('refuses an inverted range rather than returning an empty report', () => {
+		// The failure mode this exists to prevent: GA4 answers an inverted range with zero rows,
+		// which renders identically to a site nobody visited.
+		expect(resolveCustomRange('2026-06-30', '2026-06-01', 'UTC', now)).toEqual({
+			error: 'The end date is before the start date.',
+		})
+	})
+
+	it('refuses a future end date and names the latest day available', () => {
+		const result = resolveCustomRange('2026-08-01', '2026-12-01', 'UTC', now)
+		expect(result).toHaveProperty('error')
+		expect((result as { error: string }).error).toContain('2026-08-26')
+	})
+
+	it('resolves today against the property timezone, not the reader\'s', () => {
+		// 2026-08-26T12:00Z is already the 26th in London and still the 26th in Los Angeles, but
+		// at 03:00Z it is the 25th in LA. A Studio open in London must not be able to ask an LA
+		// property for a day that has not started there.
+		const earlyMorning = new Date('2026-08-26T03:00:00Z')
+		expect(resolveCustomRange('2026-08-20', '2026-08-26', 'Europe/London', earlyMorning)).toHaveProperty('range')
+		expect(resolveCustomRange('2026-08-20', '2026-08-26', 'America/Los_Angeles', earlyMorning)).toHaveProperty('error')
+	})
+
+	it('caps the span', () => {
+		expect(resolveCustomRange('2020-01-01', '2026-08-26', 'UTC', now)).toHaveProperty('error')
 	})
 })

@@ -15,7 +15,7 @@
 
 import React from 'react'
 import { Badge, Box, Card, Flex, Grid, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ComparisonBar, MetricFigure, NoticeList, SortableTable, TrendChart, formatCount, formatPercent } from './Figure'
+import { ComparisonBar, FunnelChart, MetricFigure, NoticeList, SortableTable, TrendChart, formatCount, formatPercent } from './Figure'
 import type {
 	AcquisitionData,
 	CheckStatus,
@@ -268,7 +268,7 @@ export function AcquisitionPanel({ data }: { data: AcquisitionData }): React.Rea
 	)
 }
 
-/** Journey — per-step totals with adjacent drop-off, explicitly not a tracked path. */
+/** Journey — a funnel, drawn as a tracked sequence or as independent totals, whichever the report used. */
 export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElement {
 	const allSteps = data.steps ?? []
 
@@ -278,31 +278,32 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 	// line beneath instead, so the omission is still stated but does not masquerade as a stage.
 	const shown = allSteps.filter((step) => step.count.status !== 'unavailable')
 	const hiddenSteps = allSteps.filter((step) => step.count.status === 'unavailable')
-	const max = maxOf(shown.map((step) => step.count))
+
+	// The chart takes plain numbers; the unavailable steps have already been removed above, so the
+	// narrowing here cannot drop a measured value.
+	const stages = shown.flatMap((step) =>
+		step.count.status === 'unavailable'
+			? []
+			: [{ key: step.key, label: step.label, value: step.count.value, conversionFromPrevious: step.conversionFromPrevious }],
+	)
+
+	const tracked = data.measurement === 'sequence'
 
 	return (
 		<Stack space={4}>
-			<Card padding={3} radius={2} tone="caution" border>
-				<Text size={1}>{data.approximationNote}</Text>
+			{/* A tracked funnel is not a caveat, so it is not drawn as one. The fallback still is:
+			    independent totals invite exactly the reading — "this many people dropped out here"
+			    — that they cannot support. */}
+			<Card padding={3} radius={2} tone={tracked ? 'transparent' : 'caution'} border>
+				<Stack space={2}>
+					<Text size={1} weight="medium">
+						{tracked ? 'Tracked funnel' : 'Independent per-step totals'}
+					</Text>
+					<Text size={1} muted={tracked}>{data.approximationNote}</Text>
+				</Stack>
 			</Card>
 
-			<Stack space={3}>
-				{shown.map((step, index) => (
-					<Stack space={2} key={step.key}>
-						<ComparisonBar label={step.label} metric={step.count} max={max} tone="primary" />
-						{/* The baseline is named rather than called "the previous measurable step".
-						    When a rung is missing the comparison silently spans the gap, and a
-						    reader looking at adjacent bars will read it as adjacent — which on a
-						    site missing begin_checkout turned cart-to-purchase into an apparent
-						    checkout abandonment problem. */}
-						{step.conversionFromPrevious !== null && index > 0 && (
-							<Text size={0} muted>
-								{formatPercent(step.conversionFromPrevious, 1)} of {shown[index - 1]?.label.toLowerCase()}
-							</Text>
-						)}
-					</Stack>
-				))}
-			</Stack>
+			<FunnelChart stages={stages} measurement={data.measurement ?? 'independent-totals'} />
 
 			{hiddenSteps.length > 0 && (
 				<Text size={1} muted>

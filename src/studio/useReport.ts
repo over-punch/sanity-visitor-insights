@@ -22,6 +22,8 @@ export type ReportState<T> =
 
 /** Options for useReport. */
 export interface UseReportOptions {
+	/** Explicit dates, required when `range` is 'custom' and ignored otherwise. */
+	custom?: { start: string; end: string }
 	/** Base URL of the site serving the reports, e.g. `https://dardenstudio.com`. */
 	apiBaseUrl: string
 	report: ReportName
@@ -33,7 +35,7 @@ export interface UseReportOptions {
  *
  * @returns the current state plus a `reload` for manual refresh
  */
-export function useReport<T>({ apiBaseUrl, report, range }: UseReportOptions): {
+export function useReport<T>({ apiBaseUrl, report, range, custom }: UseReportOptions): {
 	state: ReportState<T>
 	reload: () => void
 } {
@@ -72,7 +74,15 @@ export function useReport<T>({ apiBaseUrl, report, range }: UseReportOptions): {
 				// .replace() directly and crash every panel with a stack trace instead of a
 				// message. Treating a missing base as same-origin degrades to the common case.
 				const base = typeof apiBaseUrl === 'string' ? apiBaseUrl.replace(/\/$/, '') : ''
-				const url = `${base}/api/visitor-insights/${report}?range=${range}`
+				// Custom ranges carry their own dates. Built with URLSearchParams so a date can
+				// never break the query string, and so the two named-range and custom-range paths
+				// produce one shape rather than two.
+				const query = new URLSearchParams({ range })
+				if (range === 'custom' && custom) {
+					query.set('start', custom.start)
+					query.set('end', custom.end)
+				}
+				const url = `${base}/api/visitor-insights/${report}?${query.toString()}`
 				const response = await fetch(url, {
 					headers: { Authorization: `Bearer ${token}` },
 					signal: controller.signal,
@@ -81,7 +91,17 @@ export function useReport<T>({ apiBaseUrl, report, range }: UseReportOptions): {
 				if (requestIdRef.current !== requestId) return
 
 				if (!response.ok) {
-					const detail = response.status === 401 ? 'Not authorised — sign in to the Studio again.' : `Request failed (${response.status})`
+					// A 400 is the handler rejecting the request itself — an inverted or oversized
+					// custom range, most often — and its message names what to change. Anything
+					// else may carry upstream detail, so only the status is shown.
+					let detail = response.status === 401
+						? 'Not authorised — sign in to the Studio again.'
+						: `Request failed (${response.status})`
+					if (response.status === 400) {
+						const body = (await response.json().catch(() => null)) as { error?: string } | null
+						if (body?.error) detail = body.error
+					}
+					if (requestIdRef.current !== requestId) return
 					setState({ status: 'error', message: detail })
 					return
 				}
@@ -98,7 +118,9 @@ export function useReport<T>({ apiBaseUrl, report, range }: UseReportOptions): {
 
 		void run()
 		return () => controller.abort()
-	}, [client, apiBaseUrl, report, range, nonce])
+	// custom.start/end by value rather than the object: the caller builds a fresh object on every
+	// render, and depending on its identity would refetch on each keystroke in the date fields.
+	}, [client, apiBaseUrl, report, range, custom?.start, custom?.end, nonce])
 
 	return { state, reload }
 }

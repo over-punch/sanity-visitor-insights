@@ -22,6 +22,7 @@ import {
 	makeVercelPageviews,
 } from '../../testing/fakes'
 import { hasRequiredRole } from '../auth'
+import { parseFunnelReport } from '../ga4'
 import { measurementHealth } from './measurementHealth'
 import { acquisition } from './acquisition'
 import { journey } from './journey'
@@ -650,5 +651,216 @@ describe('hasRequiredRole', () => {
 
 	it('admits anyone when no roles are required', () => {
 		expect(hasRequiredRole({ id: 'u1' }, [])).toBe(true)
+	})
+})
+
+describe('journey funnel', () => {
+	/** A funnel response echoing the step names it was given, with GA4's own completion rates. */
+	function funnelFor(counts: Record<string, number>) {
+		const names = Object.keys(counts)
+		return {
+			sampled: false,
+			steps: names.map((name, index) => {
+				const previous = index > 0 ? counts[names[index - 1]!]! : null
+				return {
+					name,
+					activeUsers: counts[name]!,
+					completionRate: previous && previous > 0 ? counts[name]! / previous : null,
+					abandonments: null,
+				}
+			}),
+		}
+	}
+
+	it('prefers the tracked funnel and says so', async () => {
+		const ga4 = createFakeGa4Client({
+			batch: (requests) => requests.map(() => makeGa4Total(999)),
+			funnel: () =>
+				funnelFor({
+					Landed: 1000,
+					'Viewed a typeface': 400,
+					'Used the type tester': 120,
+					'Added to cart': 60,
+					'Began checkout': 30,
+					Purchased: 10,
+				}),
+		})
+
+		const result = await journey(siteConfig(), ga4, range, [])
+
+		expect(result.measurement).toBe('sequence')
+		expect(result.approximate).toBe(false)
+		// The funnel's numbers, not the per-step batch's 999 — proving the batch result did not win.
+		expect(result.steps.map((step) => (step.count.status === 'unavailable' ? null : step.count.value)))
+			.toEqual([1000, 400, 120, 60, 30, 10])
+		expect(result.steps[1]?.conversionFromPrevious).toBeCloseTo(0.4, 5)
+		expect(result.steps[0]?.conversionFromPrevious).toBeNull()
+	})
+
+	it('asks for the steps in funnel order, one event filter each', async () => {
+		const ga4 = createFakeGa4Client({
+			batch: (requests) => requests.map(() => makeGa4Total(1)),
+			funnel: () => funnelFor({ Landed: 10 }),
+		})
+
+		await journey(siteConfig(), ga4, range, [])
+
+		expect(ga4.funnelCalls).toHaveLength(1)
+		expect(ga4.funnelCalls[0]?.steps.map((step) => step.name)).toEqual([
+			'Landed',
+			'Viewed a typeface',
+			'Used the type tester',
+			'Added to cart',
+			'Began checkout',
+			'Purchased',
+		])
+		expect(ga4.funnelCalls[0]?.range).toEqual({ startDate: range.start, endDate: range.end })
+	})
+
+	it('falls back to per-step totals when the funnel endpoint fails', async () => {
+		// The default fake rejects funnels, which is the state on any property where the alpha
+		// endpoint is unavailable or its quota is spent.
+		const ga4 = createFakeGa4Client({ batch: (requests) => requests.map(() => makeGa4Total(50)) })
+
+		const result = await journey(siteConfig(), ga4, range, [])
+
+		expect(result.measurement).toBe('independent-totals')
+		expect(result.approximate).toBe(true)
+		expect(result.approximationNote).toContain('not tracked journeys')
+		expect(result.steps.every((step) => step.count.status !== 'unavailable')).toBe(true)
+	})
+
+	it('falls back rather than lining up steps GA4 did not answer for', async () => {
+		// A partial response is the dangerous case: matching by position would attach one step's
+		// users to another step's label, and the panel would show a confident wrong funnel.
+		const ga4 = createFakeGa4Client({
+			batch: (requests) => requests.map(() => makeGa4Total(50)),
+			funnel: () => funnelFor({ Landed: 1000, 'Added to cart': 60 }),
+		})
+
+		const result = await journey(siteConfig(), ga4, range, [])
+
+		expect(result.measurement).toBe('independent-totals')
+	})
+
+	it('does not attempt a funnel with fewer than two measured steps', async () => {
+		// Every step but one uninstrumented: a one-rung funnel is a count, and spending the alpha
+		// quota on it buys nothing.
+		const config = siteConfig({
+			eventCutovers: {
+				page_view: PREEXISTING,
+				view_item: null,
+				add_to_cart: null,
+				begin_checkout: null,
+				purchase: null,
+				tester_engaged: null,
+			},
+		})
+		const ga4 = createFakeGa4Client({
+			batch: (requests) => requests.map(() => makeGa4Total(50)),
+			funnel: () => funnelFor({ Landed: 1000 }),
+		})
+
+		await journey(config, ga4, range, [])
+
+		expect(ga4.funnelCalls).toHaveLength(0)
+	})
+
+	it('notes sampling on a sampled funnel', async () => {
+		const notices: string[] = []
+		const ga4 = createFakeGa4Client({
+			batch: (requests) => requests.map(() => makeGa4Total(1)),
+			funnel: () => ({ ...funnelFor({ Landed: 10, 'Viewed a typeface': 5 }), sampled: true }),
+		})
+
+		await journey(siteConfig(), ga4, range, notices)
+
+		expect(notices.some((notice) => notice.includes('sample'))).toBe(true)
+	})
+})
+
+describe('parseFunnelReport', () => {
+	/** GA4 prefixes step names with an ordinal, and the parser is expected to strip it. */
+	const headers = {
+		dimensionHeaders: [{ name: 'funnelStepName' }],
+		metricHeaders: [
+			{ name: 'activeUsers' },
+			{ name: 'funnelStepCompletionRate' },
+			{ name: 'funnelStepAbandonments' },
+		],
+	}
+
+	it('reads metrics by header name, not by position', () => {
+		// Same data, metric headers in a different order. Reading metricValues[0] would report
+		// the completion rate as a user count.
+		const shuffled = {
+			funnelTable: {
+				dimensionHeaders: headers.dimensionHeaders,
+				metricHeaders: [
+					{ name: 'funnelStepCompletionRate' },
+					{ name: 'funnelStepAbandonments' },
+					{ name: 'activeUsers' },
+				],
+				rows: [
+					{ dimensionValues: [{ value: '1. Landed' }], metricValues: [{ value: '1' }, { value: '0' }, { value: '900' }] },
+				],
+			},
+		}
+
+		expect(parseFunnelReport(shuffled).steps).toEqual([
+			{ name: 'Landed', activeUsers: 900, completionRate: 1, abandonments: 0 },
+		])
+	})
+
+	it('strips the ordinal prefix so step names match the ones that were sent', () => {
+		const raw = {
+			funnelTable: {
+				...headers,
+				rows: [
+					{ dimensionValues: [{ value: '2. Viewed a typeface' }], metricValues: [{ value: '400' }, { value: '0.4' }, { value: '250' }] },
+				],
+			},
+		}
+
+		// The journey report matches rows to rungs by name; an unstripped "2. " would never match
+		// and every funnel would silently fall back to per-step totals.
+		expect(parseFunnelReport(raw).steps[0]?.name).toBe('Viewed a typeface')
+	})
+
+	it('takes only the totals row when a breakdown dimension is present', () => {
+		// A breakdown adds a dimension and one row per value alongside the RESERVED_TOTAL row.
+		// Summing them, or taking the first, would report one device category as the whole step.
+		const raw = {
+			funnelTable: {
+				dimensionHeaders: [{ name: 'funnelStepName' }, { name: 'deviceCategory' }],
+				metricHeaders: headers.metricHeaders,
+				rows: [
+					{ dimensionValues: [{ value: '1. Landed' }, { value: 'desktop' }], metricValues: [{ value: '600' }, { value: '1' }, { value: '0' }] },
+					{ dimensionValues: [{ value: '1. Landed' }, { value: 'mobile' }], metricValues: [{ value: '300' }, { value: '1' }, { value: '0' }] },
+					{ dimensionValues: [{ value: '1. Landed' }, { value: 'RESERVED_TOTAL' }], metricValues: [{ value: '900' }, { value: '1' }, { value: '0' }] },
+				],
+			},
+		}
+
+		expect(parseFunnelReport(raw).steps).toHaveLength(1)
+		expect(parseFunnelReport(raw).steps[0]?.activeUsers).toBe(900)
+	})
+
+	it('returns no steps rather than guessing when the table is missing', () => {
+		expect(parseFunnelReport({})).toEqual({ steps: [], sampled: false })
+	})
+
+	it('drops a row whose user count is absent rather than reading it as zero', () => {
+		const raw = {
+			funnelTable: {
+				...headers,
+				rows: [
+					{ dimensionValues: [{ value: '1. Landed' }], metricValues: [{ value: '900' }, { value: '1' }, { value: '0' }] },
+					{ dimensionValues: [{ value: '2. Purchased' }], metricValues: [{}, {}, {}] },
+				],
+			},
+		}
+
+		expect(parseFunnelReport(raw).steps.map((step) => step.name)).toEqual(['Landed'])
 	})
 })

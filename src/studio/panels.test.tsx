@@ -142,6 +142,7 @@ describe('JourneyPanel', () => {
 			{ key: 'purchased', label: 'Purchased', event: 'purchase', count: partial(64, '2026-08-30', 'Undercounted: outage'), conversionFromPrevious: 0.035 },
 		],
 		topLandingPages: [{ path: '/', sessions: 8940 }],
+		measurement: 'independent-totals' as const,
 	}
 
 	it('renders a funnel mixing working, uninstrumented and outage rungs', () => {
@@ -155,15 +156,81 @@ describe('JourneyPanel', () => {
 		expect(html).toContain('33,486')
 	})
 
-	it('always shows the approximation note', () => {
-		expect(render(<JourneyPanel data={data} />)).toContain('not tracked journeys')
+	it('never draws an unmeasured step as a funnel rung', () => {
+		const html = render(<JourneyPanel data={data} />)
+		// The failure this guards: a zero-width or zero-valued rung reads as "nobody reached this
+		// step", which is the opposite of "we did not measure it". Both unmeasured steps must
+		// appear only in the prose beneath.
+		expect(html).not.toContain('>Began checkout<')
+		expect(html).toContain('began checkout')
+		expect(html).not.toMatch(/>0</)
 	})
 
-	it('renders an uninstrumented rung as a dash rather than a zero', () => {
+	it('names the fallback as independent totals and keeps the caution', () => {
 		const html = render(<JourneyPanel data={data} />)
-		// A zero here would read as "nobody reached this step", which is the opposite of the truth.
-		expect(html).not.toMatch(/>0</)
-		expect(html).toContain('—')
+		expect(html).toContain('Independent per-step totals')
+		expect(html).toContain('not tracked journeys')
+		// Cautionary tone, because independent totals invite a drop-off reading they cannot support.
+		expect(html).toContain('caution')
+		// And the gaps between rungs are differences, not people who left.
+		expect(html).toContain('fewer')
+		expect(html).not.toContain('did not continue')
+	})
+
+	it('presents a tracked funnel as a sequence rather than as a caveat', () => {
+		const tracked = {
+			...data,
+			approximate: false as const,
+			approximationNote: 'A tracked funnel. Each step counts users who reached it having completed the earlier steps.',
+			measurement: 'sequence' as const,
+			steps: [
+				{ key: 'landed', label: 'Landed', event: 'page_view', count: ok(1000), conversionFromPrevious: null },
+				{ key: 'added_to_cart', label: 'Added to cart', event: 'add_to_cart', count: ok(60), conversionFromPrevious: 0.06 },
+			],
+		}
+
+		const html = render(<JourneyPanel data={tracked} />)
+		expect(html).toContain('Tracked funnel')
+		// A real sequence is not a caveat, so it must not be dressed as one.
+		expect(html).not.toContain('caution')
+		expect(html).toContain('did not continue')
+		// Each rung states its share of entry as well as of the step before it.
+		expect(html).toContain('6.0% of landed')
+	})
+
+	it('scales rungs against the entry step, not against the largest', () => {
+		// The fallback can report a mid-funnel step above entry (add_to_cart fires per selection
+		// on two of the three sites). Anchoring to the max would make that step full-width and
+		// silently rescale everything above it; the width is clamped at 100% instead.
+		const inflated = {
+			...data,
+			steps: [
+				{ key: 'landed', label: 'Landed', event: 'page_view', count: ok(100), conversionFromPrevious: null },
+				{ key: 'added_to_cart', label: 'Added to cart', event: 'add_to_cart', count: ok(500), conversionFromPrevious: 5 },
+			],
+		}
+
+		const html = render(<JourneyPanel data={inflated} />)
+		// Both bars are drawn at full width — the second is clamped, not rescaled.
+		expect(html.match(/width:100%;height:100%/g)).toHaveLength(2)
+		// But the printed share is NOT clamped. Showing "100.0%" here would hide the anomaly.
+		expect(html).toContain('500.0% of landed')
+		// And a step larger than the one above it is named as such, not as "no difference".
+		expect(html).toContain('400 more')
+		expect(html).not.toContain('no difference')
+	})
+
+	it('does not print the same ratio twice on the second rung', () => {
+		// On stage two the previous step IS the entry step, so both ratios have the same
+		// denominator and the row read "100.0% of landed · 500.0% of landed".
+		const html = render(<JourneyPanel data={{
+			...data,
+			steps: [
+				{ key: 'landed', label: 'Landed', event: 'page_view', count: ok(1000), conversionFromPrevious: null },
+				{ key: 'added_to_cart', label: 'Added to cart', event: 'add_to_cart', count: ok(60), conversionFromPrevious: 0.06 },
+			],
+		}} />)
+		expect(html.match(/of landed/g)).toHaveLength(1)
 	})
 })
 
@@ -298,7 +365,9 @@ describe('VisitorInsightsTool props contract', () => {
 				tool: { options: { apiBaseUrl: 'https://example.com', siteLabel: 'Example Foundry' } },
 			}),
 		)
-		expect(html).toContain('Example Foundry')
+		// The name is not printed as a subtitle any more; it names the region for assistive tech,
+		// which is still evidence the nested options reached the component.
+		expect(html).toContain('Visitor insights for Example Foundry')
 	})
 
 	it('still accepts flat props, for direct use outside a Studio', () => {
@@ -308,7 +377,7 @@ describe('VisitorInsightsTool props contract', () => {
 				siteLabel: 'Flat Props Foundry',
 			}),
 		)
-		expect(html).toContain('Flat Props Foundry')
+		expect(html).toContain('Visitor insights for Flat Props Foundry')
 	})
 
 	it('renders rather than throwing when no options arrive at all', () => {
@@ -486,7 +555,7 @@ describe('panels tolerate an older route response', () => {
 	it('journey renders without landing pages', () => {
 		const legacy = {
 			steps: [{ key: 'landed', label: 'Landed', event: 'page_view', count: ok(100), conversionFromPrevious: null }],
-			approximate: true, approximationNote: 'Independent totals.',
+			approximate: true, measurement: 'independent-totals' as const, approximationNote: 'Independent totals.',
 		} as never
 
 		expect(() => render(<JourneyPanel data={legacy} />)).not.toThrow()

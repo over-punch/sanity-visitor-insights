@@ -39,11 +39,22 @@ export function daysBetween(start: string, end: string): number {
 }
 
 /** How many days each range key spans. */
-const RANGE_DAYS: Record<RangeKey, number> = {
+/** Trailing window length in days, for the named ranges. `custom` carries its own dates. */
+export const RANGE_DAYS: Record<Exclude<RangeKey, 'custom'>, number> = {
 	week: 7,
+	month: 30,
 	quarter: 91,
 	year: 365,
 }
+
+/**
+ * Longest custom range accepted.
+ *
+ * Two years, because GA4 event-level retention tops out at 14 months on most properties and Vercel
+ * Web Analytics at 12 to 24 depending on plan — beyond that both sources return silence that would
+ * read as a collapse. The cap also bounds the cost of a single request.
+ */
+export const MAX_CUSTOM_RANGE_DAYS = 730
 
 /**
  * Resolve a range key into concrete dates, anchored to `timezone` and ending today.
@@ -52,7 +63,7 @@ const RANGE_DAYS: Record<RangeKey, number> = {
  * @param timezone - IANA timezone of the GA4 property this range will be queried against
  * @param now - injectable clock, so tests are deterministic
  */
-export function resolveRange(key: RangeKey, timezone: string, now: Date = new Date()): DateRange {
+export function resolveRange(key: Exclude<RangeKey, 'custom'>, timezone: string, now: Date = new Date()): DateRange {
 	const end = formatInTimeZone(now, timezone)
 	const start = shiftDays(end, -(RANGE_DAYS[key] - 1))
 	return { key, start, end, timezone }
@@ -100,4 +111,55 @@ export function provisionalNotice(range: DateRange, now: Date = new Date()): str
 
 	const from = dates[0]
 	return `GA4 has not finished processing ${from} onwards; those figures are provisional and will rise.`
+}
+
+/** Why a custom range was refused, in words a reader can act on. */
+export type CustomRangeError = string
+
+/**
+ * Build a range from explicit dates, or explain why they cannot be used.
+ *
+ * Validated here rather than at the handler because the same rules apply wherever a range comes
+ * from, and because a bad range must never reach GA4 as a silently different query — an inverted
+ * start and end returns an empty report, which renders as a site with no traffic.
+ *
+ * @param start - inclusive ISO date, YYYY-MM-DD
+ * @param end - inclusive ISO date
+ * @param timezone - IANA timezone of the property, so "today" means today there
+ * @param now - injectable clock
+ */
+export function resolveCustomRange(
+	start: string,
+	end: string,
+	timezone: string,
+	now: Date = new Date(),
+): { range: DateRange } | { error: CustomRangeError } {
+	const ISO = /^\d{4}-\d{2}-\d{2}$/
+	if (!ISO.test(start) || !ISO.test(end)) {
+		return { error: 'Dates must be written as YYYY-MM-DD.' }
+	}
+
+	const startMs = Date.parse(`${start}T00:00:00Z`)
+	const endMs = Date.parse(`${end}T00:00:00Z`)
+	if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+		return { error: 'That is not a real date.' }
+	}
+
+	if (endMs < startMs) {
+		return { error: 'The end date is before the start date.' }
+	}
+
+	// "Today" in the property's timezone, not the reader's. A Studio open in London asking a
+	// New York property for today would otherwise be refused for half the day.
+	const today = formatInTimeZone(now, timezone)
+	if (end > today) {
+		return { error: `The end date is in the future. The latest data available is ${today}.` }
+	}
+
+	const days = Math.round((endMs - startMs) / 86400000) + 1
+	if (days > MAX_CUSTOM_RANGE_DAYS) {
+		return { error: `Ranges are limited to ${MAX_CUSTOM_RANGE_DAYS} days. Both sources stop returning data well before that.` }
+	}
+
+	return { range: { key: 'custom', start, end, timezone } }
 }

@@ -11,6 +11,20 @@ import { getAccessToken, type ServiceAccountKey } from './googleAuth'
 
 const DATA_API_BASE = 'https://analyticsdata.googleapis.com/v1beta'
 
+/**
+ * Funnels live on the alpha surface only.
+ *
+ * `runFunnelReport` has never been promoted past v1alpha, and Google documents it as subject to
+ * breaking change. It is worth the risk because it is the only endpoint that reports an ORDERED,
+ * PER-USER sequence: a closed funnel by default, where a user must have entered at step one and
+ * each later step is conditional on the earlier ones having happened for that same person. Every
+ * other approach here counts steps independently and cannot say anyone actually walked the path.
+ *
+ * It also draws on a separate quota bucket from the core reports, so exhausting one does not
+ * exhaust the other.
+ */
+const DATA_API_ALPHA = 'https://analyticsdata.googleapis.com/v1alpha'
+
 /** A GA4 report request, narrowed to the fields this package sets. */
 export interface Ga4ReportRequest {
 	dimensions?: Array<{ name: string }>
@@ -106,10 +120,108 @@ function parseReport(raw: RawReport): Ga4Report {
 	}
 }
 
+/** Raw funnel response, narrowed to what is read here. */
+interface RawFunnelReport {
+	funnelTable?: {
+		dimensionHeaders?: Array<{ name?: string }>
+		metricHeaders?: Array<{ name?: string }>
+		rows?: Array<{
+			dimensionValues?: Array<{ value?: string }>
+			metricValues?: Array<{ value?: string }>
+		}>
+		metadata?: { samplingMetadatas?: unknown[] }
+	}
+}
+
+/**
+ * Parse a funnel response by HEADER NAME, never by position.
+ *
+ * GA4 returns dimensionHeaders and metricHeaders describing its own row layout, and that layout
+ * changes with the request — adding a funnelBreakdown inserts a dimension, and the metric set is
+ * not contractually ordered. Reading metricValues[0] and hoping is the same habit that shipped a
+ * query for an `exits` metric GA4 has never had. Looking the indices up costs nothing and cannot
+ * silently drift.
+ *
+ * Exported so the header-index logic can be tested directly. Reaching it through the client
+ * would mean faking a signed service-account token to get past getAccessToken, which tests the
+ * wrong thing.
+ */
+export function parseFunnelReport(raw: RawFunnelReport): Ga4FunnelReport {
+	const table = raw.funnelTable
+	if (!table) return { steps: [], sampled: false }
+
+	const stepNameAt = (table.dimensionHeaders ?? []).findIndex((h) => h.name === 'funnelStepName')
+	const metricIndex = (name: string) => (table.metricHeaders ?? []).findIndex((h) => h.name === name)
+
+	const usersAt = metricIndex('activeUsers')
+	const completionAt = metricIndex('funnelStepCompletionRate')
+	const abandonmentsAt = metricIndex('funnelStepAbandonments')
+
+	// Without a breakdown there is one row per step. With one, GA4 adds a RESERVED_TOTAL row per
+	// step alongside the per-value rows; taking only totals keeps this correct either way.
+	const breakdownAt = (table.dimensionHeaders ?? []).findIndex((h) => h.name !== 'funnelStepName')
+
+	const steps: Ga4FunnelRow[] = []
+	for (const row of table.rows ?? []) {
+		if (stepNameAt < 0) continue
+		if (breakdownAt >= 0 && row.dimensionValues?.[breakdownAt]?.value !== 'RESERVED_TOTAL') continue
+
+		const users = usersAt >= 0 ? toMetricNumber(row.metricValues?.[usersAt]?.value) : Number.NaN
+		if (!Number.isFinite(users)) continue
+
+		const completion = completionAt >= 0 ? toMetricNumber(row.metricValues?.[completionAt]?.value) : Number.NaN
+		const abandonments = abandonmentsAt >= 0 ? toMetricNumber(row.metricValues?.[abandonmentsAt]?.value) : Number.NaN
+
+		steps.push({
+			// GA4 prefixes step names with an ordinal, "1. Landed". The array already carries the
+			// order, so the prefix is duplication in the label.
+			name: (row.dimensionValues?.[stepNameAt]?.value ?? '').replace(/^\d+\.\s*/, ''),
+			activeUsers: users,
+			completionRate: Number.isFinite(completion) ? completion : null,
+			abandonments: Number.isFinite(abandonments) ? abandonments : null,
+		})
+	}
+
+	return {
+		steps,
+		sampled: Array.isArray(table.metadata?.samplingMetadatas) && table.metadata.samplingMetadatas.length > 0,
+	}
+}
+
+/** One step of a funnel: a display name and the event that evidences it. */
+export interface Ga4FunnelStep {
+	name: string
+	/** Any of these event names satisfies the step. */
+	eventNames: readonly string[]
+}
+
+/** One step as GA4 answered it. */
+export interface Ga4FunnelRow {
+	/** Step name, with GA4's "1. " ordinal prefix stripped. */
+	name: string
+	/** Distinct users who reached this step having completed the earlier ones. */
+	activeUsers: number
+	/** Share of the previous step's users who continued, as GA4 computed it. */
+	completionRate: number | null
+	/** Users who reached this step and went no further. */
+	abandonments: number | null
+}
+
+/** A parsed funnel report. */
+export interface Ga4FunnelReport {
+	steps: Ga4FunnelRow[]
+	sampled: boolean
+}
+
 /** A GA4 client bound to one property. */
 export interface Ga4Client {
 	runReport(request: Ga4ReportRequest): Promise<Ga4Report>
 	batchRunReports(requests: Ga4ReportRequest[]): Promise<Ga4Report[]>
+	/**
+	 * Run an ordered, closed funnel. Rejects like any other call; the caller decides whether to
+	 * fall back, because a funnel failing is not a reason to show no journey at all.
+	 */
+	runFunnelReport(steps: readonly Ga4FunnelStep[], range: { startDate: string; endDate: string }): Promise<Ga4FunnelReport>
 }
 
 /**
@@ -119,10 +231,10 @@ export interface Ga4Client {
  * @param key - service-account key with Viewer on that property
  */
 export function createGa4Client(propertyId: string, key: ServiceAccountKey): Ga4Client {
-	async function post<T>(path: string, body: unknown): Promise<T> {
+	async function post<T>(path: string, body: unknown, base: string = DATA_API_BASE): Promise<T> {
 		const token = await getAccessToken(key)
 
-		const response = await fetch(`${DATA_API_BASE}/properties/${propertyId}:${path}`, {
+		const response = await fetch(`${base}/properties/${propertyId}:${path}`, {
 			method: 'POST',
 			headers: {
 				Authorization: `Bearer ${token}`,
@@ -154,6 +266,31 @@ export function createGa4Client(propertyId: string, key: ServiceAccountKey): Ga4
 
 			const raw = await post<{ reports?: RawReport[] }>('batchRunReports', { requests })
 			return (raw.reports ?? []).map(parseReport)
+		},
+
+		async runFunnelReport(steps, range) {
+			const body = {
+				dateRanges: [range],
+				funnel: {
+					steps: steps.map((step) => ({
+						name: step.name,
+						// One event satisfies the step directly; several go in an orGroup, which is
+						// how GA4 expresses "any of these" — TDF maps five tester events onto one rung.
+						filterExpression: step.eventNames.length === 1
+							? { funnelEventFilter: { eventName: step.eventNames[0] } }
+							: {
+								orGroup: {
+									expressions: step.eventNames.map((eventName) => ({
+										funnelEventFilter: { eventName },
+									})),
+								},
+							},
+					})),
+				},
+			}
+
+			const raw = await post<RawFunnelReport>('runFunnelReport', body, DATA_API_ALPHA)
+			return parseFunnelReport(raw)
 		},
 	}
 }

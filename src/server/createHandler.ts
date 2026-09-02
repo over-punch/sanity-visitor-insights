@@ -22,7 +22,7 @@ import {
 } from '../types'
 import { assertValidSiteConfig, type SiteAnalyticsConfig } from '../core/siteConfig'
 import { coverageNotices } from '../core/cutover'
-import { resolveRange, provisionalNotice } from '../core/ranges'
+import { resolveCustomRange, resolveRange, provisionalNotice } from '../core/ranges'
 import { applyCors, requireStudioUser, type HandlerRequest, type HandlerResponse } from './auth'
 import { createGa4Client, type Ga4Client } from './ga4'
 import { createVercelClient, type VercelClient } from './vercel'
@@ -60,7 +60,7 @@ export interface HandlerOptions {
 }
 
 /** Valid range keys, as an allow-list for the query parameter. */
-const RANGE_KEYS: RangeKey[] = ['week', 'quarter', 'year']
+const RANGE_KEYS: RangeKey[] = ['week', 'month', 'quarter', 'year', 'custom']
 
 /** Read a query parameter that may arrive as a string or an array. */
 function param(req: HandlerRequest, name: string): string | undefined {
@@ -110,7 +110,26 @@ export function createVisitorInsightsHandler(options: HandlerOptions) {
 		// Ranges are anchored to the GA4 property's timezone so all three sources agree on
 		// where a day begins. Falls back to UTC only when GA4 is not configured at all.
 		const timezone = config.ga4?.timezone ?? 'UTC'
-		const range = resolveRange(rangeKey as RangeKey, timezone)
+
+		// A custom range carries its own dates and is validated before it can reach GA4. An
+		// inverted or future range returns an empty report rather than an error, which would
+		// render as a site with no traffic — so it is refused here with a reason the reader can
+		// act on, not passed through.
+		let range: DateRange
+		if (rangeKey === 'custom') {
+			const resolved = resolveCustomRange(
+				param(req, 'start') ?? '',
+				param(req, 'end') ?? '',
+				timezone,
+			)
+			if ('error' in resolved) {
+				res.status(400).json({ error: resolved.error })
+				return
+			}
+			range = resolved.range
+		} else {
+			range = resolveRange(rangeKey as Exclude<RangeKey, 'custom'>, timezone)
+		}
 
 		const sources: Partial<Record<SourceName, SourceStatus>> = {}
 

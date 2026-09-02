@@ -69,7 +69,14 @@ export function valueOrNull(metric: MetricValue): number | null {
 // ---------------------------------------------------------------------------
 
 /** The range granularities offered in the UI. */
-export type RangeKey = 'week' | 'quarter' | 'year'
+/**
+ * A named range, or `custom` for an explicit start and end supplied by the caller.
+ *
+ * The named ones are trailing windows ending today, not calendar periods — `quarter` is the last
+ * 91 days, not Q3. `custom` exists so a reader can look at a past period at all, which none of the
+ * trailing windows can express.
+ */
+export type RangeKey = 'week' | 'month' | 'quarter' | 'year' | 'custom'
 
 /**
  * A resolved date range. Both bounds are inclusive ISO `YYYY-MM-DD` dates in `timezone`.
