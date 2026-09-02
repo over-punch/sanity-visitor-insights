@@ -343,12 +343,50 @@ describe('TrendChart', () => {
 		{ date: '2026-08-24', ga4: 70, vercel: 490 },
 	]
 
-	it('draws a line for each source', () => {
+	it('draws a line for each source, one solid and one dashed', () => {
 		const html = render(<TrendChart points={series} />)
 		expect(html).toContain('<svg')
-		// Two paths: one solid, one dashed.
-		expect((html.match(/<path/g) ?? []).length).toBe(2)
+		// Counted by stroked paths specifically: the shaded gap band is a filled path and is not
+		// a line, so a bare <path> count would silently pass whatever else got added.
+		const stroked = (html.match(/<path[^>]*stroke="currentColor"/g) ?? []).length
+		expect(stroked).toBe(2)
 		expect(html).toContain('stroke-dasharray')
+	})
+
+	it('shades the band between the two lines, which is the gap itself', () => {
+		const html = render(<TrendChart points={series} />)
+		// A filled path with no stroke — the band, not a line.
+		expect(html).toMatch(/<path[^>]*fill="currentColor"[^>]*stroke="none"/)
+	})
+
+	it('does not shade across a day where one source is missing', () => {
+		const gapped = [
+			{ date: '2026-08-20', ga4: 471, vercel: 494 },
+			{ date: '2026-08-21', ga4: null, vercel: 503 },
+			{ date: '2026-08-22', ga4: 389, vercel: 387 },
+			{ date: '2026-08-23', ga4: 390, vercel: 438 },
+		]
+		const html = render(<TrendChart points={gapped} />)
+		// One band only, over 22nd-23rd. Shading through the 21st would invent a gap from an absence.
+		expect((html.match(/<path[^>]*stroke="none"/g) ?? []).length).toBe(1)
+	})
+
+	it('labels both axes, with real dates on the x axis', () => {
+		const html = render(<TrendChart points={series} />)
+		expect(html).toContain('20 Aug')
+		expect(html).toContain('24 Aug')
+		// Y axis carries a zero baseline and a top figure.
+		expect(html).toContain('>0<')
+	})
+
+	it('rounds the y axis up to a readable maximum', () => {
+		const html = render(<TrendChart points={[
+			{ date: '2026-08-20', ga4: 471, vercel: 494 },
+			{ date: '2026-08-21', ga4: 422, vercel: 503 },
+			{ date: '2026-08-22', ga4: 389, vercel: 387 },
+		]} />)
+		// 503 rounds up to 1,000 rather than topping the axis at an arbitrary 503.
+		expect(html).toContain('1,000')
 	})
 
 	it('breaks the line where a day has no figure, rather than drawing through zero', () => {
@@ -457,5 +495,33 @@ describe('layout does not depend on design tokens resolving', () => {
 		// A Studio panel is a resizable pane, sometimes inside an iframe; its width is unrelated
 		// to the viewport, so breakpoint columns answered the wrong question.
 		expect(html).toContain('auto-fit')
+	})
+})
+
+/**
+ * The chart is reachable without a mouse.
+ *
+ * A hover-only readout gives keyboard and touch users a picture they cannot interrogate — the same
+ * failure as the tooltip-only explanations on unavailable metrics.
+ */
+describe('TrendChart keyboard access', () => {
+	const series = [
+		{ date: '2026-08-20', ga4: 471, vercel: 494 },
+		{ date: '2026-08-21', ga4: 422, vercel: 503 },
+		{ date: '2026-08-22', ga4: 389, vercel: 387 },
+	]
+
+	it('is focusable', () => {
+		expect(render(<TrendChart points={series} />)).toContain('tabindex="0"')
+	})
+
+	it('tells the reader both ways in are available', () => {
+		expect(render(<TrendChart points={series} />)).toContain('arrow keys')
+	})
+
+	it('summarises itself for a screen reader without needing hover', () => {
+		const html = render(<TrendChart points={series} />)
+		expect(html).toContain('2026-08-20 to 2026-08-22')
+		expect(html).toContain('Peak')
 	})
 })
