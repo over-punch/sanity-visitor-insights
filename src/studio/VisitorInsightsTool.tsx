@@ -106,7 +106,11 @@ const dateInput: React.CSSProperties = {
  * Labelled by the span they actually cover rather than by a calendar word. "Quarter" and "Year"
  * were trailing day counts — 91 and 365 days ending today — not Q3 or a calendar year, and a reader
  * comparing them against anything calendar-aligned would have been comparing different things
- * without being told. The dates each one resolves to are shown beside the buttons.
+ * without being told.
+ *
+ * The dates each one resolves to are NOT shown beside the buttons — only in each button's `title`
+ * tooltip, which is invisible on touch and in a screenshot, and in the footer line beneath all the
+ * content. An earlier version of this comment claimed otherwise; the intent was never implemented.
  */
 const RANGES: Array<{ key: Exclude<RangeKey, 'custom'>; label: string; span: string }> = [
 	{ key: 'week', label: 'Week', span: 'the last 7 days' },
