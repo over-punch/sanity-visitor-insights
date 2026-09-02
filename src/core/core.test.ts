@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 import { PREEXISTING, applyCoverage, coverageForRange, coverageNotices, type EventCutover } from './cutover'
 import { RANGE_DAYS, daysBetween, formatInTimeZone, previousRange, provisionalNotice, resolveCustomRange, resolveRange, shiftDays } from './ranges'
 import { validateSiteConfig } from './siteConfig'
+import { ENV_VARS, isEnabled } from '../server/createHandler'
 import { valueOrNull } from '../types'
 
 const cutovers: Record<string, EventCutover> = {
@@ -327,5 +328,30 @@ describe('resolveCustomRange', () => {
 
 	it('caps the span', () => {
 		expect(resolveCustomRange('2020-01-01', '2026-08-26', 'UTC', now)).toHaveProperty('error')
+	})
+})
+
+describe('the master switch', () => {
+	it('is off when the variable is unset', () => {
+		// Explicit opt-in, unlike the sales portal's kill switch. Installing the package and
+		// mounting the route must not be enough to start serving analytics from a site nobody
+		// switched it on for.
+		expect(isEnabled(undefined)).toBe(false)
+	})
+
+	it('is off for the words an operator would use to mean off', () => {
+		for (const value of ['', ' ', 'false', 'FALSE', '0', 'off', 'no', 'disabled', ' False ']) {
+			expect(isEnabled(value), `expected ${JSON.stringify(value)} to read as off`).toBe(false)
+		}
+	})
+
+	it('is on for any other value, so any code the operator picks works', () => {
+		for (const value of ['true', '1', 'yes', 'on', 'enabled', 'darden-2026', 'TRUE']) {
+			expect(isEnabled(value), `expected ${JSON.stringify(value)} to read as on`).toBe(true)
+		}
+	})
+
+	it('names the variable it reads, so all three sites can be configured alike', () => {
+		expect(ENV_VARS.enabled).toBe('VISITOR_INSIGHTS_ENABLED')
 	})
 })

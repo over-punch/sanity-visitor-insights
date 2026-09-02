@@ -18,7 +18,9 @@ export type ReportState<T> =
 	| { status: 'idle' }
 	| { status: 'loading' }
 	| { status: 'ready'; envelope: ReportEnvelope<T> }
-	| { status: 'error'; message: string }
+	// `disabled` separates "this site has visitor insights switched off" from "something broke".
+	// They are both non-200s, but only one of them is worth a retry button.
+	| { status: 'error'; message: string; disabled?: boolean }
 
 /** Options for useReport. */
 export interface UseReportOptions {
@@ -92,17 +94,20 @@ export function useReport<T>({ apiBaseUrl, report, range, custom }: UseReportOpt
 
 				if (!response.ok) {
 					// A 400 is the handler rejecting the request itself — an inverted or oversized
-					// custom range, most often — and its message names what to change. Anything
-					// else may carry upstream detail, so only the status is shown.
+					// custom range, most often — and a 503 is the site's master switch being off.
+					// Both carry a message written for the reader. Anything else may echo upstream
+					// detail, so only the status crosses over.
 					let detail = response.status === 401
 						? 'Not authorised — sign in to the Studio again.'
 						: `Request failed (${response.status})`
-					if (response.status === 400) {
-						const body = (await response.json().catch(() => null)) as { error?: string } | null
+					let disabled = false
+					if (response.status === 400 || response.status === 503) {
+						const body = (await response.json().catch(() => null)) as { error?: string; disabled?: boolean } | null
 						if (body?.error) detail = body.error
+						disabled = body?.disabled === true
 					}
 					if (requestIdRef.current !== requestId) return
-					setState({ status: 'error', message: detail })
+					setState({ status: 'error', message: detail, disabled })
 					return
 				}
 

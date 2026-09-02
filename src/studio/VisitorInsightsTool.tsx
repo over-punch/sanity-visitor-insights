@@ -400,7 +400,9 @@ function ReportPanel({
 			: state.status === 'ready'
 				? `${report} updated for ${range === 'custom' ? `${custom.start} to ${custom.end}` : `the selected ${range}`}`
 				: state.status === 'error'
-					? `Report failed: ${state.message}`
+					? state.disabled
+						? 'Visitor insights is switched off for this site'
+						: `Report failed: ${state.message}`
 					: ''
 
 	return (
@@ -417,12 +419,18 @@ function ReportPanel({
 			)}
 
 			{state.status === 'error' && (
-				<Card padding={4} radius={2} tone="critical" border>
+				// A switched-off site is a configuration state, not a fault: it gets a neutral card
+				// and no retry, because retrying cannot change the answer. Everything else keeps
+				// the critical tone and the retry.
+				<Card padding={4} radius={2} tone={state.disabled ? 'transparent' : 'critical'} border>
 					<Stack space={3}>
-						<Text size={1}>{state.message}</Text>
-						<Box>
-							<Button text="Try again" mode="ghost" fontSize={1} onClick={reload} />
-						</Box>
+						{state.disabled && <Text size={1} weight="medium">Switched off</Text>}
+						<Text size={1} muted={state.disabled}>{state.message}</Text>
+						{!state.disabled && (
+							<Box>
+								<Button text="Try again" mode="ghost" fontSize={1} onClick={reload} />
+							</Box>
+						)}
 					</Stack>
 				</Card>
 			)}

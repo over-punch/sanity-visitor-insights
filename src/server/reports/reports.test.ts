@@ -23,6 +23,8 @@ import {
 } from '../../testing/fakes'
 import { hasRequiredRole } from '../auth'
 import { parseFunnelReport } from '../ga4'
+import { ENV_VARS, createVisitorInsightsHandler } from '../createHandler'
+import type { HandlerRequest, HandlerResponse } from '../auth'
 import { measurementHealth } from './measurementHealth'
 import { acquisition } from './acquisition'
 import { journey } from './journey'
@@ -862,5 +864,58 @@ describe('parseFunnelReport', () => {
 		}
 
 		expect(parseFunnelReport(raw).steps.map((step) => step.name)).toEqual(['Landed'])
+	})
+})
+
+describe('the handler master switch', () => {
+	/** Record what the handler sent, without a Next.js response object. */
+	function recorder() {
+		const sent: { status?: number; body?: unknown; headers: Record<string, string> } = { headers: {} }
+		const res: HandlerResponse = {
+			setHeader: (name, value) => { sent.headers[name] = value },
+			status(code) { sent.status = code; return res },
+			json(body) { sent.body = body },
+			end() {},
+		}
+		return { sent, res }
+	}
+
+	const req: HandlerRequest = {
+		method: 'GET',
+		headers: { authorization: 'Bearer a-studio-session-token' },
+		query: { report: 'acquisition', range: 'week' },
+	}
+
+	const handler = createVisitorInsightsHandler({ config: siteConfig(), sanityProjectId: 'p1' })
+
+	it('answers 503 and does no upstream work when the switch is off', async () => {
+		const previous = process.env[ENV_VARS.enabled]
+		delete process.env[ENV_VARS.enabled]
+		try {
+			const { sent, res } = recorder()
+			await handler(req, res)
+			expect(sent.status).toBe(503)
+			expect(sent.body).toMatchObject({ disabled: true })
+			// The message must name the variable: the Studio is where an operator will read this,
+			// and "switched off" without saying which switch is not actionable.
+			expect((sent.body as { error: string }).error).toContain(ENV_VARS.enabled)
+		} finally {
+			if (previous !== undefined) process.env[ENV_VARS.enabled] = previous
+		}
+	})
+
+	it('gets past the switch when it is truthy, and fails later for its own reasons', async () => {
+		const previous = process.env[ENV_VARS.enabled]
+		process.env[ENV_VARS.enabled] = 'darden-2026'
+		try {
+			const { sent, res } = recorder()
+			await handler(req, res)
+			// Any status but 503-disabled proves the gate opened. This request then fails on the
+			// Sanity token, which is the correct next check and is not what is under test here.
+			expect(sent.body).not.toMatchObject({ disabled: true })
+		} finally {
+			if (previous === undefined) delete process.env[ENV_VARS.enabled]
+			else process.env[ENV_VARS.enabled] = previous
+		}
 	})
 })

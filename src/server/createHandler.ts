@@ -42,7 +42,30 @@ export const ENV_VARS = {
 	googleServiceAccount: 'VISITOR_INSIGHTS_GA4_SERVICE_ACCOUNT',
 	/** Vercel API token with read access to the project. */
 	vercelToken: 'VISITOR_INSIGHTS_VERCEL_TOKEN',
+	/** Master switch. Must be truthy for the route to answer at all. See isEnabled. */
+	enabled: 'VISITOR_INSIGHTS_ENABLED',
 } as const
+
+/**
+ * Values that read as "off". Everything else, including any code or word an operator picks, is on.
+ *
+ * Deliberately an explicit opt-in, unlike the sales portal's `SALES_PORTAL_ENABLED`, which is on
+ * unless the value is the string "false". A site that has not been configured for visitor insights
+ * should not start serving analytics because someone installed the package and mounted the route —
+ * the credentials are read from the environment, and the failure mode of defaulting to on is a
+ * live endpoint nobody decided to switch on.
+ */
+const OFF_VALUES = new Set(['', 'false', '0', 'off', 'no', 'disabled'])
+
+/**
+ * Whether the route is switched on for this deployment.
+ *
+ * @param raw - the environment variable's value, or undefined when it is unset
+ */
+export function isEnabled(raw: string | undefined): boolean {
+	if (raw === undefined) return false
+	return !OFF_VALUES.has(raw.trim().toLowerCase())
+}
 
 /** Options for building a handler. */
 export interface HandlerOptions {
@@ -83,6 +106,17 @@ export function createVisitorInsightsHandler(options: HandlerOptions) {
 
 	return async function handler(req: HandlerRequest, res: HandlerResponse): Promise<void> {
 		if (applyCors(req, res, config.allowedStudioOrigins ?? [])) return
+
+		// After CORS so the Studio's fetch can actually read this response rather than failing the
+		// preflight, and before auth so a switched-off site does no Sanity or GA4 work at all.
+		// 503 rather than 404: the route exists and is expected to come back.
+		if (!isEnabled(process.env[ENV_VARS.enabled])) {
+			res.status(503).json({
+				error: `Visitor insights is switched off for this site. Set ${ENV_VARS.enabled} to a truthy value to enable it.`,
+				disabled: true,
+			})
+			return
+		}
 
 		if (req.method !== 'GET') {
 			res.status(405).json({ error: 'Method not allowed' })

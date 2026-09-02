@@ -184,12 +184,24 @@ empty charts — pasting a measurement id here is caught by name.
 
 | Variable | Where | What |
 |---|---|---|
+| `VISITOR_INSIGHTS_ENABLED` | Site (server) | **Required.** Any truthy value switches the route on |
 | `VISITOR_INSIGHTS_GA4_SERVICE_ACCOUNT` | Site (server) | Service-account JSON, raw or base64 |
 | `VISITOR_INSIGHTS_VERCEL_TOKEN` | Site (server) | Vercel API token with project read access |
 | `SANITY_STUDIO_PROJECT_ID` | Site (server) | Already set; used to verify Studio tokens |
 
 The service account needs **Viewer** on each GA4 property. Nothing here is `NEXT_PUBLIC_`; none of
 it reaches the browser.
+
+#### The master switch
+
+`VISITOR_INSIGHTS_ENABLED` is an explicit opt-in. Unset, the route answers `503` with
+`disabled: true` and does no Sanity or GA4 work, and the Studio tool shows a neutral "Switched off"
+card rather than an error. Set it to anything that is not `false`, `0`, `off`, `no`, `disabled` or
+empty — a word, a code, `true`, whatever the site's operator prefers.
+
+This is deliberately the opposite default to `SALES_PORTAL_ENABLED`, which is on unless the value
+is literally `"false"`. Mounting this route wires up analytics credentials, so it should not begin
+answering on a site where nobody chose to switch it on.
 
 ---
 
