@@ -418,3 +418,44 @@ describe('panels tolerate an older route response', () => {
 		expect(() => render(<AcquisitionPanel data={legacy} />)).not.toThrow()
 	})
 })
+
+/**
+ * Layout that survives the compat shim falling back to a plain div.
+ *
+ * `@liiift-studio/sanity-ui-compat` renders a plain element when it cannot resolve a UI kit
+ * component for the Studio version in use. A `gap={3}` on that fallback is a design token being
+ * handed to CSS, which means nothing — so the Caveat badge and its notice text rendered on top of
+ * one another and the panel read "Caveasubscribe is counted about twice per signup".
+ *
+ * Layout-critical spacing is therefore expressed as real CSS, and these assert it stays that way.
+ * A type checker cannot see this class of bug: `gap={3}` is perfectly well typed.
+ */
+describe('layout does not depend on design tokens resolving', () => {
+	it('separates the caveat badge from its text with real CSS', () => {
+		const html = render(<NoticeList notices={['subscribe is counted about twice per signup']} />)
+		expect(html).toContain('display:flex')
+		expect(html).toMatch(/gap:\s*12px/)
+		// The badge must not shrink, or long text squeezes it to nothing and they overlap again.
+		expect(html).toMatch(/flex:\s*0 0 auto/)
+	})
+
+	it('wraps rather than overflowing a narrow pane', () => {
+		const html = render(<NoticeList notices={['a notice long enough to need wrapping on a narrow Studio pane']} />)
+		expect(html).toContain('flex-wrap:wrap')
+	})
+
+	it('lays the context cards out by available width, not by viewport breakpoints', () => {
+		const html = render(
+			<MeasurementHealthPanel
+				data={{
+					ga4Pageviews: ok(543), vercelPageviews: ok(2392), shortfallRatio: 0.773,
+					ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+					interpretation: 'Sources differ.', daily: [],
+				}}
+			/>,
+		)
+		// A Studio panel is a resizable pane, sometimes inside an iframe; its width is unrelated
+		// to the viewport, so breakpoint columns answered the wrong question.
+		expect(html).toContain('auto-fit')
+	})
+})

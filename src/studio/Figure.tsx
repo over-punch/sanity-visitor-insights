@@ -116,10 +116,10 @@ export function ComparisonBar({ label, metric, max, tone = 'default' }: Comparis
 
 	return (
 		<Stack space={2}>
-			<Flex align="center" justify="space-between" gap={3}>
+			<div style={barHeader}>
 				<Text size={1} weight="medium">{label}</Text>
 				<MetricFigure metric={metric} label={label} size={1} />
-			</Flex>
+			</div>
 
 			{value === null ? (
 				// A dashed rail, not a zero-width bar: absence must not read as a measured zero.
@@ -141,6 +141,34 @@ export function ComparisonBar({ label, metric, max, tone = 'default' }: Comparis
 	)
 }
 
+/** Bar header: label on the left, figure hard right, never overlapping on a narrow pane. */
+const barHeader: React.CSSProperties = {
+	display: 'flex',
+	alignItems: 'center',
+	justifyContent: 'space-between',
+	gap: 12,
+	flexWrap: 'wrap',
+}
+
+/** Chart legend, wrapping rather than overflowing. */
+const legendRow: React.CSSProperties = {
+	display: 'flex',
+	gap: 12,
+	alignItems: 'center',
+	flexWrap: 'wrap',
+}
+
+/** Notice row: badge and text side by side, wrapping on a narrow panel rather than colliding. */
+const noticeRow: React.CSSProperties = {
+	display: 'flex',
+	gap: 12,
+	alignItems: 'flex-start',
+	flexWrap: 'wrap',
+}
+
+/** The badge keeps its width; only the text reflows. */
+const noticeBadge: React.CSSProperties = { flex: '0 0 auto' }
+
 /** Props for NoticeList. */
 export interface NoticeListProps {
 	notices: string[]
@@ -160,10 +188,17 @@ export function NoticeList({ notices }: NoticeListProps): React.ReactElement | n
 			{notices.map((notice) => (
 				<li key={notice}>
 					<Card padding={3} radius={2} tone="caution" border>
-						<Flex gap={3} align="flex-start">
-							<Badge tone="caution" fontSize={0}>Caveat</Badge>
+						{/* Laid out with real CSS rather than the UI kit's Flex and its `gap` token.
+						    When the compat shim cannot resolve Flex it renders a plain div, and a
+						    token number means nothing to CSS — so the badge and the text landed on
+						    top of each other and the notice read "Caveasubscribe is counted…".
+						    Explicit styles survive that fallback. */}
+						<div style={noticeRow}>
+							<span style={noticeBadge}>
+								<Badge tone="caution" fontSize={0}>Caveat</Badge>
+							</span>
 							<Text size={1}>{notice}</Text>
-						</Flex>
+						</div>
 					</Card>
 				</li>
 			))}
@@ -245,12 +280,12 @@ export function TrendChart({ points, label = 'Daily pageviews, GA4 against Verce
 					<path d={ga4Path} fill="none" stroke="currentColor" strokeOpacity="0.85" strokeWidth="2" strokeDasharray="5 3" vectorEffect="non-scaling-stroke" />
 				</svg>
 			</Box>
-			<Flex gap={3} align="center" wrap="wrap">
+			<div style={legendRow}>
 				<Text size={0} muted>&#9473;&#9473; Vercel</Text>
 				<Text size={0} muted>&#9476;&#9476; GA4</Text>
 				<Text size={0} muted>{first} to {last}</Text>
 				<Text size={0} muted>peak {formatCount(max)}/day</Text>
-			</Flex>
+			</div>
 		</Stack>
 	)
 }

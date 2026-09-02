@@ -33,6 +33,20 @@ function maxOf(metrics: MetricValue[]): number {
 
 /** Shared table styling — scrolls inside its own container so the panel never scrolls sideways. */
 const tableWrap: React.CSSProperties = { overflowX: 'auto', width: '100%' }
+
+/**
+ * Card row that reflows by available width rather than by viewport breakpoints.
+ *
+ * The Studio panel is a resizable pane inside a Studio inside, sometimes, an iframe — its width has
+ * little to do with the viewport, so `columns={[1, 3]}` was answering the wrong question. auto-fit
+ * with a minimum also survives the compat shim falling back to a plain div, where a column token
+ * would mean nothing.
+ */
+const cardGrid: React.CSSProperties = {
+	display: 'grid',
+	gridTemplateColumns: 'repeat(auto-fit, minmax(min(14rem, 100%), 1fr))',
+	gap: 16,
+}
 const table: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', minWidth: 420 }
 const cell: React.CSSProperties = { padding: '8px 12px', textAlign: 'left', borderBottom: '1px solid var(--card-border-color)' }
 // @sanity/ui ships no Table primitive, so the element is native — but every cell's content is a
@@ -99,7 +113,7 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 				<Text size={1} muted>
 					Different units to the figures above, and to each other. Shown for scale, never differenced.
 				</Text>
-				<Grid columns={[1, 3]} gap={4}>
+				<div style={cardGrid}>
 					<Card padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
 							<Label size={1} muted>GA4 sessions</Label>
@@ -118,7 +132,7 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 							<MetricFigure metric={data.consentRate} label="Consent granted, percent of sessions" unit="percent" />
 						</Stack>
 					</Card>
-				</Grid>
+				</div>
 			</Stack>
 		</Stack>
 	)
@@ -128,7 +142,7 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 export function AcquisitionPanel({ data }: { data: AcquisitionData }): React.ReactElement {
 	return (
 		<Stack space={4}>
-			<Grid columns={[1, 3]} gap={4}>
+			<div style={cardGrid}>
 				<Card padding={3} radius={2} tone="transparent" border>
 					<Stack space={3}>
 						<Label size={1} muted>Sessions</Label>
@@ -151,7 +165,7 @@ export function AcquisitionPanel({ data }: { data: AcquisitionData }): React.Rea
 						</Stack>
 					</Card>
 				)}
-			</Grid>
+			</div>
 
 			<Card radius={2} tone="transparent" border style={tableWrap}>
 				<table style={table}>
@@ -169,11 +183,11 @@ export function AcquisitionPanel({ data }: { data: AcquisitionData }): React.Rea
 						{(data.rows ?? []).map((row) => (
 							<tr key={`${row.source}-${row.channel}`}>
 								<th scope="row" style={cell}>
-									<Flex gap={2} align="center">
+									<div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
 										<Text size={1}>{row.source}</Text>
 										{row.designIndustry && <Badge tone="primary" fontSize={0}>design industry</Badge>}
 										{row.unattributed && <Badge tone="caution" fontSize={0}>unattributed</Badge>}
-									</Flex>
+									</div>
 								</th>
 								<td style={cell}><Text size={1} muted>{row.channel}</Text></td>
 								<td style={numericCell}><Text size={1}>{formatCount(row.sessions)}</Text></td>

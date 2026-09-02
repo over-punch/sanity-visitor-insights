@@ -14,6 +14,21 @@ import { NoticeList } from './Figure'
 import { Badge } from '@liiift-studio/sanity-ui-compat'
 import { AcquisitionPanel, DiagnosticsPanel, JourneyPanel, MeasurementHealthPanel, TypefaceInterestPanel } from './panels'
 
+/**
+ * Control rows — range buttons, panel tabs, source status.
+ *
+ * Real CSS rather than the UI kit's Flex: when the compat shim cannot resolve Flex it renders a
+ * plain div and a `gap` token does nothing, which is what put the Caveat badge on top of its own
+ * text. Wrapping matters here too, since a Studio pane is resizable and five tabs do not fit a
+ * narrow one.
+ */
+const controlRow: React.CSSProperties = {
+	display: 'flex',
+	gap: 6,
+	alignItems: 'center',
+	flexWrap: 'wrap',
+}
+
 /** Range options, in the order they appear. */
 const RANGES: Array<{ key: RangeKey; label: string }> = [
 	{ key: 'week', label: 'Week' },
