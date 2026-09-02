@@ -4,6 +4,13 @@
  * Every panel renders a table or labelled bars rather than a chart, and every one surfaces its own
  * caveats inline. Tables are the accessible representation as well as the visual one, so there is
  * no separate "view as data" toggle that could drift out of sync with what is displayed.
+ *
+ * Every array these panels read is accessed defensively, and that is not paranoia about the server.
+ * The Studio bundle and the site's API route are separate deployments on separate schedules: a
+ * Studio can be upgraded while its route still runs an older package, and then a field added in the
+ * newer version simply is not in the response. On 2026-09-01 a Studio on 0.8.0 read `data.daily`
+ * from a route still on 0.6.2 and took the whole tool down with "Cannot read properties of
+ * undefined". A panel must degrade to showing less, never to a stack trace.
  */
 
 import React from 'react'
@@ -76,14 +83,14 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 			{/* The daily series. A scalar gap cannot tell a stable difference from one that opened
 			    overnight, and those need opposite responses. Rendered only when there are enough
 			    points to show a shape, and only when both sources reported by day. */}
-			{data.daily.length >= 3 && (
+			{(data.daily?.length ?? 0) >= 3 && (
 				<Stack space={3}>
 					<Heading size={1}>Day by day</Heading>
 					<Text size={1} muted>
 						A gap that has always been there is consent and blocking. A gap that opens on one
 						day is an incident.
 					</Text>
-					<TrendChart points={data.daily} />
+					<TrendChart points={data.daily ?? []} />
 				</Stack>
 			)}
 
@@ -159,7 +166,7 @@ export function AcquisitionPanel({ data }: { data: AcquisitionData }): React.Rea
 						</tr>
 					</thead>
 					<tbody>
-						{data.rows.map((row) => (
+						{(data.rows ?? []).map((row) => (
 							<tr key={`${row.source}-${row.channel}`}>
 								<th scope="row" style={cell}>
 									<Flex gap={2} align="center">
@@ -185,7 +192,7 @@ export function AcquisitionPanel({ data }: { data: AcquisitionData }): React.Rea
 
 /** Journey — per-step totals with adjacent drop-off, explicitly not a tracked path. */
 export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElement {
-	const max = maxOf(data.steps.map((step) => step.count))
+	const max = maxOf((data.steps ?? []).map((step) => step.count))
 
 	return (
 		<Stack space={4}>
@@ -194,7 +201,7 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 			</Card>
 
 			<Stack space={3}>
-				{data.steps.map((step) => (
+				{(data.steps ?? []).map((step) => (
 					<Stack space={2} key={step.key}>
 						<ComparisonBar label={step.label} metric={step.count} max={max} tone="primary" />
 						{step.conversionFromPrevious !== null && (
@@ -206,7 +213,7 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 
 			{/* Entries, not exits. GA4 exposes landingPage and has never had an exits metric; the
 			    previous version of this table queried one and rendered nothing, ever. */}
-			{data.topLandingPages.length > 0 && (
+			{(data.topLandingPages?.length ?? 0) > 0 && (
 				<Stack space={3}>
 					<Heading size={1}>Where sessions began</Heading>
 					<Card radius={2} tone="transparent" border style={tableWrap}>
@@ -218,7 +225,7 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 								</tr>
 							</thead>
 							<tbody>
-								{data.topLandingPages.map((page) => (
+								{(data.topLandingPages ?? []).map((page) => (
 									<tr key={page.path}>
 										<th scope="row" style={cell}><Text size={1}>{page.path}</Text></th>
 										<td style={numericCell}><Text size={1}>{formatCount(page.sessions)}</Text></td>
@@ -256,7 +263,7 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 						</tr>
 					</thead>
 					<tbody>
-						{data.rows.map((row) => (
+						{(data.rows ?? []).map((row) => (
 							<tr key={row.typeface}>
 								<th scope="row" style={cell}><Text size={1}>{row.typeface}</Text></th>
 								<td style={numericCell}><MetricFigure metric={row.viewed} label={`${row.typeface} viewed`} size={1} /></td>

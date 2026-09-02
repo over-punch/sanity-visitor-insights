@@ -376,3 +376,45 @@ describe('TrendChart', () => {
 		expect(render(<TrendChart points={series} />)).toContain('2026-08-20 to 2026-08-24')
 	})
 })
+
+/**
+ * Version skew between the Studio and the API route.
+ *
+ * These are separate deployments on separate schedules. A Studio upgraded ahead of its route
+ * receives a response missing whatever the newer version added, and on 2026-09-01 that took the
+ * whole tool down: a Studio on 0.8.0 read `data.daily.length` from a route still on 0.6.2 and threw
+ * "Cannot read properties of undefined". A panel must show less, never crash.
+ *
+ * Each case below renders a payload shaped like an older route's, cast because the current types
+ * describe the newer shape — which is exactly the situation at runtime.
+ */
+describe('panels tolerate an older route response', () => {
+	it('measurement health renders without the daily series', () => {
+		const legacy = {
+			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+			interpretation: 'Sources differ.',
+		} as never
+
+		expect(() => render(<MeasurementHealthPanel data={legacy} />)).not.toThrow()
+		expect(render(<MeasurementHealthPanel data={legacy} />)).toContain('475')
+	})
+
+	it('journey renders without landing pages', () => {
+		const legacy = {
+			steps: [{ key: 'landed', label: 'Landed', event: 'page_view', count: ok(100), conversionFromPrevious: null }],
+			approximate: true, approximationNote: 'Independent totals.',
+		} as never
+
+		expect(() => render(<JourneyPanel data={legacy} />)).not.toThrow()
+	})
+
+	it('acquisition renders without rows', () => {
+		const legacy = {
+			totalSessions: 0, designIndustryShare: null, unattributedShare: null,
+			rowsWithheld: false, rowsTruncated: false,
+		} as never
+
+		expect(() => render(<AcquisitionPanel data={legacy} />)).not.toThrow()
+	})
+})
