@@ -29,19 +29,70 @@ const controlRow: React.CSSProperties = {
 	flexWrap: 'wrap',
 }
 
+/**
+ * Tab strip.
+ *
+ * The panels were five loose buttons in a row, which read as five actions rather than one choice
+ * between five views — nothing said "these are tabs" except the ARIA role, which only a screen
+ * reader ever heard. A shared baseline with the active tab underlined is the convention a reader
+ * already knows, and it survives the compat shim falling back to plain elements because it is CSS
+ * rather than a component variant.
+ */
+const tabStrip: React.CSSProperties = {
+	display: 'flex',
+	gap: 2,
+	alignItems: 'stretch',
+	flexWrap: 'wrap',
+	borderBottom: '1px solid var(--card-border-color, rgba(128,128,128,0.25))',
+}
+
+/** One tab. The selected state carries an underline as well as weight, never colour alone. */
+function tabStyle(selected: boolean): React.CSSProperties {
+	return {
+		appearance: 'none',
+		background: 'transparent',
+		border: 'none',
+		borderBottom: `2px solid ${selected ? 'currentColor' : 'transparent'}`,
+		color: 'inherit',
+		opacity: selected ? 1 : 0.62,
+		font: 'inherit',
+		fontWeight: selected ? 600 : 400,
+		padding: '8px 12px',
+		marginBottom: -1,
+		cursor: 'pointer',
+		whiteSpace: 'nowrap',
+	}
+}
+
 /** Range options, in the order they appear. */
-const RANGES: Array<{ key: RangeKey; label: string }> = [
-	{ key: 'week', label: 'Week' },
-	{ key: 'quarter', label: 'Quarter' },
-	{ key: 'year', label: 'Year' },
+/**
+ * Range options.
+ *
+ * Labelled by the span they actually cover rather than by a calendar word. "Quarter" and "Year"
+ * were trailing day counts — 91 and 365 days ending today — not Q3 or a calendar year, and a reader
+ * comparing them against anything calendar-aligned would have been comparing different things
+ * without being told. The dates each one resolves to are shown beside the buttons.
+ */
+const RANGES: Array<{ key: RangeKey; label: string; span: string }> = [
+	{ key: 'week', label: '7 days', span: 'the last 7 days' },
+	{ key: 'quarter', label: '91 days', span: 'the last 91 days' },
+	{ key: 'year', label: '365 days', span: 'the last 365 days' },
 ]
 
 /** Panels, in the order they appear. */
+/**
+ * Panels, in the order they appear.
+ *
+ * Acquisition leads because "where did people come from" is the question most often being asked.
+ * Measurement health sits near the end deliberately: it is about the instrument rather than the
+ * audience, and leading with it made an operational caveat the first thing anyone read. Diagnostics
+ * stays last, since it is about configuration rather than visitors at all.
+ */
 const PANELS: Array<{ report: ReportName; label: string; blurb: string }> = [
-	{ report: 'measurement-health', label: 'Measurement health', blurb: 'How much of reality each source actually sees' },
 	{ report: 'acquisition', label: 'Acquisition', blurb: 'Where visitors come from' },
-	{ report: 'journey', label: 'Journey', blurb: 'How far visitors get, and where they stop' },
+	{ report: 'journey', label: 'Journey', blurb: 'How far visitors get' },
 	{ report: 'typeface-interest', label: 'Typeface interest', blurb: 'Viewed, tested and bought, by family' },
+	{ report: 'measurement-health', label: 'Measurement health', blurb: 'How much of reality each source actually sees' },
 	{ report: 'diagnostics', label: 'Diagnostics', blurb: 'What to fix before trusting the numbers above' },
 ]
 
@@ -113,6 +164,7 @@ function RangeSelector({ value, onChange }: { value: RangeKey; onChange: (next: 
 						mode={selected ? 'default' : 'bleed'}
 						tone={selected ? 'primary' : 'default'}
 						text={range.label}
+						title={`Ending today, covering ${range.span}`}
 						onClick={() => onChange(range.key)}
 						fontSize={1}
 						padding={3}
@@ -196,12 +248,16 @@ function PanelTabs({ value, onChange }: { value: ReportName; onChange: (next: Re
 	)
 
 	return (
-		<Flex role="tablist" aria-label="Report" gap={1} wrap="wrap" onKeyDown={onKeyDown}>
+		<div role="tablist" aria-label="Report" style={tabStrip} onKeyDown={onKeyDown}>
 			{PANELS.map((panel, index) => {
 				const selected = panel.report === value
 				return (
-					<Button
+					// A plain button rather than the UI kit's, so the label is real children and
+					// cannot vanish: the compat shim's DOM fallback does not forward `text`, which
+					// would leave five blank tabs on any Studio version where it falls back.
+					<button
 						key={panel.report}
+						type="button"
 						ref={(el: HTMLButtonElement | null) => {
 							refs.current[index] = el
 						}}
@@ -210,16 +266,14 @@ function PanelTabs({ value, onChange }: { value: ReportName; onChange: (next: Re
 						aria-selected={selected}
 						aria-controls={`panel-${panel.report}`}
 						tabIndex={selected ? 0 : -1}
-						mode={selected ? 'default' : 'bleed'}
-						tone={selected ? 'primary' : 'default'}
-						text={panel.label}
+						style={tabStyle(selected)}
 						onClick={() => onChange(panel.report)}
-						fontSize={1}
-						padding={3}
-					/>
+					>
+						{panel.label}
+					</button>
 				)
 			})}
-		</Flex>
+		</div>
 	)
 }
 
@@ -274,7 +328,7 @@ function ReportPanel({ report, apiBaseUrl, range }: { report: ReportName; apiBas
 					{report === 'diagnostics' && <DiagnosticsPanel data={state.envelope.data as never} />}
 
 					<Text size={0} muted>
-						{state.envelope.range.start} to {state.envelope.range.end} ({state.envelope.range.timezone})
+						Figures cover {state.envelope.range.start} to {state.envelope.range.end}, in {state.envelope.range.timezone}
 					</Text>
 				</Stack>
 			)}
@@ -290,7 +344,7 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 	const siteLabel = props.tool?.options?.siteLabel ?? props.siteLabel ?? ''
 
 	const [range, setRange] = useState<RangeKey>('week')
-	const [activePanel, setActivePanel] = useState<ReportName>('measurement-health')
+	const [activePanel, setActivePanel] = useState<ReportName>('acquisition')
 
 	const active = PANELS.find((p) => p.report === activePanel) ?? PANELS[0]
 

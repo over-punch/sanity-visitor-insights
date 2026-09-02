@@ -15,16 +15,29 @@
 
 import React from 'react'
 import { Badge, Box, Card, Flex, Grid, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ComparisonBar, MetricFigure, NoticeList, TrendChart, formatCount, formatPercent } from './Figure'
+import { ComparisonBar, MetricFigure, NoticeList, SortableTable, TrendChart, formatCount, formatPercent } from './Figure'
 import type {
 	AcquisitionData,
 	CheckStatus,
+	SourceRow,
+	TypefaceInterestRow,
 	DiagnosticReport,
 	JourneyData,
 	MeasurementHealthData,
 	TypefaceInterestData,
 } from '../reportData'
 import type { MetricValue } from '../types'
+
+/**
+ * Sortable value for a metric, or null when there is nothing to sort on.
+ *
+ * An unavailable metric is not a zero — sorting it as one would put "never measured" at the bottom
+ * of an ascending column beside genuine zeros, which is the confusion MetricValue exists to prevent.
+ * SortableTable sinks nulls in both directions instead.
+ */
+function metricSortValue(metric: MetricValue): number | null {
+	return metric.status === 'unavailable' ? null : metric.value
+}
 
 /** Largest available value across metrics, for scaling bars. */
 function maxOf(metrics: MetricValue[]): number {
@@ -33,6 +46,35 @@ function maxOf(metrics: MetricValue[]): number {
 
 /** Shared table styling — scrolls inside its own container so the panel never scrolls sideways. */
 const tableWrap: React.CSSProperties = { overflowX: 'auto', width: '100%' }
+
+/**
+ * Section headings.
+ *
+ * The UI kit's Heading carries no margin of its own and relies on Stack spacing, which the compat
+ * shim drops when it falls back — so headings sat directly on the section above and read as part
+ * of it. An explicit top margin and a little breathing room below make each section legible as a
+ * section regardless of what the shim resolves.
+ */
+const sectionHeading: React.CSSProperties = { margin: '0 0 2px', lineHeight: 1.3 }
+
+/** Referrer links, marked as links without shouting. */
+const sourceLink: React.CSSProperties = {
+	color: 'inherit',
+	textDecoration: 'underline',
+	textUnderlineOffset: 3,
+	textDecorationThickness: 1,
+}
+
+/**
+ * Whether a GA4 source value is a real host worth linking.
+ *
+ * GA4's own buckets — (direct), (not set), (none) — look like sources in the table and are not
+ * destinations. Linking them would produce a dead https://(direct) that erodes trust in every other
+ * link on the page.
+ */
+function isLinkableHost(source: string): boolean {
+	return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(source)
+}
 
 /**
  * Card row that reflows by available width rather than by viewport breakpoints.
@@ -64,7 +106,7 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 	return (
 		<Stack space={4}>
 			<Stack space={3}>
-				<Heading size={1}>Pageviews, source against source</Heading>
+				<Heading size={1} style={sectionHeading}>Pageviews, source against source</Heading>
 				<Text size={1} muted>
 					The same unit on both sides. Vercel is cookieless and ungated; GA4 is consent-gated and
 					blockable, so GA4 seeing fewer is expected.
@@ -99,7 +141,7 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 			    points to show a shape, and only when both sources reported by day. */}
 			{(data.daily?.length ?? 0) >= 3 && (
 				<Stack space={3}>
-					<Heading size={1}>Day by day</Heading>
+					<Heading size={1} style={sectionHeading}>Day by day</Heading>
 					<Text size={1} muted>
 						A gap that has always been there is consent and blocking. A gap that opens on one
 						day is an incident.
@@ -109,7 +151,7 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 			)}
 
 			<Stack space={3}>
-				<Heading size={1}>Context</Heading>
+				<Heading size={1} style={sectionHeading}>Context</Heading>
 				<Text size={1} muted>
 					Different units to the figures above, and to each other. Shown for scale, never differenced.
 				</Text>
@@ -167,35 +209,57 @@ export function AcquisitionPanel({ data }: { data: AcquisitionData }): React.Rea
 				)}
 			</div>
 
-			<Card radius={2} tone="transparent" border style={tableWrap}>
-				<table style={table}>
-					<caption style={{ textAlign: 'left', paddingBottom: 8 }}>
-						<Text size={1} muted>Traffic sources by sessions</Text>
-					</caption>
-					<thead>
-						<tr>
-							<th scope="col" style={cell}><Label size={1} muted>Source</Label></th>
-							<th scope="col" style={cell}><Label size={1} muted>Channel</Label></th>
-							<th scope="col" style={numericCell}><Label size={1} muted>Sessions</Label></th>
-						</tr>
-					</thead>
-					<tbody>
-						{(data.rows ?? []).map((row) => (
-							<tr key={`${row.source}-${row.channel}`}>
-								<th scope="row" style={cell}>
-									<div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-										<Text size={1}>{row.source}</Text>
-										{row.designIndustry && <Badge tone="primary" fontSize={0}>design industry</Badge>}
-										{row.unattributed && <Badge tone="caution" fontSize={0}>unattributed</Badge>}
-									</div>
-								</th>
-								<td style={cell}><Text size={1} muted>{row.channel}</Text></td>
-								<td style={numericCell}><Text size={1}>{formatCount(row.sessions)}</Text></td>
-							</tr>
-						))}
-					</tbody>
-				</table>
-			</Card>
+			<Stack space={3}>
+				<Heading size={1} style={sectionHeading}>Traffic sources</Heading>
+				<Text size={1} muted>Sort by any column. Sessions is the default.</Text>
+				<SortableTable<SourceRow>
+					caption="Traffic sources by sessions"
+					initialSort="sessions"
+					rows={data.rows ?? []}
+					rowKey={(row) => `${row.source}-${row.channel}`}
+					columns={[
+						{
+							key: 'source',
+							label: 'Source',
+							sortValue: (row) => row.source,
+							render: (row) => (
+								<div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+									{/* A referrer host is a real destination, so it links. GA4's own
+									    buckets — (direct), (not set) — are not hosts and must not
+									    pretend to be, so only a dotted hostname gets an anchor. */}
+									{isLinkableHost(row.source)
+										? (
+											<a
+												href={`https://${row.source}`}
+												target="_blank"
+												rel="noopener noreferrer"
+												style={sourceLink}
+											>
+												{row.source}
+											</a>
+										)
+										: <Text size={1}>{row.source}</Text>}
+									{row.designIndustry && <Badge tone="primary" fontSize={0}>Design</Badge>}
+									{row.unattributed && <Badge tone="caution" fontSize={0}>Unattributed</Badge>}
+								</div>
+							),
+						},
+						{
+							key: 'channel',
+							label: 'Channel',
+							sortValue: (row) => row.channel,
+							render: (row) => <Text size={1}>{row.channel}</Text>,
+						},
+						{
+							key: 'sessions',
+							label: 'Sessions',
+							numeric: true,
+							sortValue: (row) => row.sessions,
+							render: (row) => <Text size={1}>{formatCount(row.sessions)}</Text>,
+						},
+					]}
+				/>
+			</Stack>
 
 			{data.rowsWithheld && (
 				<NoticeList notices={['GA4 withheld some low-traffic rows for privacy, so this list is shorter than reality.']} />
@@ -206,7 +270,15 @@ export function AcquisitionPanel({ data }: { data: AcquisitionData }): React.Rea
 
 /** Journey — per-step totals with adjacent drop-off, explicitly not a tracked path. */
 export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElement {
-	const max = maxOf((data.steps ?? []).map((step) => step.count))
+	const allSteps = data.steps ?? []
+
+	// Steps this site does not instrument are hidden rather than drawn as empty rails. An
+	// uninstrumented rung told the reader nothing except that the funnel had a hole in it, and it
+	// sat between two real steps implying a drop-off that was never measured. They are counted in a
+	// line beneath instead, so the omission is still stated but does not masquerade as a stage.
+	const shown = allSteps.filter((step) => step.count.status !== 'unavailable')
+	const hiddenSteps = allSteps.filter((step) => step.count.status === 'unavailable')
+	const max = maxOf(shown.map((step) => step.count))
 
 	return (
 		<Stack space={4}>
@@ -215,39 +287,56 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 			</Card>
 
 			<Stack space={3}>
-				{(data.steps ?? []).map((step) => (
+				{shown.map((step, index) => (
 					<Stack space={2} key={step.key}>
 						<ComparisonBar label={step.label} metric={step.count} max={max} tone="primary" />
-						{step.conversionFromPrevious !== null && (
-							<Text size={0} muted>{formatPercent(step.conversionFromPrevious, 1)} of the previous measurable step</Text>
+						{/* The baseline is named rather than called "the previous measurable step".
+						    When a rung is missing the comparison silently spans the gap, and a
+						    reader looking at adjacent bars will read it as adjacent — which on a
+						    site missing begin_checkout turned cart-to-purchase into an apparent
+						    checkout abandonment problem. */}
+						{step.conversionFromPrevious !== null && index > 0 && (
+							<Text size={0} muted>
+								{formatPercent(step.conversionFromPrevious, 1)} of {shown[index - 1]?.label.toLowerCase()}
+							</Text>
 						)}
 					</Stack>
 				))}
 			</Stack>
 
+			{hiddenSteps.length > 0 && (
+				<Text size={1} muted>
+					Not shown: {hiddenSteps.map((step) => step.label.toLowerCase()).join(', ')} — not instrumented on
+					this site, so there is no figure to place in the funnel.
+				</Text>
+			)}
+
 			{/* Entries, not exits. GA4 exposes landingPage and has never had an exits metric; the
 			    previous version of this table queried one and rendered nothing, ever. */}
 			{(data.topLandingPages?.length ?? 0) > 0 && (
 				<Stack space={3}>
-					<Heading size={1}>Where sessions began</Heading>
-					<Card radius={2} tone="transparent" border style={tableWrap}>
-						<table style={table}>
-							<thead>
-								<tr>
-									<th scope="col" style={cell}><Label size={1} muted>Page</Label></th>
-									<th scope="col" style={numericCell}><Label size={1} muted>Sessions</Label></th>
-								</tr>
-							</thead>
-							<tbody>
-								{(data.topLandingPages ?? []).map((page) => (
-									<tr key={page.path}>
-										<th scope="row" style={cell}><Text size={1}>{page.path}</Text></th>
-										<td style={numericCell}><Text size={1}>{formatCount(page.sessions)}</Text></td>
-									</tr>
-								))}
-							</tbody>
-						</table>
-					</Card>
+					<Heading size={1} style={sectionHeading}>Where sessions began</Heading>
+					<SortableTable<{ path: string; sessions: number }>
+						caption="Landing pages by sessions"
+						initialSort="sessions"
+						rows={data.topLandingPages ?? []}
+						rowKey={(page) => page.path}
+						columns={[
+							{
+								key: 'path',
+								label: 'Page',
+								sortValue: (page) => page.path,
+								render: (page) => <Text size={1}>{page.path}</Text>,
+							},
+							{
+								key: 'sessions',
+								label: 'Sessions',
+								numeric: true,
+								sortValue: (page) => page.sessions,
+								render: (page) => <Text size={1}>{formatCount(page.sessions)}</Text>,
+							},
+						]}
+					/>
 				</Stack>
 			)}
 		</Stack>
@@ -262,35 +351,56 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 				<Text size={1} muted>{data.interpretationNote}</Text>
 			</Card>
 
-			<Card radius={2} tone="transparent" border style={tableWrap}>
-				<table style={table}>
-					<caption style={{ textAlign: 'left', paddingBottom: 8 }}>
-						<Text size={1} muted>Engagement by typeface</Text>
-					</caption>
-					<thead>
-						<tr>
-							<th scope="col" style={cell}><Label size={1} muted>Typeface</Label></th>
-							<th scope="col" style={numericCell}><Label size={1} muted>Viewed</Label></th>
-							<th scope="col" style={numericCell}><Label size={1} muted>Tested</Label></th>
-							<th scope="col" style={numericCell}><Label size={1} muted>Bought</Label></th>
-							<th scope="col" style={numericCell}><Label size={1} muted>Test rate</Label></th>
-						</tr>
-					</thead>
-					<tbody>
-						{(data.rows ?? []).map((row) => (
-							<tr key={row.typeface}>
-								<th scope="row" style={cell}><Text size={1}>{row.typeface}</Text></th>
-								<td style={numericCell}><MetricFigure metric={row.viewed} label={`${row.typeface} viewed`} size={1} /></td>
-								<td style={numericCell}><MetricFigure metric={row.tested} label={`${row.typeface} tested`} size={1} /></td>
-								<td style={numericCell}><MetricFigure metric={row.bought} label={`${row.typeface} bought`} size={1} /></td>
-								<td style={numericCell}>
-									<Text size={1} muted>{row.testRate === null ? '—' : formatPercent(row.testRate, 1)}</Text>
-								</td>
-							</tr>
-						))}
-					</tbody>
-				</table>
-			</Card>
+			<Stack space={3}>
+				<Heading size={1} style={sectionHeading}>Engagement by typeface</Heading>
+				<Text size={1} muted>Sort by any column. Views is the default.</Text>
+				<SortableTable<TypefaceInterestRow>
+					caption="Engagement by typeface"
+					initialSort="viewed"
+					rows={data.rows ?? []}
+					rowKey={(row) => row.typeface}
+					columns={[
+						{
+							key: 'typeface',
+							label: 'Typeface',
+							sortValue: (row) => row.typeface,
+							render: (row) => <Text size={1}>{row.typeface}</Text>,
+						},
+						{
+							key: 'viewed',
+							label: 'Viewed',
+							numeric: true,
+							sortValue: (row) => metricSortValue(row.viewed),
+							render: (row) => <MetricFigure metric={row.viewed} label={`${row.typeface} viewed`} size={1} />,
+						},
+						{
+							key: 'tested',
+							label: 'Tested',
+							numeric: true,
+							sortValue: (row) => metricSortValue(row.tested),
+							render: (row) => <MetricFigure metric={row.tested} label={`${row.typeface} tested`} size={1} />,
+						},
+						{
+							key: 'bought',
+							label: 'Bought',
+							numeric: true,
+							sortValue: (row) => metricSortValue(row.bought),
+							render: (row) => <MetricFigure metric={row.bought} label={`${row.typeface} bought`} size={1} />,
+						},
+						{
+							key: 'testRate',
+							label: 'Test rate',
+							numeric: true,
+							sortValue: (row) => row.testRate,
+							render: (row) => (
+								<Text size={1} muted aria-label={row.testRate === null ? `${row.typeface} test rate unavailable` : undefined}>
+									{row.testRate === null ? '—' : formatPercent(row.testRate, 1)}
+								</Text>
+							),
+						},
+					]}
+				/>
+			</Stack>
 		</Stack>
 	)
 }
@@ -319,27 +429,37 @@ const CHECK_WORD: Record<CheckStatus, string> = {
  * credentials land.
  */
 export function DiagnosticsPanel({ data }: { data: DiagnosticReport }): React.ReactElement {
-	const failing = data.checks.filter((c) => c.status === 'fail').length
-	const warning = data.checks.filter((c) => c.status === 'warn').length
+	// Guarded like every other array the panels read. This one was missed in the pass that made
+	// the rest skew-tolerant, and it is what crashed the Diagnostics tab: `checks` is absent from
+	// an older route's response, and `undefined.filter` takes the whole tool down.
+	const checks = data.checks ?? []
+	const failing = checks.filter((c) => c.status === 'fail').length
+	const warning = checks.filter((c) => c.status === 'warn').length
 
+	// Scoped to what these checks actually test. The previous wording — "the figures in the other
+	// panels can be taken at face value" — was a blanket endorsement covering statistical validity,
+	// sampling, small denominators and a funnel the tool itself calls an approximation. These are
+	// plumbing checks. A pass means the wiring is sound, not that the numbers are.
 	const summary =
-		data.verdict === 'pass'
-			? 'Everything checked out. The figures in the other panels can be taken at face value.'
-			: `${failing} failing, ${warning} worth a look. Panels depending on these will be wrong or incomplete until they are resolved.`
+		checks.length === 0
+			? 'No checks ran. Nothing here has been verified either way.'
+			: data.verdict === 'pass'
+				? 'Configuration and credentials check out. That covers the wiring, not whether the figures are worth trusting — the caveats on each panel still apply.'
+				: `${failing} failing, ${warning} worth a look. Panels depending on these will be wrong or incomplete until they are resolved.`
 
 	return (
 		<Stack space={4}>
-			<Card padding={3} radius={2} tone={CHECK_TONE[data.verdict]} border>
+			<Card padding={3} radius={2} tone={CHECK_TONE[data.verdict] ?? 'default'} border>
 				<Text size={1}>{summary}</Text>
 			</Card>
 
 			<Stack space={3}>
-				{data.checks.map((item) => (
+				{checks.map((item) => (
 					<Card key={item.id} padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
 							<Flex align="center" justify="space-between" gap={3}>
 								<Text size={1} weight="semibold">{item.label}</Text>
-								<Badge tone={CHECK_TONE[item.status]} fontSize={0}>{CHECK_WORD[item.status]}</Badge>
+								<Badge tone={CHECK_TONE[item.status] ?? 'default'} fontSize={0}>{CHECK_WORD[item.status] ?? item.status}</Badge>
 							</Flex>
 							<Text size={1} muted>{item.detail}</Text>
 							{item.remedy && <Text size={1}>{item.remedy}</Text>}

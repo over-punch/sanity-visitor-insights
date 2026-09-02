@@ -147,7 +147,11 @@ describe('JourneyPanel', () => {
 	it('renders a funnel mixing working, uninstrumented and outage rungs', () => {
 		const html = render(<JourneyPanel data={data} />)
 		expect(html).toContain('Landed')
-		expect(html).toContain('Used the type tester')
+		// Uninstrumented rungs are no longer drawn as empty rails between real ones — an unmeasured
+		// step implied a drop-off that was never observed. They are named beneath instead.
+		expect(html).not.toContain('>Used the type tester<')
+		expect(html).toContain('Not shown')
+		expect(html).toContain('used the type tester')
 		expect(html).toContain('33,486')
 	})
 
@@ -177,10 +181,48 @@ describe('AcquisitionPanel', () => {
 			/>,
 		)
 		expect(html).toContain('fontsinuse.com')
-		expect(html).toContain('design industry')
-		expect(html).toContain('unattributed')
+		expect(html).toContain('design-industry')
+		expect(html).toContain('Unattributed')
 		// Withheld rows must be admitted, or the list reads as exhaustive.
 		expect(html).toContain('withheld')
+	})
+
+	it('links a real referrer host, and does not link GA4 buckets', () => {
+		const html = render(
+			<AcquisitionPanel
+				data={{
+					totalSessions: 1000, designIndustryShare: 0.3, unattributedShare: 0.1,
+					rowsWithheld: false, rowsTruncated: false,
+					rows: [
+						{ source: 'fontsinuse.com', channel: 'Referral', sessions: 300, designIndustry: true, unattributed: false },
+						{ source: '(direct)', channel: 'Direct', sessions: 100, designIndustry: false, unattributed: true },
+					],
+				}}
+			/>,
+		)
+		expect(html).toContain('href="https://fontsinuse.com"')
+		// (direct) is a GA4 bucket, not a host. A dead https://(direct) would erode trust in every
+		// other link on the page.
+		expect(html).not.toContain('https://(direct)')
+		// External links open safely.
+		expect(html).toContain('rel="noopener noreferrer"')
+	})
+
+	it('marks columns as sortable and states the active sort', () => {
+		const html = render(
+			<AcquisitionPanel
+				data={{
+					totalSessions: 400, designIndustryShare: null, unattributedShare: null,
+					rowsWithheld: false, rowsTruncated: false,
+					rows: [
+						{ source: 'fontsinuse.com', channel: 'Referral', sessions: 300, designIndustry: true, unattributed: false },
+					],
+				}}
+			/>,
+		)
+		// Sessions leads, descending, and the other columns advertise that they sort too.
+		expect(html).toContain('aria-sort="descending"')
+		expect(html).toContain('aria-sort="none"')
 	})
 })
 
@@ -229,7 +271,10 @@ describe('DiagnosticsPanel', () => {
 		const html = render(
 			<DiagnosticsPanel data={{ verdict: 'pass', checks: [{ id: 'a', label: 'GA4 reachable', status: 'pass', detail: 'Answered.' }] }} />,
 		)
-		expect(html).toContain('Everything checked out')
+		// Scoped wording. "Everything checked out" was a blanket endorsement covering statistical
+		// validity, sampling and small denominators that these plumbing checks never test.
+		expect(html).toContain('Configuration and credentials check out')
+		expect(html).toContain('not whether the figures are worth trusting')
 	})
 })
 
@@ -523,5 +568,50 @@ describe('TrendChart keyboard access', () => {
 		const html = render(<TrendChart points={series} />)
 		expect(html).toContain('2026-08-20 to 2026-08-22')
 		expect(html).toContain('Peak')
+	})
+})
+
+/**
+ * Caveats collapse past two.
+ *
+ * Every site caveat is emitted on every panel, relevant or not, so the stack was routinely long —
+ * seven identical amber cards above the data on a Darden year range. A band that long trains a
+ * reader to skip it, including the one that mattered.
+ */
+describe('NoticeList collapsing', () => {
+	it('shows two and hides the rest behind a count', () => {
+		const html = render(<NoticeList notices={['one', 'two', 'three', 'four']} />)
+		expect(html).toContain('one')
+		expect(html).toContain('two')
+		expect(html).not.toContain('>three<')
+		expect(html).toContain('2 more caveats')
+		expect(html).toContain('aria-expanded="false"')
+	})
+
+	it('shows both without a disclosure when there are only two', () => {
+		const html = render(<NoticeList notices={['one', 'two']} />)
+		expect(html).toContain('one')
+		expect(html).toContain('two')
+		expect(html).not.toContain('more caveat')
+	})
+
+	it('says "caveat" rather than "caveats" for a single hidden one', () => {
+		expect(render(<NoticeList notices={['a', 'b', 'c']} />)).toContain('1 more caveat')
+	})
+})
+
+/**
+ * Diagnostics must not crash on an older route's response. This is the array that was missed when
+ * the other panels were made skew-tolerant, and it took the whole tab down.
+ */
+describe('DiagnosticsPanel tolerates a missing checks array', () => {
+	it('renders rather than throwing', () => {
+		const legacy = { verdict: 'pass' } as never
+		expect(() => render(<DiagnosticsPanel data={legacy} />)).not.toThrow()
+	})
+
+	it('says nothing was verified rather than implying everything passed', () => {
+		const legacy = { verdict: 'pass', checks: [] } as never
+		expect(render(<DiagnosticsPanel data={legacy} />)).toContain('No checks ran')
 	})
 })

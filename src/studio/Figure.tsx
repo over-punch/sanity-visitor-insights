@@ -174,6 +174,23 @@ const legendRow: React.CSSProperties = {
 	flexWrap: 'wrap',
 }
 
+/** Disclosure control for the collapsed caveats. Underlined so it reads as actionable text. */
+const disclosure: React.CSSProperties = {
+	appearance: 'none',
+	background: 'transparent',
+	border: 'none',
+	color: 'inherit',
+	opacity: 0.75,
+	font: 'inherit',
+	fontSize: '0.85em',
+	padding: '2px 0',
+	textDecoration: 'underline',
+	textUnderlineOffset: 3,
+	cursor: 'pointer',
+	justifySelf: 'start',
+	width: 'fit-content',
+}
+
 /** Notice row: badge and text side by side, wrapping on a narrow panel rather than colliding. */
 const noticeRow: React.CSSProperties = {
 	display: 'flex',
@@ -195,30 +212,55 @@ export interface NoticeListProps {
  * Rendered in the panel rather than a README: a caveat nobody sees does not prevent a wrong read.
  */
 export function NoticeList({ notices }: NoticeListProps): React.ReactElement | null {
+	const [expanded, setExpanded] = React.useState(false)
+
 	if (notices.length === 0) return null
 
-	// A real list element, so a screen reader announces how many caveats there are. The compat
-	// shim's Stack does not forward `as`, so the semantics are set on plain elements here.
+	// Two is the most a reader will actually take in before the band becomes wallpaper. Beyond that
+	// the rest collapse behind a count, because a stack of seven identical amber cards above the
+	// data trains people to skip the one that mattered — and every caveat here is emitted on every
+	// panel, relevant or not, so the stack is routinely long.
+	const alwaysShown = notices.slice(0, 2)
+	const hidden = notices.slice(2)
+
+	const item = (notice: string) => (
+		<li key={notice}>
+			<Card padding={3} radius={2} tone="caution" border>
+				{/* Laid out with real CSS rather than the UI kit's Flex and its `gap` token. When
+				    the compat shim cannot resolve Flex it renders a plain div, and a token number
+				    means nothing to CSS — so the badge and the text landed on top of each other
+				    and the notice read "Caveasubscribe is counted…". */}
+				<div style={noticeRow}>
+					<span style={noticeBadge}>
+						<Badge tone="caution" fontSize={0}>Caveat</Badge>
+					</span>
+					<Text size={1}>{notice}</Text>
+				</div>
+			</Card>
+		</li>
+	)
+
 	return (
-		<ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 }}>
-			{notices.map((notice) => (
-				<li key={notice}>
-					<Card padding={3} radius={2} tone="caution" border>
-						{/* Laid out with real CSS rather than the UI kit's Flex and its `gap` token.
-						    When the compat shim cannot resolve Flex it renders a plain div, and a
-						    token number means nothing to CSS — so the badge and the text landed on
-						    top of each other and the notice read "Caveasubscribe is counted…".
-						    Explicit styles survive that fallback. */}
-						<div style={noticeRow}>
-							<span style={noticeBadge}>
-								<Badge tone="caution" fontSize={0}>Caveat</Badge>
-							</span>
-							<Text size={1}>{notice}</Text>
-						</div>
-					</Card>
-				</li>
-			))}
-		</ul>
+		<Stack space={2}>
+			{/* A real list element, so a screen reader announces how many caveats there are. */}
+			<ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 }}>
+				{alwaysShown.map(item)}
+				{expanded && hidden.map(item)}
+			</ul>
+
+			{hidden.length > 0 && (
+				<button
+					type="button"
+					style={disclosure}
+					onClick={() => setExpanded((open) => !open)}
+					aria-expanded={expanded}
+				>
+					{expanded
+						? 'Show fewer caveats'
+						: `${hidden.length} more ${hidden.length === 1 ? 'caveat' : 'caveats'}`}
+				</button>
+			)}
+		</Stack>
 	)
 }
 
@@ -449,4 +491,184 @@ export function TrendChart({ points, label = 'Daily pageviews, GA4 against Verce
 			</div>
 		</Stack>
 	)
+}
+
+/** One column of a sortable table. */
+export interface SortColumn<Row> {
+	/** Stable key, also used as the sort key. */
+	key: string
+	label: string
+	/** Right-aligned and sorted high-to-low first, the way a reader expects of a figure. */
+	numeric?: boolean
+	/**
+	 * Value to sort on. Return null for "no value" — those always sort last regardless of
+	 * direction, because an unmeasured row is not a small one and must not lead an ascending sort.
+	 */
+	sortValue: (row: Row) => number | string | null
+	render: (row: Row) => React.ReactNode
+}
+
+/** Props for SortableTable. */
+export interface SortableTableProps<Row> {
+	caption: string
+	columns: Array<SortColumn<Row>>
+	rows: Row[]
+	rowKey: (row: Row) => string
+	/** Column sorted on first load. Defaults to the server's own ordering. */
+	initialSort?: string
+}
+
+/**
+ * A table whose columns sort.
+ *
+ * Both data tables arrived in one server-chosen order — sessions descending, views descending — so
+ * the only question they could answer was the one that order encoded. Sorting by any column turns
+ * the same rows into several different questions: which family is tested most relative to views,
+ * which source is least attributed, which typeface sells without being looked at.
+ *
+ * Rows with no value for the active column sort last in both directions. That is deliberate: an
+ * unavailable metric is not a zero, and letting it lead an ascending sort would restate exactly the
+ * confusion the MetricValue type exists to prevent.
+ */
+export function SortableTable<Row>({ caption, columns, rows, rowKey, initialSort }: SortableTableProps<Row>): React.ReactElement {
+	const [sort, setSort] = React.useState<{ key: string; desc: boolean } | null>(
+		initialSort ? { key: initialSort, desc: true } : null,
+	)
+
+	const active = sort ? columns.find((c) => c.key === sort.key) : undefined
+
+	const ordered = React.useMemo(() => {
+		if (!active || !sort) return rows
+		const copy = [...rows]
+		copy.sort((a, b) => {
+			const av = active.sortValue(a)
+			const bv = active.sortValue(b)
+			// Missing values sink, whichever way the column is pointing.
+			if (av === null && bv === null) return 0
+			if (av === null) return 1
+			if (bv === null) return -1
+			const cmp = typeof av === 'number' && typeof bv === 'number'
+				? av - bv
+				: String(av).localeCompare(String(bv))
+			return sort.desc ? -cmp : cmp
+		})
+		return copy
+	}, [rows, active, sort])
+
+	const toggle = (column: SortColumn<Row>) => {
+		setSort((current) => {
+			if (current?.key !== column.key) return { key: column.key, desc: Boolean(column.numeric) }
+			return { key: column.key, desc: !current.desc }
+		})
+	}
+
+	return (
+		<Card radius={2} tone="transparent" border style={tableWrapper}>
+			<table style={tableBase}>
+				<caption style={visuallyHidden}>{caption}</caption>
+				<thead>
+					<tr>
+						{columns.map((column) => {
+							const isActive = sort?.key === column.key
+							return (
+								<th
+									key={column.key}
+									scope="col"
+									style={column.numeric ? headCellNumeric : headCell}
+									aria-sort={isActive ? (sort?.desc ? 'descending' : 'ascending') : 'none'}
+								>
+									<button type="button" style={sortButton(Boolean(column.numeric))} onClick={() => toggle(column)}>
+										{column.label}
+										{/* An arrow, not colour alone, so the sorted column is legible
+										    to anyone. A dot marks the unsorted columns as sortable. */}
+										<span aria-hidden="true" style={sortMark}>
+											{isActive ? (sort?.desc ? '▼' : '▲') : '↕'}
+										</span>
+									</button>
+								</th>
+							)
+						})}
+					</tr>
+				</thead>
+				<tbody>
+					{ordered.map((row) => (
+						<tr key={rowKey(row)}>
+							{columns.map((column, index) => {
+								const content = column.render(row)
+								return index === 0 ? (
+									<th key={column.key} scope="row" style={bodyCell}>{content}</th>
+								) : (
+									<td key={column.key} style={column.numeric ? bodyCellNumeric : bodyCell}>{content}</td>
+								)
+							})}
+						</tr>
+					))}
+				</tbody>
+			</table>
+		</Card>
+	)
+}
+
+/** Table scrolls inside its own container, so the panel never scrolls sideways. */
+const tableWrapper: React.CSSProperties = { overflowX: 'auto', width: '100%' }
+
+/** Base table geometry. */
+const tableBase: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', minWidth: 420 }
+
+/** Header cell: sticky-feeling separation from the body without a heavy rule. */
+const headCell: React.CSSProperties = {
+	padding: 0,
+	textAlign: 'left',
+	borderBottom: '1px solid var(--card-border-color, rgba(128,128,128,0.3))',
+	whiteSpace: 'nowrap',
+}
+
+const headCellNumeric: React.CSSProperties = { ...headCell, textAlign: 'right' }
+
+const bodyCell: React.CSSProperties = {
+	padding: '8px 12px',
+	textAlign: 'left',
+	fontWeight: 400,
+	borderBottom: '1px solid var(--card-border-color, rgba(128,128,128,0.18))',
+}
+
+const bodyCellNumeric: React.CSSProperties = {
+	...bodyCell,
+	textAlign: 'right',
+	fontVariantNumeric: 'tabular-nums',
+}
+
+/** The whole header cell is the control, so the hit area matches what looks clickable. */
+function sortButton(numeric: boolean): React.CSSProperties {
+	return {
+		appearance: 'none',
+		background: 'transparent',
+		border: 'none',
+		color: 'inherit',
+		font: 'inherit',
+		fontSize: '0.78em',
+		letterSpacing: '0.06em',
+		textTransform: 'uppercase',
+		opacity: 0.7,
+		padding: '8px 12px',
+		width: '100%',
+		display: 'flex',
+		gap: 6,
+		alignItems: 'center',
+		justifyContent: numeric ? 'flex-end' : 'flex-start',
+		cursor: 'pointer',
+	}
+}
+
+/** Sort indicator. */
+const sortMark: React.CSSProperties = { opacity: 0.7, fontSize: '0.9em' }
+
+/** Present to screen readers, absent visually — the caption names the table without repeating the heading. */
+const visuallyHidden: React.CSSProperties = {
+	position: 'absolute',
+	width: 1,
+	height: 1,
+	overflow: 'hidden',
+	clip: 'rect(0 0 0 0)',
+	whiteSpace: 'nowrap',
 }
