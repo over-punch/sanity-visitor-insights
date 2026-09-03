@@ -45,6 +45,16 @@ export interface MeasurementHealthData {
 	/** Vercel pageviews — cookieless, not consent-gated. */
 	vercelPageviews: MetricValue
 	/**
+	 * Distinct visitors per Vercel — the only visitor figure here that consent refusal and
+	 * ad-blocking cannot reduce, because it is counted server-side.
+	 */
+	vercelVisitors: MetricValue
+	/**
+	 * True when Vercel bucketed this range weekly or monthly, so the trend shows GA4 alone.
+	 * The chart still renders; the panel says which line is missing and why.
+	 */
+	vercelDailyUnavailable: boolean
+	/**
 	 * Vercel minus GA4 pageviews, as a share of Vercel. Positive means GA4 saw less.
 	 * Null when either side is unavailable — never computed against a missing operand.
 	 */
@@ -89,7 +99,15 @@ export interface SourceRow {
 	source: string
 	/** GA4 `sessionDefaultChannelGroup`, e.g. Organic Search. */
 	channel: string
+	/** GA4 `sessionMedium`, e.g. `cpc` or `organic`. Null when GA4 reported none. */
+	medium: string | null
+	/** Campaign name, or null for organic and direct traffic where GA4 returns a placeholder. */
+	campaign: string | null
 	sessions: number
+	/** Sessions GA4 counted as engaged, or null when unavailable. */
+	engagedSessions: number | null
+	/** Engaged over total — the quality signal that stops Display ranking equal to Search. */
+	engagementRate: number | null
 	/** True when this source is one of the design-industry referrers. */
 	designIndustry: boolean
 	/** True for GA4's `(not set)` / `(direct)` style buckets, which are not real sources. */
@@ -132,8 +150,28 @@ export interface JourneyStep {
 
 /** One landing page and the sessions that began on it. */
 export interface LandingPage {
+	/** Path including the query string, so a paid landing page is distinguishable from its twin. */
 	path: string
 	sessions: number
+	/** Sessions GA4 counted as engaged, or null when unavailable. */
+	engagedSessions: number | null
+	/** Engaged over total, or null when there is nothing to divide. */
+	engagementRate: number | null
+}
+
+/**
+ * A successful outcome that is not a licence sale.
+ *
+ * Kept beside the funnel rather than inside it: an enquiry is an alternative ending, not a later
+ * stage, and slotting it into the sequence would imply a visitor passes through it on the way to
+ * a purchase.
+ */
+export interface JourneyOutcome {
+	key: string
+	label: string
+	/** Why this outcome matters, shown beneath the figure. */
+	note: string
+	count: MetricValue
 }
 
 /** How far visitors get. Per-step totals, never an observed path. */
@@ -144,6 +182,8 @@ export interface JourneyData {
 	 * `topExitPages` queried a metric GA4 has never had and was permanently empty.
 	 */
 	topLandingPages: LandingPage[]
+	/** Conversions that are not a sale — enquiries, subscribes, trial downloads. */
+	outcomes: JourneyOutcome[]
 	/**
 	 * How the step figures were obtained.
 	 *
@@ -169,8 +209,19 @@ export interface TypefaceInterestRow {
 	viewed: MetricValue
 	tested: MetricValue
 	bought: MetricValue
+	/**
+	 * Revenue attributed to this family, apportioned evenly across the families on each order.
+	 * Unavailable when the site names no order total field.
+	 */
+	revenue: MetricValue
 	/** Tested divided by viewed. Null unless both are real numbers. */
 	testRate: number | null
+	/**
+	 * Orders over distinct viewers. The ratio a foundry acts on: it sorts the catalogue into
+	 * families that are looked at and do not sell, which is where a pricing or specimen-page
+	 * problem shows up. Null when either side is unavailable.
+	 */
+	buyRate: number | null
 }
 
 /** Viewed, tested and bought, by family. */
@@ -180,4 +231,10 @@ export interface TypefaceInterestData {
 	interpretationNote: string
 	/** True when GA4 withheld low-count rows, so quiet families may be missing entirely. */
 	rowsWithheld: boolean
+	/** GA4's row cap was reached, so families past it are missing rather than idle. */
+	rowsTruncated: boolean
+	/** Whether the revenue column is an apportionment rather than a measured per-family value. */
+	revenueIsApportioned: boolean
+	/** ISO 4217 code for the revenue column, or null when revenue is unavailable. */
+	currency: string | null
 }

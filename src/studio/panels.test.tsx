@@ -32,7 +32,7 @@ vi.mock('sanity', () => ({
 	definePlugin: (definition: unknown) => definition,
 }))
 import visitorInsights from '../index'
-import { MetricFigure, NoticeList, TrendChart } from './Figure'
+import { Delta, MetricFigure, NoticeList, SortableTable, TrendChart } from './Figure'
 import { ok, partial, unavailable } from '../types'
 import { UI } from '@liiift-studio/sanity-ui-compat'
 
@@ -105,6 +105,7 @@ describe('MeasurementHealthPanel', () => {
 				data={{
 					ga4Pageviews: ok(33486), vercelPageviews: ok(33597), shortfallRatio: 0.0033,
 					ga4Sessions: ok(22781), orders: ok(64), consentRate: ok(78.4),
+					vercelVisitors: ok(21400), vercelDailyUnavailable: false,
 					interpretation: 'Sources agree.', daily: [],
 				}}
 			/>,
@@ -119,6 +120,7 @@ describe('MeasurementHealthPanel', () => {
 				data={{
 					ga4Pageviews: unavailable('source_error'), vercelPageviews: ok(2620), shortfallRatio: null,
 					ga4Sessions: unavailable('source_error'), orders: ok(12), consentRate: unavailable('source_error'),
+					vercelVisitors: ok(1730), vercelDailyUnavailable: false,
 					daily: [],
 			interpretation: 'Only one pageview source answered.',
 				}}
@@ -141,7 +143,8 @@ describe('JourneyPanel', () => {
 			{ key: 'began_checkout', label: 'Began checkout', event: 'begin_checkout', count: unavailable('outage', 'not recorded 2025-11-20 onwards'), conversionFromPrevious: null },
 			{ key: 'purchased', label: 'Purchased', event: 'purchase', count: partial(64, '2026-08-30', 'Undercounted: outage'), conversionFromPrevious: 0.035 },
 		],
-		topLandingPages: [{ path: '/', sessions: 8940 }],
+		topLandingPages: [{ path: '/', sessions: 8940, engagedSessions: 6100, engagementRate: 0.682 }],
+		outcomes: [],
 		measurement: 'independent-totals' as const,
 	}
 
@@ -241,8 +244,8 @@ describe('AcquisitionPanel', () => {
 				data={{
 					totalSessions: 1000, designIndustryShare: 0.3, unattributedShare: 0.1, rowsWithheld: true, rowsTruncated: false,
 					rows: [
-						{ source: 'fontsinuse.com', channel: 'Referral', sessions: 300, designIndustry: true, unattributed: false },
-						{ source: '(not set)', channel: 'Unassigned', sessions: 100, designIndustry: false, unattributed: true },
+						{ source: 'fontsinuse.com', channel: 'Referral', medium: null, campaign: null, sessions: 300, engagedSessions: null, engagementRate: null, designIndustry: true, unattributed: false },
+						{ source: '(not set)', channel: 'Unassigned', medium: null, campaign: null, sessions: 100, engagedSessions: null, engagementRate: null, designIndustry: false, unattributed: true },
 					],
 				}}
 			/>,
@@ -261,8 +264,8 @@ describe('AcquisitionPanel', () => {
 					totalSessions: 1000, designIndustryShare: 0.3, unattributedShare: 0.1,
 					rowsWithheld: false, rowsTruncated: false,
 					rows: [
-						{ source: 'fontsinuse.com', channel: 'Referral', sessions: 300, designIndustry: true, unattributed: false },
-						{ source: '(direct)', channel: 'Direct', sessions: 100, designIndustry: false, unattributed: true },
+						{ source: 'fontsinuse.com', channel: 'Referral', medium: null, campaign: null, sessions: 300, engagedSessions: null, engagementRate: null, designIndustry: true, unattributed: false },
+						{ source: '(direct)', channel: 'Direct', medium: null, campaign: null, sessions: 100, engagedSessions: null, engagementRate: null, designIndustry: false, unattributed: true },
 					],
 				}}
 			/>,
@@ -282,7 +285,7 @@ describe('AcquisitionPanel', () => {
 					totalSessions: 400, designIndustryShare: null, unattributedShare: null,
 					rowsWithheld: false, rowsTruncated: false,
 					rows: [
-						{ source: 'fontsinuse.com', channel: 'Referral', sessions: 300, designIndustry: true, unattributed: false },
+						{ source: 'fontsinuse.com', channel: 'Referral', medium: null, campaign: null, sessions: 300, engagedSessions: null, engagementRate: null, designIndustry: true, unattributed: false },
 					],
 				}}
 			/>,
@@ -298,11 +301,11 @@ describe('TypefaceInterestPanel', () => {
 		const html = render(
 			<TypefaceInterestPanel
 				data={{
-					rowsWithheld: false,
+					rowsWithheld: false, rowsTruncated: false, revenueIsApportioned: true, currency: 'USD',
 					interpretationNote: 'Aggregate interest per family, not individual journeys.',
 					rows: [
-						{ typeface: 'Omnes', viewed: ok(3792), tested: ok(910), bought: ok(21), testRate: 0.24 },
-						{ typeface: 'Gamay', viewed: ok(1040), tested: unavailable('not_instrumented'), bought: unavailable('not_applicable'), testRate: null },
+						{ typeface: 'Omnes', viewed: ok(3792), tested: ok(910), bought: ok(21), revenue: ok(6300), buyRate: 0.0055, testRate: 0.24 },
+						{ typeface: 'Gamay', viewed: ok(1040), tested: unavailable('not_instrumented'), bought: unavailable('not_applicable'), revenue: unavailable('not_applicable'), buyRate: null, testRate: null },
 					],
 				}}
 			/>,
@@ -545,6 +548,7 @@ describe('panels tolerate an older route response', () => {
 		const legacy = {
 			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
 			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+					vercelVisitors: ok(1580), vercelDailyUnavailable: false,
 			interpretation: 'Sources differ.',
 		} as never
 
@@ -602,6 +606,7 @@ describe('layout does not depend on design tokens resolving', () => {
 				data={{
 					ga4Pageviews: ok(543), vercelPageviews: ok(2392), shortfallRatio: 0.773,
 					ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+					vercelVisitors: ok(1580), vercelDailyUnavailable: false,
 					interpretation: 'Sources differ.', daily: [],
 				}}
 			/>,
@@ -682,5 +687,99 @@ describe('DiagnosticsPanel tolerates a missing checks array', () => {
 	it('says nothing was verified rather than implying everything passed', () => {
 		const legacy = { verdict: 'pass', checks: [] } as never
 		expect(render(<DiagnosticsPanel data={legacy} />)).toContain('No checks ran')
+	})
+})
+
+describe('Delta', () => {
+	it('renders nothing when there is no comparison', () => {
+		// An absent delta must never draw as "no change" — that is a different and much more
+		// reassuring claim than "we could not compare". Rendered directly rather than through the
+		// helper, which asserts non-empty output; empty is the whole point here.
+		expect(renderToStaticMarkup(<Delta current={100} previous={null} />)).toBe('')
+		expect(renderToStaticMarkup(<Delta current={null} previous={100} />)).toBe('')
+	})
+
+	it('states a rise and names the baseline it is measured against', () => {
+		const html = render(<Delta current={120} previous={100} />)
+		expect(html).toContain('+20%')
+		expect(html).toContain('Previous period: 100')
+	})
+
+	it('says "no change" only when the values genuinely match', () => {
+		expect(render(<Delta current={100} previous={100} />)).toContain('no change')
+	})
+
+	it('says "new" rather than an infinite percentage when the baseline was zero', () => {
+		const html = render(<Delta current={12} previous={0} />)
+		expect(html).toContain('new')
+		expect(html).not.toContain('Infinity')
+		expect(html).not.toContain('NaN')
+	})
+
+	it('reports a percentage figure in points, not as a percentage of a percentage', () => {
+		// A consent rate moving 40% to 44% rose by 4 points. Calling that "+10%" is a different
+		// and confusing claim about a figure that is already a percentage.
+		const html = render(<Delta current={44} previous={40} unit="percent" />)
+		expect(html).toContain('4.0 pts')
+		expect(html).not.toContain('10%')
+	})
+
+	it('carries direction in the arrow and the words, not colour alone', () => {
+		const down = render(<Delta current={80} previous={100} />)
+		expect(down).toContain('↓')
+		expect(down).toContain('-20%')
+	})
+})
+
+describe('SortableTable interaction', () => {
+	const rows = [
+		{ name: 'impactsport.ca', sessions: 68 },
+		{ name: 'typewolf.com', sessions: 12 },
+	]
+
+	const columns = [
+		{ key: 'name', label: 'Source', sortValue: (r: typeof rows[0]) => r.name, render: (r: typeof rows[0]) => <span>{r.name}</span> },
+		{ key: 'sessions', label: 'Sessions', numeric: true, sortValue: (r: typeof rows[0]) => r.sessions, render: (r: typeof rows[0]) => <span>{r.sessions}</span> },
+	]
+
+	it('renders a filter box and an export control only when asked', () => {
+		const bare = render(<SortableTable caption="c" columns={columns} rows={rows} rowKey={(r) => r.name} />)
+		expect(bare).not.toContain('Copy as CSV')
+		expect(bare).not.toContain('type="search"')
+
+		const full = render(
+			<SortableTable
+				caption="c"
+				columns={columns}
+				rows={rows}
+				rowKey={(r) => r.name}
+				filterOn={(r) => r.name}
+				exportName="sources"
+			/>,
+		)
+		expect(full).toContain('Copy as CSV')
+		expect(full).toContain('search')
+	})
+
+	it('offers a per-row exclude control when filtering is enabled', () => {
+		// The fix for a contaminated table is to take the bad row out and see what the rest looks
+		// like. Sorting alone could not do that.
+		const html = render(
+			<SortableTable caption="c" columns={columns} rows={rows} rowKey={(r) => r.name} filterOn={(r) => r.name} />,
+		)
+		expect(html).toContain('Exclude impactsport.ca')
+	})
+
+	it('shows the truncation note when the server said the list is incomplete', () => {
+		const html = render(
+			<SortableTable
+				caption="c"
+				columns={columns}
+				rows={rows}
+				rowKey={(r) => r.name}
+				truncatedNote="This is the top of a longer list."
+			/>,
+		)
+		expect(html).toContain('This is the top of a longer list.')
 	})
 })

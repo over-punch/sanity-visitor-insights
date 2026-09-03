@@ -18,7 +18,7 @@ import { PREEXISTING } from '../core/cutover'
 import { shiftDays, formatInTimeZone } from '../core/ranges'
 import { eventNameFilter, sumFirstMetric, type Ga4Client } from './ga4'
 import type { VercelClient } from './vercel'
-import { countOrders, type SanityQueryClient } from './orders'
+import { countOrders, orderQueryOptions, type SanityQueryClient } from './orders'
 
 /** Inputs for a diagnostic run. */
 export interface DiagnosticsInput {
@@ -30,12 +30,26 @@ export interface DiagnosticsInput {
 	now?: Date
 }
 
-/** Severity ordering, worst last. */
-const SEVERITY: CheckStatus[] = ['pass', 'skipped', 'warn', 'fail']
+/**
+ * Severity ordering, worst last.
+ *
+ * `skipped` sits BELOW `pass` deliberately. It used to sit above it, which made the overall verdict
+ * `skipped` whenever any single check could not run — and checks skip routinely: no Vercel project,
+ * no purchases in the window, no orders in thirty days. A healthy site was therefore told
+ * "0 failing, 0 worth a look. Panels depending on these will be wrong or incomplete", which is both
+ * alarming and self-contradictory. A check that did not run is not evidence of a problem.
+ */
+const SEVERITY: CheckStatus[] = ['skipped', 'pass', 'warn', 'fail']
 
 /** Reduce a set of checks to the worst status present. */
 function worst(checks: DiagnosticCheck[]): CheckStatus {
-	return checks.reduce<CheckStatus>((acc, check) => (SEVERITY.indexOf(check.status) > SEVERITY.indexOf(acc) ? check.status : acc), 'pass')
+	// Seeded with the lowest severity so an all-skipped run reports `skipped` rather than a `pass`
+	// it never earned.
+	if (checks.length === 0) return 'skipped'
+	return checks.reduce<CheckStatus>(
+		(acc, check) => (SEVERITY.indexOf(check.status) > SEVERITY.indexOf(acc) ? check.status : acc),
+		'skipped',
+	)
 }
 
 /**
@@ -287,7 +301,10 @@ export async function runDiagnostics(input: DiagnosticsInput): Promise<Diagnosti
 					dateRanges: [{ startDate: start, endDate: today }],
 					dimensionFilter: eventNameFilter('purchase'),
 				}),
-				countOrders(sanity, config.orders.documentType, start, today, config.orders.excludeFilter),
+				countOrders(
+					sanity,
+					orderQueryOptions(config.orders, { start, end: today, timezone: config.ga4?.timezone ?? 'UTC' }),
+				),
 			])
 
 			const tracked = sumFirstMetric(ga4Purchases)

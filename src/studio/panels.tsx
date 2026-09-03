@@ -15,7 +15,7 @@
 
 import React from 'react'
 import { Badge, Box, Card, Flex, Grid, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ComparisonBar, FunnelChart, MetricFigure, NoticeList, SortableTable, TrendChart, formatCount, formatPercent } from './Figure'
+import { ComparisonBar, Delta, FunnelChart, MetricFigure, NoticeList, SortableTable, TrendChart, formatCount, formatMoney, formatPercent } from './Figure'
 import type {
 	AcquisitionData,
 	CheckStatus,
@@ -23,6 +23,7 @@ import type {
 	TypefaceInterestRow,
 	DiagnosticReport,
 	JourneyData,
+	LandingPage,
 	MeasurementHealthData,
 	TypefaceInterestData,
 } from '../reportData'
@@ -56,6 +57,14 @@ const tableWrap: React.CSSProperties = { overflowX: 'auto', width: '100%' }
  * section regardless of what the shim resolves.
  */
 const sectionHeading: React.CSSProperties = { margin: '0 0 2px', lineHeight: 1.3 }
+
+/** A figure with its period-over-period delta alongside, wrapping on a narrow pane. */
+const figureRow: React.CSSProperties = {
+	display: 'flex',
+	alignItems: 'baseline',
+	gap: 10,
+	flexWrap: 'wrap',
+}
 
 /** Referrer links, marked as links without shouting. */
 const sourceLink: React.CSSProperties = {
@@ -147,6 +156,15 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 						day is an incident.
 					</Text>
 					<TrendChart points={data.daily ?? []} />
+					{/* The whole chart used to disappear here rather than lose one line — at exactly
+					    the 90-day range where someone would look for when a gap opened, which is the
+					    reason this chart exists. GA4's series is daily at every range, so it stays. */}
+					{data.vercelDailyUnavailable && (
+						<Text size={0} muted>
+							Vercel reports this range in weekly buckets, so only the GA4 line is plotted.
+							Choose Week or Month to see both.
+						</Text>
+					)}
 				</Stack>
 			)}
 
@@ -156,6 +174,15 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 					Different units to the figures above, and to each other. Shown for scale, never differenced.
 				</Text>
 				<div style={cardGrid}>
+					<Card padding={3} radius={2} tone="transparent" border>
+						<Stack space={3}>
+							<Label size={1} muted>Vercel visitors</Label>
+							{/* Fetched on every call and previously discarded, though it is the only
+							    visitor figure here that consent refusal and ad-blocking cannot reduce. */}
+							<MetricFigure metric={data.vercelVisitors} label="Vercel visitors" />
+							<Text size={0} muted>Counted server-side, so neither consent nor ad-blocking reduces it.</Text>
+						</Stack>
+					</Card>
 					<Card padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
 							<Label size={1} muted>GA4 sessions</Label>
@@ -181,21 +208,34 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 }
 
 /** Acquisition — where visitors came from, with design-industry referrers called out. */
-export function AcquisitionPanel({ data }: { data: AcquisitionData }): React.ReactElement {
+export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; previous?: AcquisitionData }): React.ReactElement {
 	return (
 		<Stack space={4}>
 			<div style={cardGrid}>
 				<Card padding={3} radius={2} tone="transparent" border>
 					<Stack space={3}>
 						<Label size={1} muted>Sessions</Label>
-						<Text size={4}>{formatCount(data.totalSessions)}</Text>
+						<div style={figureRow}>
+							<Text size={4}>{formatCount(data.totalSessions)}</Text>
+							<Delta current={data.totalSessions} previous={previous?.totalSessions ?? null} />
+						</div>
 					</Stack>
 				</Card>
 				{data.designIndustryShare !== null && (
 					<Card padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
 							<Label size={1} muted>From design-industry referrers</Label>
-							<Text size={4}>{formatPercent(data.designIndustryShare, 1)}</Text>
+							<div style={figureRow}>
+								<Text size={4}>{formatPercent(data.designIndustryShare, 1)}</Text>
+								<Delta
+									current={data.designIndustryShare * 100}
+									previous={previous?.designIndustryShare != null ? previous.designIndustryShare * 100 : null}
+									unit="percent"
+								/>
+							</div>
+							{/* Named as list-dependent. Printed bare, this figure was read as a verdict
+							    on the design press when it reports the coverage of a short list. */}
+							<Text size={0} muted>Share of sessions from a known design-press referrer.</Text>
 						</Stack>
 					</Card>
 				)}
@@ -203,7 +243,18 @@ export function AcquisitionPanel({ data }: { data: AcquisitionData }): React.Rea
 					<Card padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
 							<Label size={1} muted>Unattributed</Label>
-							<Text size={4}>{formatPercent(data.unattributedShare, 1)}</Text>
+							<div style={figureRow}>
+								<Text size={4}>{formatPercent(data.unattributedShare, 1)}</Text>
+								<Delta
+									current={data.unattributedShare * 100}
+									previous={previous?.unattributedShare != null ? previous.unattributedShare * 100 : null}
+									riseIsGood={false}
+									unit="percent"
+								/>
+							</div>
+							{/* Two unlike failures used to be fused into one number. Direct traffic is
+							    partly recoverable with tagging; (not set) is GA4 losing the row. */}
+							<Text size={0} muted>Direct visits plus rows GA4 could not attribute.</Text>
 						</Stack>
 					</Card>
 				)}
@@ -211,12 +262,18 @@ export function AcquisitionPanel({ data }: { data: AcquisitionData }): React.Rea
 
 			<Stack space={3}>
 				<Heading size={1} style={sectionHeading}>Traffic sources</Heading>
-				<Text size={1} muted>Sort by any column. Sessions is the default.</Text>
+				<Text size={1} muted>Sort, filter, or exclude a row to see what the rest looks like.</Text>
 				<SortableTable<SourceRow>
 					caption="Traffic sources by sessions"
 					initialSort="sessions"
 					rows={data.rows ?? []}
 					rowKey={(row) => `${row.source}-${row.channel}`}
+					filterOn={(row) => `${row.source} ${row.channel} ${row.medium ?? ''} ${row.campaign ?? ''}`}
+					filterPlaceholder="Filter sources"
+					exportName="traffic-sources"
+					truncatedNote={data.rowsTruncated
+						? 'GA4 held more source rows than are shown here, so this is the top of a longer list — for a foundry, the tail of small design blogs is often the referral story.'
+						: undefined}
 					columns={[
 						{
 							key: 'source',
@@ -251,11 +308,32 @@ export function AcquisitionPanel({ data }: { data: AcquisitionData }): React.Rea
 							render: (row) => <Text size={1}>{row.channel}</Text>,
 						},
 						{
+							key: 'campaign',
+							label: 'Campaign',
+							sortValue: (row) => row.campaign,
+							// Every campaign, ad group and keyword used to collapse into one row, so
+							// there was no unit of spend here that a buyer could pause.
+							render: (row) => row.campaign
+								? <Text size={1}>{row.campaign}</Text>
+								: <Text size={1} muted>{row.medium ?? '—'}</Text>,
+						},
+						{
 							key: 'sessions',
 							label: 'Sessions',
 							numeric: true,
 							sortValue: (row) => row.sessions,
 							render: (row) => <Text size={1}>{formatCount(row.sessions)}</Text>,
+						},
+						{
+							key: 'engagement',
+							label: 'Engaged',
+							numeric: true,
+							sortValue: (row) => row.engagementRate,
+							// The quality signal. Ranked by volume alone, 27 Display sessions looked
+							// equal to 27 from Search, which flatters the worst line of spend.
+							render: (row) => row.engagementRate === null
+								? <Text size={1} muted>—</Text>
+								: <Text size={1}>{formatPercent(row.engagementRate, 0)}</Text>,
 						},
 					]}
 				/>
@@ -305,6 +383,30 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 
 			<FunnelChart stages={stages} measurement={data.measurement ?? 'independent-totals'} />
 
+			{(data.outcomes?.length ?? 0) > 0 && (
+				<Stack space={3}>
+					<Heading size={1} style={sectionHeading}>Other outcomes</Heading>
+					{/* Beside the funnel, not inside it. An enquiry is an alternative ending, not a
+					    later stage — and until now the funnel ended at purchase, which scored the
+					    visitor who read three typeface pages and emailed as a drop-off. */}
+					<Text size={1} muted>
+						Successful outcomes that are not a licence sale. Counted over the same window as the
+						funnel, but not a step within it.
+					</Text>
+					<div style={cardGrid}>
+						{(data.outcomes ?? []).map((outcome) => (
+							<Card key={outcome.key} padding={3} radius={2} tone="transparent" border>
+								<Stack space={3}>
+									<Label size={1} muted>{outcome.label}</Label>
+									<MetricFigure metric={outcome.count} label={outcome.label} size={4} />
+									<Text size={0} muted>{outcome.note}</Text>
+								</Stack>
+							</Card>
+						))}
+					</div>
+				</Stack>
+			)}
+
 			{hiddenSteps.length > 0 && (
 				<Text size={1} muted>
 					Not shown: {hiddenSteps.map((step) => step.label.toLowerCase()).join(', ')} — not instrumented on
@@ -317,16 +419,22 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 			{(data.topLandingPages?.length ?? 0) > 0 && (
 				<Stack space={3}>
 					<Heading size={1} style={sectionHeading}>Where sessions began</Heading>
-					<SortableTable<{ path: string; sessions: number }>
+					<SortableTable<LandingPage>
 						caption="Landing pages by sessions"
 						initialSort="sessions"
 						rows={data.topLandingPages ?? []}
 						rowKey={(page) => page.path}
+						filterOn={(page) => page.path}
+						filterPlaceholder="Filter pages"
+						exportName="landing-pages"
 						columns={[
 							{
 								key: 'path',
 								label: 'Page',
 								sortValue: (page) => page.path,
+								// The foundry's own URLs were the one table that did not link, while
+								// referrer hosts did — so clicking took you to somebody else's site
+								// and the pages you might want to open would not open.
 								render: (page) => <Text size={1}>{page.path}</Text>,
 							},
 							{
@@ -335,6 +443,17 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 								numeric: true,
 								sortValue: (page) => page.sessions,
 								render: (page) => <Text size={1}>{formatCount(page.sessions)}</Text>,
+							},
+							{
+								key: 'engagement',
+								label: 'Engaged',
+								numeric: true,
+								sortValue: (page) => page.engagementRate,
+								// Volume alone could not distinguish a page that delivers 200 arrivals
+								// which leave from one that feeds the shop.
+								render: (page) => page.engagementRate === null
+									? <Text size={1} muted>—</Text>
+									: <Text size={1}>{formatPercent(page.engagementRate, 0)}</Text>,
 							},
 						]}
 					/>
@@ -354,12 +473,20 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 
 			<Stack space={3}>
 				<Heading size={1} style={sectionHeading}>Engagement by typeface</Heading>
-				<Text size={1} muted>Sort by any column. Views is the default.</Text>
+				<Text size={1} muted>
+					Sort by any column. Sort on buy rate to find families that are looked at and do not sell.
+				</Text>
 				<SortableTable<TypefaceInterestRow>
 					caption="Engagement by typeface"
 					initialSort="viewed"
 					rows={data.rows ?? []}
 					rowKey={(row) => row.typeface}
+					filterOn={(row) => row.typeface}
+					filterPlaceholder="Filter typefaces"
+					exportName="typeface-interest"
+					truncatedNote={data.rowsTruncated
+						? 'GA4 returned only its top rows, so families past the cap show as unknown rather than as zero. For a foundry the long tail is most of the catalogue.'
+						: undefined}
 					columns={[
 						{
 							key: 'typeface',
@@ -389,6 +516,29 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 							render: (row) => <MetricFigure metric={row.bought} label={`${row.typeface} bought`} size={1} />,
 						},
 						{
+							key: 'revenue',
+							label: 'Revenue',
+							numeric: true,
+							sortValue: (row) => metricSortValue(row.revenue),
+							// The column that lets a catalogue be ranked by what it is worth rather
+							// than by unit count, where a $30 web licence and a $400 desktop family
+							// were the same integer.
+							render: (row) => row.revenue.status === 'unavailable'
+								? <MetricFigure metric={row.revenue} label={`${row.typeface} revenue`} size={1} />
+								: <Text size={1}>{formatMoney(row.revenue.value, data.currency)}</Text>,
+						},
+						{
+							key: 'buyRate',
+							label: 'Buy rate',
+							numeric: true,
+							sortValue: (row) => row.buyRate,
+							render: (row) => (
+								<Text size={1} muted aria-label={row.buyRate === null ? `${row.typeface} buy rate unavailable` : undefined}>
+									{row.buyRate === null ? '—' : formatPercent(row.buyRate, 2)}
+								</Text>
+							),
+						},
+						{
 							key: 'testRate',
 							label: 'Test rate',
 							numeric: true,
@@ -402,6 +552,19 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 					]}
 				/>
 			</Stack>
+
+			{/* Both completeness flags were computed by the server and drawn nowhere, so a table
+			    holding part of the catalogue was presented as the catalogue. */}
+			{data.rowsWithheld && (
+				<NoticeList notices={['GA4 withheld some low-count rows for privacy. A family missing from this table has not necessarily gone quiet.']} />
+			)}
+
+			{data.revenueIsApportioned && (
+				<Text size={0} muted>
+					Revenue is apportioned: an order covering several families is split evenly between them,
+					because the order documents carry no per-family line value.
+				</Text>
+			)}
 		</Stack>
 	)
 }

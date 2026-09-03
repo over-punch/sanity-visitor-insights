@@ -34,6 +34,104 @@ export function formatPercent(ratio: number, digits = 0): string {
 }
 
 /** Props for MetricFigure. */
+/** Format a money value in the site's currency, falling back to a plain number. */
+export function formatMoney(value: number, currency: string | null): string {
+	if (!currency) return formatCount(Math.round(value))
+	try {
+		return new Intl.NumberFormat(undefined, {
+			style: 'currency',
+			currency,
+			maximumFractionDigits: value >= 1000 ? 0 : 2,
+		}).format(value)
+	} catch {
+		// An unrecognised ISO code must not blank the figure.
+		return `${formatCount(Math.round(value))} ${currency}`
+	}
+}
+
+/** Props for Delta. */
+export interface DeltaProps {
+	/** This period's value, or null when it could not be measured. */
+	current: number | null
+	/** The previous equivalent period's value, or null when there is no comparison. */
+	previous: number | null
+	/**
+	 * Whether a rise is good. Sessions and revenue: yes. A shortfall or a bounce figure: no.
+	 * Drives only the wording and the tone, never whether the number is shown.
+	 */
+	riseIsGood?: boolean
+	/** Render as a percentage-point change rather than a percentage change of a percentage. */
+	unit?: 'count' | 'percent'
+}
+
+/**
+ * A period-over-period change.
+ *
+ * Every figure in this tool used to be a bare level, which at these volumes is close to
+ * meaningless: "389 sessions" is neither good nor bad without last week beside it, and the
+ * 24 August collapse would have announced itself on every panel as a delta while going unnoticed
+ * for over a week as a level.
+ *
+ * Renders nothing at all when there is no comparison — an absent delta must never be drawn as
+ * "no change", which is a different and much more reassuring claim.
+ */
+export function Delta({ current, previous, riseIsGood = true, unit = 'count' }: DeltaProps): React.ReactElement | null {
+	if (current === null || previous === null) return null
+
+	// A change from zero has no defined percentage. Saying "new" is honest where "+100%" is not,
+	// and "+∞%" is what a naive division produces.
+	const isNew = previous === 0 && current > 0
+	const change = previous === 0 ? null : (current - previous) / Math.abs(previous)
+	const absolute = current - previous
+
+	if (!isNew && absolute === 0) {
+		return <span style={deltaStyle('flat')}>no change</span>
+	}
+
+	const rising = absolute > 0
+	const tone = rising === riseIsGood ? 'good' : 'bad'
+	const arrow = rising ? '\u2191' : '\u2193'
+
+	const magnitude = isNew
+		? 'new'
+		: unit === 'percent'
+			// Percentage points, not a percentage of a percentage: a consent rate moving 40% → 44%
+			// rose by 4 points, and calling that "+10%" is a different and confusing claim.
+			? `${rising ? '+' : ''}${(absolute).toFixed(1)} pts`
+			: `${rising ? '+' : ''}${formatPercent(change as number, 0)}`
+
+	return (
+		<span style={deltaStyle(tone)} title={`Previous period: ${formatCount(previous)}`}>
+			<span aria-hidden="true">{arrow}</span>
+			{' '}
+			{magnitude}
+			<span style={visuallyHidden}>
+				{' '}compared with {formatCount(previous)} in the previous period
+			</span>
+		</span>
+	)
+}
+
+/**
+ * Delta styling. Direction is carried by the arrow and the words as well as the colour, so the
+ * meaning survives a monochrome or colour-blind reading.
+ */
+function deltaStyle(tone: 'good' | 'bad' | 'flat'): React.CSSProperties {
+	const colors: Record<string, string> = {
+		good: 'var(--card-fg-color, currentColor)',
+		bad: 'var(--card-fg-color, currentColor)',
+		flat: 'currentColor',
+	}
+	return {
+		fontFamily: 'inherit',
+		fontSize: '0.8em',
+		fontWeight: 500,
+		opacity: tone === 'flat' ? 0.55 : 0.85,
+		color: colors[tone],
+		whiteSpace: 'nowrap',
+	}
+}
+
 export interface MetricFigureProps {
 	metric: MetricValue
 	/** Accessible label describing what this number counts. */
@@ -677,6 +775,19 @@ export interface SortableTableProps<Row> {
 	rowKey: (row: Row) => string
 	/** Column sorted on first load. Defaults to the server's own ordering. */
 	initialSort?: string
+	/**
+	 * The text a row is matched against when filtering. Omit to render no filter box.
+	 *
+	 * Sorting was the tool's entire interaction budget, which meant a reader who spotted an
+	 * unrelated site's traffic in the table had no way to take it out and see what was left.
+	 */
+	filterOn?: (row: Row) => string
+	/** Placeholder for the filter box, naming what is searched. */
+	filterPlaceholder?: string
+	/** Base filename for the CSV export. Omit to render no export control. */
+	exportName?: string
+	/** Shown under the table when the server truncated the row set. */
+	truncatedNote?: string
 }
 
 /**
@@ -691,14 +802,38 @@ export interface SortableTableProps<Row> {
  * unavailable metric is not a zero, and letting it lead an ascending sort would restate exactly the
  * confusion the MetricValue type exists to prevent.
  */
-export function SortableTable<Row>({ caption, columns, rows, rowKey, initialSort }: SortableTableProps<Row>): React.ReactElement {
+export function SortableTable<Row>({
+	caption,
+	columns,
+	rows,
+	rowKey,
+	initialSort,
+	filterPlaceholder,
+	filterOn,
+	exportName,
+	truncatedNote,
+}: SortableTableProps<Row>): React.ReactElement {
 	const [sort, setSort] = React.useState<{ key: string; desc: boolean } | null>(
 		initialSort ? { key: initialSort, desc: true } : null,
 	)
+	const [query, setQuery] = React.useState('')
+	const [excluded, setExcluded] = React.useState<ReadonlySet<string>>(() => new Set())
+	const [copied, setCopied] = React.useState(false)
 
 	const active = sort ? columns.find((c) => c.key === sort.key) : undefined
 
+	// Filtering and exclusion both happen before sorting, so the ranking is of what is shown.
+	const visible = React.useMemo(() => {
+		const needle = query.trim().toLowerCase()
+		return rows.filter((row) => {
+			if (excluded.has(rowKey(row))) return false
+			if (!needle || !filterOn) return true
+			return filterOn(row).toLowerCase().includes(needle)
+		})
+	}, [rows, query, excluded, filterOn, rowKey])
+
 	const ordered = React.useMemo(() => {
+		const rows = visible
 		if (!active || !sort) return rows
 		const copy = [...rows]
 		copy.sort((a, b) => {
@@ -714,7 +849,7 @@ export function SortableTable<Row>({ caption, columns, rows, rowKey, initialSort
 			return sort.desc ? -cmp : cmp
 		})
 		return copy
-	}, [rows, active, sort])
+	}, [visible, active, sort])
 
 	const toggle = (column: SortColumn<Row>) => {
 		setSort((current) => {
@@ -723,7 +858,72 @@ export function SortableTable<Row>({ caption, columns, rows, rowKey, initialSort
 		})
 	}
 
+	/**
+	 * Copy the visible rows to the clipboard as CSV.
+	 *
+	 * Clipboard rather than a download: the artifact viewer and the Studio both sandbox
+	 * script-initiated downloads, and "paste into the email you were already writing" is the actual
+	 * task. Exports what is on screen — filtered, sorted, minus exclusions — because a copy that
+	 * silently differs from the table above it is worse than none.
+	 */
+	const copyCsv = async () => {
+		const header = columns.map((column) => column.label)
+		const lines = [header, ...ordered.map((row) => columns.map((column) => {
+			const value = column.sortValue(row)
+			return value === null ? '' : String(value)
+		}))]
+		const csv = lines
+			.map((cells) => cells.map((cell) => (/[",\n]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell)).join(','))
+			.join('\n')
+
+		try {
+			await navigator.clipboard.writeText(csv)
+			setCopied(true)
+			window.setTimeout(() => setCopied(false), 2000)
+		} catch {
+			// Clipboard permission can be refused; say so rather than appearing to succeed.
+			setCopied(false)
+		}
+	}
+
+	const hiddenCount = rows.length - visible.length
+
 	return (
+		<Stack space={2}>
+			{(filterOn || exportName) && (
+				<div style={tableControls}>
+					{filterOn && (
+						<input
+							type="search"
+							value={query}
+							placeholder={filterPlaceholder ?? 'Filter rows'}
+							aria-label={filterPlaceholder ?? 'Filter rows'}
+							style={filterInput}
+							onChange={(e) => setQuery(e.currentTarget.value)}
+						/>
+					)}
+					{hiddenCount > 0 && (
+						<Text size={0} muted>
+							{hiddenCount} row{hiddenCount === 1 ? '' : 's'} hidden
+							{excluded.size > 0 && (
+								<>
+									{' · '}
+									<button type="button" style={inlineLink} onClick={() => setExcluded(new Set())}>
+										restore excluded
+									</button>
+								</>
+							)}
+						</Text>
+					)}
+					<span style={{ flex: 1 }} />
+					{exportName && (
+						<button type="button" style={tableControlButton} onClick={() => void copyCsv()}>
+							{copied ? 'Copied' : 'Copy as CSV'}
+						</button>
+					)}
+				</div>
+			)}
+
 		<Card radius={2} tone="transparent" border style={tableWrapper}>
 			<table style={tableBase}>
 				<caption style={visuallyHidden}>{caption}</caption>
@@ -752,22 +952,125 @@ export function SortableTable<Row>({ caption, columns, rows, rowKey, initialSort
 					</tr>
 				</thead>
 				<tbody>
-					{ordered.map((row) => (
-						<tr key={rowKey(row)}>
-							{columns.map((column, index) => {
-								const content = column.render(row)
-								return index === 0 ? (
-									<th key={column.key} scope="row" style={bodyCell}>{content}</th>
-								) : (
-									<td key={column.key} style={column.numeric ? bodyCellNumeric : bodyCell}>{content}</td>
-								)
-							})}
+					{ordered.map((row) => {
+						const key = rowKey(row)
+						return (
+							<tr key={key}>
+								{columns.map((column, index) => {
+									const content = column.render(row)
+									return index === 0 ? (
+										<th key={column.key} scope="row" style={bodyCell}>
+											<span style={firstCell}>
+												{content}
+												{filterOn && (
+													// Per-row exclusion, because the fix for a contaminated
+													// table is to take the bad row out and see what the
+													// rest looks like. Rendered on every row rather than
+													// on hover so it is reachable by keyboard and touch.
+													<button
+														type="button"
+														style={excludeButton}
+														aria-label={`Exclude ${key}`}
+														title={`Exclude ${key} from this table`}
+														onClick={() => setExcluded((current) => new Set(current).add(key))}
+													>
+														×
+													</button>
+												)}
+											</span>
+										</th>
+									) : (
+										<td key={column.key} style={column.numeric ? bodyCellNumeric : bodyCell}>{content}</td>
+									)
+								})}
+							</tr>
+						)
+					})}
+					{ordered.length === 0 && (
+						<tr>
+							<td colSpan={columns.length} style={bodyCell}>
+								<Text size={1} muted>No rows match this filter.</Text>
+							</td>
 						</tr>
-					))}
+					)}
 				</tbody>
 			</table>
 		</Card>
+
+		{truncatedNote && <Text size={0} muted>{truncatedNote}</Text>}
+		</Stack>
 	)
+}
+
+/** The controls above a table: filter, hidden-row count, export. */
+const tableControls: React.CSSProperties = {
+	display: 'flex',
+	alignItems: 'center',
+	gap: 10,
+	flexWrap: 'wrap',
+}
+
+/** The filter box. */
+const filterInput: React.CSSProperties = {
+	font: 'inherit',
+	fontSize: '0.85em',
+	padding: '4px 8px',
+	borderRadius: 3,
+	border: '1px solid var(--card-border-color, rgba(128,128,128,0.3))',
+	background: 'transparent',
+	color: 'inherit',
+	minWidth: 160,
+}
+
+/** A control sitting alongside a table, e.g. the CSV copy. */
+const tableControlButton: React.CSSProperties = {
+	appearance: 'none',
+	background: 'transparent',
+	border: '1px solid var(--card-border-color, rgba(128,128,128,0.3))',
+	borderRadius: 3,
+	color: 'inherit',
+	font: 'inherit',
+	fontSize: '0.8em',
+	padding: '4px 9px',
+	cursor: 'pointer',
+	whiteSpace: 'nowrap',
+}
+
+/** An inline text button inside a muted line. */
+const inlineLink: React.CSSProperties = {
+	appearance: 'none',
+	background: 'transparent',
+	border: 'none',
+	color: 'inherit',
+	font: 'inherit',
+	fontSize: 'inherit',
+	padding: 0,
+	textDecoration: 'underline',
+	textUnderlineOffset: 2,
+	cursor: 'pointer',
+}
+
+/** First cell layout: content, with the exclude control pushed to its right. */
+const firstCell: React.CSSProperties = {
+	display: 'flex',
+	alignItems: 'center',
+	justifyContent: 'space-between',
+	gap: 8,
+}
+
+/** The per-row exclude control. Quiet until focused or hovered. */
+const excludeButton: React.CSSProperties = {
+	appearance: 'none',
+	background: 'transparent',
+	border: 'none',
+	color: 'inherit',
+	font: 'inherit',
+	fontSize: '1.05em',
+	lineHeight: 1,
+	opacity: 0.35,
+	padding: '0 2px',
+	cursor: 'pointer',
+	flex: '0 0 auto',
 }
 
 /** Table scrolls inside its own container, so the panel never scrolls sideways. */

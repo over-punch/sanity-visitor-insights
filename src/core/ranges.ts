@@ -26,6 +26,65 @@ export function formatInTimeZone(date: Date, timeZone: string): string {
 	return `${get('year')}-${get('month')}-${get('day')}`
 }
 
+/**
+ * How far the given instant's wall clock in `timeZone` sits from UTC, in milliseconds.
+ *
+ * @param date - the instant to measure at; the offset changes across DST boundaries
+ */
+function zoneOffsetMs(date: Date, timeZone: string): number {
+	const parts = new Intl.DateTimeFormat('en-CA', {
+		timeZone,
+		hourCycle: 'h23',
+		year: 'numeric',
+		month: '2-digit',
+		day: '2-digit',
+		hour: '2-digit',
+		minute: '2-digit',
+		second: '2-digit',
+	}).formatToParts(date)
+
+	const get = (type: string) => Number(parts.find((p) => p.type === type)?.value)
+	const asIfUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'))
+	return asIfUtc - date.getTime()
+}
+
+/**
+ * The UTC instant at which a calendar day begins in a timezone.
+ *
+ * Orders are stored as UTC `_createdAt`, and every range in this tool is a set of calendar dates in
+ * the GA4 property's timezone. Bounding an order query with a bare `${date}T00:00:00Z` therefore
+ * asks for a different window than the one GA4 was asked for — seven or eight hours out for a
+ * US-Pacific property. At a handful of orders a day that is a visible swing in a figure the panel
+ * presents as exact, and it always moved orders in one direction, never both.
+ *
+ * @param isoDate - `YYYY-MM-DD` in `timeZone`
+ * @param timeZone - IANA timezone
+ * @returns an ISO 8601 instant in UTC
+ */
+export function zonedDayStartUtc(isoDate: string, timeZone: string): string {
+	const naive = Date.parse(`${isoDate}T00:00:00Z`)
+	if (Number.isNaN(naive)) throw new Error(`Invalid ISO date: ${isoDate}`)
+
+	// Two passes: the first guess can land on the wrong side of a DST transition, in which case its
+	// offset is the wrong one to subtract. Re-measuring at the corrected instant settles it.
+	let instant = naive - zoneOffsetMs(new Date(naive), timeZone)
+	instant = naive - zoneOffsetMs(new Date(instant), timeZone)
+	return new Date(instant).toISOString()
+}
+
+/**
+ * The UTC instant at which a calendar day ends in a timezone, exclusive.
+ *
+ * Exclusive rather than 23:59:59 so the last second of the day cannot be dropped, and so a day
+ * that is 23 or 25 hours long across a DST change is still bounded correctly.
+ *
+ * @param isoDate - `YYYY-MM-DD` in `timeZone`
+ * @param timeZone - IANA timezone
+ */
+export function zonedDayEndUtc(isoDate: string, timeZone: string): string {
+	return zonedDayStartUtc(shiftDays(isoDate, 1), timeZone)
+}
+
 /** Shift an ISO `YYYY-MM-DD` date by a whole number of days. */
 export function shiftDays(isoDate: string, days: number): string {
 	const time = Date.parse(`${isoDate}T00:00:00Z`)

@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 import { PREEXISTING, applyCoverage, coverageForRange, coverageNotices, type EventCutover } from './cutover'
 import { RANGE_DAYS, daysBetween, formatInTimeZone, previousRange, provisionalNotice, resolveCustomRange, resolveRange, shiftDays } from './ranges'
 import { validateSiteConfig } from './siteConfig'
+import { zonedDayEndUtc, zonedDayStartUtc } from './ranges'
 import { ENV_VARS, isEnabled } from '../server/createHandler'
 import { valueOrNull } from '../types'
 
@@ -353,5 +354,76 @@ describe('the master switch', () => {
 
 	it('names the variable it reads, so all three sites can be configured alike', () => {
 		expect(ENV_VARS.enabled).toBe('VISITOR_INSIGHTS_ENABLED')
+	})
+})
+
+describe('zoned day boundaries', () => {
+	it('resolves a day start to the right UTC instant in a western zone', () => {
+		// Pacific daylight time is UTC-7, so 20 August begins at 07:00Z.
+		expect(zonedDayStartUtc('2026-08-20', 'America/Los_Angeles')).toBe('2026-08-20T07:00:00.000Z')
+	})
+
+	it('resolves a day start in an eastern zone', () => {
+		// Tokyo is UTC+9 year round, so the day begins the previous afternoon in UTC.
+		expect(zonedDayStartUtc('2026-08-20', 'Asia/Tokyo')).toBe('2026-08-19T15:00:00.000Z')
+	})
+
+	it('is the identity for UTC', () => {
+		expect(zonedDayStartUtc('2026-08-20', 'UTC')).toBe('2026-08-20T00:00:00.000Z')
+	})
+
+	it('ends a day at the start of the next, exclusive', () => {
+		// Exclusive so the last second cannot be dropped, and so a 23- or 25-hour DST day is still
+		// bounded correctly — which a hard-coded 23:59:59 cannot do.
+		expect(zonedDayEndUtc('2026-08-26', 'UTC')).toBe('2026-08-27T00:00:00.000Z')
+	})
+
+	it('handles the spring-forward day, which is only 23 hours long', () => {
+		// US DST began 8 March 2026. The day starts at UTC-8 and ends at UTC-7.
+		expect(zonedDayStartUtc('2026-03-08', 'America/Los_Angeles')).toBe('2026-03-08T08:00:00.000Z')
+		expect(zonedDayEndUtc('2026-03-08', 'America/Los_Angeles')).toBe('2026-03-09T07:00:00.000Z')
+	})
+
+	it('handles the autumn fall-back day, which is 25 hours long', () => {
+		// US DST ended 1 November 2026.
+		expect(zonedDayStartUtc('2026-11-01', 'America/Los_Angeles')).toBe('2026-11-01T07:00:00.000Z')
+		expect(zonedDayEndUtc('2026-11-01', 'America/Los_Angeles')).toBe('2026-11-02T08:00:00.000Z')
+	})
+})
+
+describe('config validation additions', () => {
+	const base = {
+		siteId: 'test',
+		label: 'Test',
+		vercel: null,
+		orders: { documentType: 'order', typefacesField: null },
+		eventCutovers: {},
+	}
+
+	it('rejects a hostname written as a URL', () => {
+		// A scheme or path here silently matches nothing, because GA4's hostName is the bare host —
+		// so the whole tool would report zero rather than fail.
+		const problems = validateSiteConfig({
+			...base,
+			ga4: { propertyId: '123', timezone: 'UTC', hostnames: ['https://www.dardenstudio.com'] },
+		})
+		expect(problems.some((p) => p.field === 'ga4.hostnames')).toBe(true)
+	})
+
+	it('accepts bare hostnames', () => {
+		const problems = validateSiteConfig({
+			...base,
+			ga4: { propertyId: '123', timezone: 'UTC', hostnames: ['www.dardenstudio.com', 'dardenstudio.com'] },
+		})
+		expect(problems).toEqual([])
+	})
+
+	it('rejects an empty status allow-list, which would exclude every order', () => {
+		const problems = validateSiteConfig({
+			...base,
+			ga4: null,
+			orders: { documentType: 'order', typefacesField: null, countedStatuses: [] },
+		})
+		expect(problems.some((p) => p.field === 'orders.countedStatuses')).toBe(true)
 	})
 })

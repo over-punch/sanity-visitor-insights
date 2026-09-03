@@ -444,8 +444,17 @@ function ReportPanel({
 					<SourceStatusRow sources={state.envelope.sources} />
 					<NoticeList notices={state.envelope.notices} />
 
+					{state.envelope.comparison && (
+						// The baseline is named. A delta whose comparison window is not stated invites
+						// the reader to assume a calendar period, when these are trailing windows.
+						<Text size={0} muted>
+							Changes are against {state.envelope.comparison.range.start} to {state.envelope.comparison.range.end},
+							the equivalent window immediately before this one.
+						</Text>
+					)}
+
 					{report === 'measurement-health' && <MeasurementHealthPanel data={state.envelope.data as never} />}
-					{report === 'acquisition' && <AcquisitionPanel data={state.envelope.data as never} />}
+					{report === 'acquisition' && <AcquisitionPanel data={state.envelope.data as never} previous={state.envelope.comparison?.data as never} />}
 					{report === 'journey' && <JourneyPanel data={state.envelope.data as never} />}
 					{report === 'typeface-interest' && <TypefaceInterestPanel data={state.envelope.data as never} />}
 					{report === 'diagnostics' && <DiagnosticsPanel data={state.envelope.data as never} />}

@@ -22,7 +22,7 @@ import {
 } from '../types'
 import { assertValidSiteConfig, type SiteAnalyticsConfig } from '../core/siteConfig'
 import { coverageNotices } from '../core/cutover'
-import { resolveCustomRange, resolveRange, provisionalNotice } from '../core/ranges'
+import { previousRange, resolveCustomRange, resolveRange, provisionalNotice } from '../core/ranges'
 import { applyCors, requireStudioUser, type HandlerRequest, type HandlerResponse } from './auth'
 import { createGa4Client, type Ga4Client } from './ga4'
 import { createVercelClient, type VercelClient } from './vercel'
@@ -174,7 +174,7 @@ export function createVisitorInsightsHandler(options: HandlerOptions) {
 		} else if (!serviceAccount) {
 			sources.ga4 = { status: 'error', message: 'Service account missing or unparseable' }
 		} else {
-			ga4 = createGa4Client(config.ga4.propertyId, serviceAccount)
+			ga4 = createGa4Client(config.ga4.propertyId, serviceAccount, { hostnames: config.ga4.hostnames })
 			sources.ga4 = { status: 'ok' }
 		}
 
@@ -204,9 +204,34 @@ export function createVisitorInsightsHandler(options: HandlerOptions) {
 				// Site-declared quirks accompany every report, not just the one they came from.
 				notices.push(...(config.caveats ?? []))
 
-				const data = await runReport(reportName, { config, range, ga4, vercel, sanity, notices })
+				// The comparison window runs concurrently, so it costs quota but almost no latency.
+				// Its notices are discarded on purpose: they describe the previous window, and
+				// mixing them into this one's caveat list would attribute a cutover or a sampling
+				// warning to the wrong period.
+				const priorRange = previousRange(range)
+				const [data, priorResult] = await Promise.all([
+					runReport(reportName, { config, range, ga4, vercel, sanity, notices }),
+					// Diagnostics describes the present configuration; there is no previous version
+					// of it to compare against, so it is the one report that skips this.
+					reportName === 'diagnostics'
+						? Promise.resolve(null)
+						: runReport(reportName, { config, range: priorRange, ga4, vercel, sanity, notices: [] })
+							.catch((e) => {
+								// A failed comparison must not fail the report. Absent reads as
+								// "no comparison available", which is true, rather than "no change".
+								console.warn(`Visitor insights: comparison window failed for "${reportName}":`, (e as Error).message)
+								return null
+							}),
+				])
 
-				return { report: reportName, range, sources, notices, data }
+				return {
+					report: reportName,
+					range,
+					sources,
+					notices,
+					data,
+					...(priorResult !== null ? { comparison: { range: priorRange, data: priorResult } } : {}),
+				}
 			})
 
 			res.status(200).json(envelope)
@@ -238,7 +263,7 @@ async function runReport(report: string, ctx: RunContext): Promise<unknown> {
 
 		case 'acquisition':
 			if (!ga4) throw new Error('GA4 is required for the acquisition report')
-			return acquisition(ga4, range, 25, notices)
+			return acquisition({ config, range, ga4, notices })
 
 		case 'journey': {
 			if (!ga4) throw new Error('GA4 is required for the journey report')

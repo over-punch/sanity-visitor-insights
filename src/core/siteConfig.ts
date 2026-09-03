@@ -15,6 +15,19 @@ export interface Ga4Config {
 	propertyId: string
 	/** IANA timezone the property is configured with. Every range is anchored to this. */
 	timezone: string
+	/**
+	 * Hostnames belonging to this site. When set, every GA4 report is restricted to them.
+	 *
+	 * This exists because a GA4 property is not necessarily one website. Darden's property also
+	 * receives `impactsport.ca`, an unrelated business, which contributed 68 of 389 sessions in a
+	 * sample week — inside the headline session count, inside both percentages computed from it,
+	 * and inside the funnel's entry rung. Without this, the tool silently reports two businesses
+	 * added together and calls the total one site.
+	 *
+	 * Staging and legacy hosts belong here too, or are deliberately left out to exclude them.
+	 * Omit entirely to accept every hostname, which is the old behaviour.
+	 */
+	hostnames?: readonly string[]
 }
 
 /** Vercel Web Analytics connection for one site. */
@@ -37,6 +50,35 @@ export interface OrdersConfig {
 	 * Merch inflates a family's apparent purchase count if not excluded.
 	 */
 	excludeFilter?: string
+	/**
+	 * Field holding the order's status. Defaults to `orderStatus`.
+	 *
+	 * The status is always read and always reported as a breakdown, even when nothing is filtered
+	 * on it — an operator cannot configure `countedStatuses` without first seeing what vocabulary
+	 * their own orders actually use.
+	 */
+	statusField?: string
+	/**
+	 * Statuses that count as a real sale. Orders with any other status are excluded from every
+	 * figure and reported separately as an excluded count.
+	 *
+	 * Omit to count every order regardless of status, which is the old behaviour and means test,
+	 * failed, pending and refunded orders are all counted as sales. At seven orders a quarter one
+	 * test order is a 14% error, so leaving this unset is rarely right once the vocabulary is known.
+	 */
+	countedStatuses?: readonly string[]
+	/**
+	 * Field holding the order's total, e.g. `total` or `amountPaid`. A number, in major units.
+	 *
+	 * Revenue was originally excluded from this package on the grounds that it reports behaviour
+	 * and the sales portal reports sales. That was the wrong line: an order total is not a customer
+	 * field, and without it a $30 web licence and a $400 multi-seat desktop licence are the same
+	 * integer — so nothing in the tool can be ranked by what it is worth. The PII rule is unchanged
+	 * and still enforced by the projection allow-list; only the value crosses over.
+	 */
+	totalField?: string
+	/** ISO 4217 code for `totalField`, e.g. `USD`. Used for formatting only. */
+	currency?: string
 }
 
 /**
@@ -53,6 +95,19 @@ export interface EventNameMap {
 	tester?: string[]
 	/** Events fired when a visitor grants analytics consent. */
 	consent?: string[]
+	/**
+	 * Events fired when a visitor submits a custom-typeface or licensing enquiry.
+	 *
+	 * A commission is worth many multiples of a licence, so an enquiry is the most valuable action
+	 * on these sites. Darden has fired `enquiry_submit` throughout and no report read it, which
+	 * meant the tool gave the $30 path six funnel rungs and the four-figure path none — and scored
+	 * the enquiry-led visitor as a drop-off.
+	 */
+	enquiry?: string[]
+	/** Events fired when a visitor joins the mailing list — the only audience a foundry owns. */
+	subscribe?: string[]
+	/** Events fired when a visitor downloads a trial font or a specimen PDF. */
+	assetDownload?: string[]
 }
 
 /** One site's complete description of itself. */
@@ -86,6 +141,15 @@ export interface SiteAnalyticsConfig {
 	 * the only honest option; silently comparing them is not.
 	 */
 	caveats?: string[]
+	/**
+	 * Extra referrer hosts that count as design-industry coverage for this site.
+	 *
+	 * The package ships a short default list, which is necessarily generic and goes stale. A
+	 * foundry's own press — a particular newsletter, a studio blog, a regional design publication —
+	 * cannot be in it, and the resulting figure was being read as a verdict on the design press
+	 * rather than as the coverage of a hard-coded list. Entries here are added to the defaults.
+	 */
+	designIndustrySources?: readonly string[]
 
 	/**
 	 * Studio roles allowed to read these reports, enforced server-side.
@@ -144,6 +208,21 @@ export function validateSiteConfig(config: Partial<SiteAnalyticsConfig> | undefi
 		} else if (!isValidTimeZone(timezone)) {
 			problems.push({ field: 'ga4.timezone', message: `Not a recognised IANA timezone: ${timezone}` })
 		}
+	}
+
+	for (const host of config.ga4?.hostnames ?? []) {
+		// A scheme or a path here would silently match nothing: GA4's hostName dimension is the
+		// bare host. Catching it at construction beats an empty dashboard.
+		if (/^https?:\/\//.test(host) || host.includes('/')) {
+			problems.push({ field: 'ga4.hostnames', message: `Must be a bare hostname, not a URL: ${host}` })
+		}
+	}
+
+	if (config.orders?.countedStatuses && config.orders.countedStatuses.length === 0) {
+		problems.push({
+			field: 'orders.countedStatuses',
+			message: 'Empty array would exclude every order. Omit the field to count all statuses.',
+		})
 	}
 
 	if (config.vercel && !config.vercel.projectId) {

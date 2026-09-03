@@ -224,13 +224,63 @@ export interface Ga4Client {
 	runFunnelReport(steps: readonly Ga4FunnelStep[], range: { startDate: string; endDate: string }): Promise<Ga4FunnelReport>
 }
 
+/** Options narrowing what a client will report on. */
+export interface Ga4ClientOptions {
+	/**
+	 * Restrict every report to these hostnames.
+	 *
+	 * Applied here rather than at each call site on purpose. A GA4 property is not necessarily one
+	 * website — Darden's also receives an unrelated business — and a filter that each report has to
+	 * remember is a filter some report will forget. Forgetting it does not fail; it silently adds
+	 * two businesses together and calls the total one site.
+	 */
+	hostnames?: readonly string[]
+}
+
+/**
+ * A dimension filter restricting a report to a set of hostnames.
+ *
+ * @param hostnames - bare hosts, e.g. `www.dardenstudio.com`
+ */
+export function hostnameFilter(hostnames: readonly string[]): unknown {
+	return {
+		filter: {
+			fieldName: 'hostName',
+			inListFilter: { values: [...hostnames] },
+		},
+	}
+}
+
+/**
+ * Combine dimension filters with AND, dropping the ones that are absent.
+ *
+ * Returns undefined rather than an empty group when nothing is left, because GA4 rejects an
+ * andGroup with no expressions.
+ */
+export function andFilters(...filters: Array<unknown | undefined>): unknown | undefined {
+	const present = filters.filter((f) => f !== undefined && f !== null)
+	if (present.length === 0) return undefined
+	if (present.length === 1) return present[0]
+	return { andGroup: { expressions: present } }
+}
+
 /**
  * Build a GA4 client for one property.
  *
  * @param propertyId - numeric GA4 property id
  * @param key - service-account key with Viewer on that property
+ * @param options - client-wide narrowing applied to every request
  */
-export function createGa4Client(propertyId: string, key: ServiceAccountKey): Ga4Client {
+export function createGa4Client(propertyId: string, key: ServiceAccountKey, options: Ga4ClientOptions = {}): Ga4Client {
+	const hosts = options.hostnames && options.hostnames.length > 0 ? options.hostnames : null
+	const hostFilter = hosts ? hostnameFilter(hosts) : undefined
+
+	/** AND the client's hostname filter into a request's own filter, if there is one of each. */
+	function narrow(request: Ga4ReportRequest): Ga4ReportRequest {
+		if (!hostFilter) return request
+		return { ...request, dimensionFilter: andFilters(request.dimensionFilter, hostFilter) }
+	}
+
 	async function post<T>(path: string, body: unknown, base: string = DATA_API_BASE): Promise<T> {
 		const token = await getAccessToken(key)
 
@@ -253,7 +303,7 @@ export function createGa4Client(propertyId: string, key: ServiceAccountKey): Ga4
 
 	return {
 		async runReport(request) {
-			const raw = await post<RawReport>('runReport', request)
+			const raw = await post<RawReport>('runReport', narrow(request))
 			return parseReport(raw)
 		},
 
@@ -264,19 +314,25 @@ export function createGa4Client(propertyId: string, key: ServiceAccountKey): Ga4
 		async batchRunReports(requests) {
 			if (requests.length === 0) return []
 
-			const raw = await post<{ reports?: RawReport[] }>('batchRunReports', { requests })
+			const raw = await post<{ reports?: RawReport[] }>('batchRunReports', { requests: requests.map(narrow) })
 			return (raw.reports ?? []).map(parseReport)
 		},
 
 		async runFunnelReport(steps, range) {
+			// RunFunnelReportRequest takes only dateRanges, funnel and funnelBreakdown — there is no
+			// top-level dimension filter to hang the hostname on. A step's filterExpression does
+			// accept a funnelFieldFilter though, so the host is ANDed into every step instead.
+			const hostStepFilter = hosts
+				? { funnelFieldFilter: { fieldName: 'hostName', inListFilter: { values: [...hosts] } } }
+				: null
+
 			const body = {
 				dateRanges: [range],
 				funnel: {
-					steps: steps.map((step) => ({
-						name: step.name,
+					steps: steps.map((step) => {
 						// One event satisfies the step directly; several go in an orGroup, which is
 						// how GA4 expresses "any of these" — TDF maps five tester events onto one rung.
-						filterExpression: step.eventNames.length === 1
+						const eventExpression = step.eventNames.length === 1
 							? { funnelEventFilter: { eventName: step.eventNames[0] } }
 							: {
 								orGroup: {
@@ -284,8 +340,15 @@ export function createGa4Client(propertyId: string, key: ServiceAccountKey): Ga4
 										funnelEventFilter: { eventName },
 									})),
 								},
-							},
-					})),
+							}
+
+						return {
+							name: step.name,
+							filterExpression: hostStepFilter
+								? { andGroup: { expressions: [eventExpression, hostStepFilter] } }
+								: eventExpression,
+						}
+					}),
 				},
 			}
 

@@ -14,6 +14,7 @@
 import type { AcquisitionData, SourceRow } from '../../reportData'
 import type { DateRange } from '../../types'
 import { sumFirstMetric, type Ga4Client } from '../ga4'
+import type { SiteAnalyticsConfig } from '../../core/siteConfig'
 
 /** Referrer hosts that identify a design-industry source worth tracking separately. */
 export const DESIGN_INDUSTRY_SOURCES = [
@@ -35,22 +36,58 @@ function isUnattributed(source: string): boolean {
 }
 
 /** Whether a GA4 source value matches a design-industry referrer. */
-function isDesignIndustry(source: string): boolean {
+/**
+ * Normalise GA4's campaign placeholder into an absent value.
+ *
+ * GA4 returns the literal string `(not set)` for organic and direct traffic, which is not a
+ * campaign and must not be rendered as one.
+ */
+function campaignName(raw: string | undefined): string | null {
+	if (!raw) return null
+	const trimmed = raw.trim()
+	return trimmed === '' || trimmed === '(not set)' || trimmed === '(direct)' ? null : trimmed
+}
+
+function isDesignIndustry(source: string, extra: readonly string[] = []): boolean {
 	const normalised = source.toLowerCase()
-	return DESIGN_INDUSTRY_SOURCES.some((known) => normalised === known || normalised.endsWith(`.${known}`))
+	// The shipped list is generic and goes stale — a foundry's own press is a particular newsletter
+	// or a regional publication that cannot be in a package constant. Without the per-site addition,
+	// this figure reported the coverage of a hard-coded list while reading as a verdict on the
+	// design press.
+	const known = [...DESIGN_INDUSTRY_SOURCES, ...extra.map((host) => host.toLowerCase())]
+	return known.some((host) => normalised === host || normalised.endsWith(`.${host}`))
+}
+
+/** Inputs for the acquisition report. */
+export interface AcquisitionInput {
+	config: SiteAnalyticsConfig
+	range: DateRange
+	ga4: Ga4Client
+	/** Maximum source rows to return. */
+	limit?: number
+	notices?: string[]
 }
 
 /**
  * Run the acquisition report.
  *
- * @param ga4 - client for the site's property
- * @param range - the requested range
- * @param limit - maximum source rows to return
+ * @param input - the site config, range and GA4 client
  */
-export async function acquisition(ga4: Ga4Client, range: DateRange, limit = 25, notices?: string[]): Promise<AcquisitionData> {
+export async function acquisition(input: AcquisitionInput): Promise<AcquisitionData> {
+	const { config, range, ga4, notices } = input
+	const limit = input.limit ?? 25
+
 	const report = await ga4.runReport({
-		dimensions: [{ name: 'sessionSource' }, { name: 'sessionDefaultChannelGroup' }],
-		metrics: [{ name: 'sessions' }],
+		// Campaign and medium alongside source. Without them every campaign, ad group and keyword
+		// collapsed into one "google / Paid Search" row, so there was no unit of spend in this tool
+		// that a buyer could pause.
+		dimensions: [
+			{ name: 'sessionSource' },
+			{ name: 'sessionDefaultChannelGroup' },
+			{ name: 'sessionMedium' },
+			{ name: 'sessionCampaignName' },
+		],
+		metrics: [{ name: 'sessions' }, { name: 'engagedSessions' }],
 		dateRanges: [{ startDate: range.start, endDate: range.end }],
 		orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
 		limit,
@@ -68,12 +105,19 @@ export async function acquisition(ga4: Ga4Client, range: DateRange, limit = 25, 
 	const rows: SourceRow[] = report.rows.map((row) => {
 		const source = row.dimensions[0] ?? '(not set)'
 		const sessions = row.metrics[0]
+		const engaged = row.metrics[1]
+		const sessionCount = Number.isFinite(sessions) ? (sessions as number) : 0
+		const engagedCount = Number.isFinite(engaged) ? (engaged as number) : null
 
 		return {
 			source,
 			channel: row.dimensions[1] ?? 'Unassigned',
-			sessions: Number.isFinite(sessions) ? (sessions as number) : 0,
-			designIndustry: isDesignIndustry(source),
+			medium: row.dimensions[2] || null,
+			campaign: campaignName(row.dimensions[3]),
+			sessions: sessionCount,
+			engagedSessions: engagedCount,
+			engagementRate: engagedCount !== null && sessionCount > 0 ? engagedCount / sessionCount : null,
+			designIndustry: isDesignIndustry(source, config.designIndustrySources),
 			unattributed: isUnattributed(source),
 		}
 	})

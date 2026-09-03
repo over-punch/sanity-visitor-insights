@@ -22,6 +22,9 @@ import {
 	makeVercelPageviews,
 } from '../../testing/fakes'
 import { hasRequiredRole } from '../auth'
+import { countOrders, countOrdersByTypeface, orderQueryOptions } from '../orders'
+import { andFilters, hostnameFilter } from '../ga4'
+import { zonedDayEndUtc, zonedDayStartUtc } from '../../core/ranges'
 import { parseFunnelReport } from '../ga4'
 import { ENV_VARS, createVisitorInsightsHandler } from '../createHandler'
 import type { HandlerRequest, HandlerResponse } from '../auth'
@@ -108,12 +111,20 @@ describe('measurementHealth', () => {
 		const data = await measurementHealth({
 			config: siteConfig(),
 			range,
-			ga4: createFakeGa4Client({ batch: () => [makeGa4Total(500), makeGa4Total(400), makeGa4Total(300)] }),
+			ga4: createFakeGa4Client({
+				batch: () => [
+					makeGa4Total(500),
+					// The sessions report carries a second metric, totalUsers, which is the consent
+					// denominator: 400 sessions from 320 people.
+					makeGa4Report([{ metrics: [400, 320] }]),
+					makeGa4Total(240),
+				],
+			}),
 			vercel: createFakeVercelClient(makeVercelPageviews({ '2026-08-20': 1000 })),
 			sanity: null,
 		})
 
-		// 300 consent events over 400 sessions = 75% granted.
+		// 240 consenting users over 320 users = 75%. Users on both sides, not events over sessions.
 		expect(data.consentRate).toEqual({ status: 'ok', value: 75 })
 		expect(data.interpretation).toContain('did not grant analytics consent')
 	})
@@ -156,7 +167,7 @@ describe('acquisition', () => {
 				]),
 		})
 
-		const data = await acquisition(ga4, range)
+		const data = await acquisition({ config: siteConfig(), range, ga4 })
 
 		expect(data.totalSessions).toBe(1000)
 		expect(data.designIndustryShare).toBeCloseTo(0.3, 5)
@@ -175,7 +186,7 @@ describe('acquisition', () => {
 				]),
 		})
 
-		const data = await acquisition(ga4, range)
+		const data = await acquisition({ config: siteConfig(), range, ga4 })
 		expect(data.unattributedShare).toBeCloseTo(0.4, 5)
 	})
 
@@ -184,7 +195,7 @@ describe('acquisition', () => {
 			single: () => makeGa4Report([{ dimensions: ['google', 'Organic Search'], metrics: [10] }], { thresholded: true }),
 		})
 
-		expect((await acquisition(ga4, range)).rowsWithheld).toBe(true)
+		expect((await acquisition({ config: siteConfig(), range, ga4 })).rowsWithheld).toBe(true)
 	})
 })
 
@@ -364,7 +375,7 @@ describe('data-quality flags reach the surface', () => {
 			single: () => makeGa4Report([{ dimensions: ['google', 'Organic Search'], metrics: [10] }], { sampled: true }),
 		})
 
-		await acquisition(ga4, range, 25, notices)
+		await acquisition({ config: siteConfig(), range, ga4, notices })
 		expect(notices.some((n) => n.includes('sample'))).toBe(true)
 	})
 
@@ -384,7 +395,7 @@ describe('data-quality flags reach the surface', () => {
 			single: () => makeGa4Report([{ dimensions: ['google', 'Organic Search'], metrics: [10] }]),
 		})
 
-		const data = await acquisition(ga4, range, 25, notices)
+		const data = await acquisition({ config: siteConfig(), range, ga4, notices })
 		expect(notices).toEqual([])
 		expect(data.rowsWithheld).toBe(false)
 	})
@@ -608,7 +619,7 @@ describe('shares are measured against the whole, or withheld', () => {
 			}),
 		})
 
-		const data = await acquisition(ga4, range)
+		const data = await acquisition({ config: siteConfig(), range, ga4 })
 
 		expect(data.totalSessions).toBe(1000)
 		// 100 of 1,000, not 100 of the 200 that came back.
@@ -624,7 +635,7 @@ describe('shares are measured against the whole, or withheld', () => {
 			}),
 		})
 
-		const data = await acquisition(ga4, range)
+		const data = await acquisition({ config: siteConfig(), range, ga4 })
 
 		// A share of an unknown whole is not a smaller truth; it is a different number.
 		expect(data.designIndustryShare).toBeNull()
@@ -917,5 +928,248 @@ describe('the handler master switch', () => {
 			if (previous === undefined) delete process.env[ENV_VARS.enabled]
 			else process.env[ENV_VARS.enabled] = previous
 		}
+	})
+})
+
+describe('order figures', () => {
+	/** A Sanity fake returning fixed documents and recording the params it was bound with. */
+	function ordersClient(docs: unknown[]) {
+		const calls: Array<Record<string, unknown> | undefined> = []
+		return {
+			calls,
+			async fetch<T>(_query: string, params?: Record<string, unknown>): Promise<T> {
+				calls.push(params)
+				return docs as T
+			},
+		}
+	}
+
+	const base = { start: '2026-08-20', end: '2026-08-26', timezone: 'America/Los_Angeles' }
+
+	it('bounds the query in the property timezone, not UTC', async () => {
+		// The bug this pins: bounding with a bare `${date}T00:00:00Z` asked Sanity for a different
+		// seven days than GA4 was asked for — seven hours out for a US-Pacific property, always in
+		// the same direction. At a handful of orders a day that is a visible swing.
+		const client = ordersClient([])
+		await countOrders(client, orderQueryOptions({ documentType: 'order' }, base))
+
+		expect(client.calls[0]?.start).toBe(zonedDayStartUtc('2026-08-20', 'America/Los_Angeles'))
+		expect(client.calls[0]?.end).toBe(zonedDayEndUtc('2026-08-26', 'America/Los_Angeles'))
+		// Pacific daylight time is UTC-7, so the local day starts at 07:00Z.
+		expect(client.calls[0]?.start).toBe('2026-08-20T07:00:00.000Z')
+	})
+
+	it('counts every status when no allow-list is configured, and reports the vocabulary', async () => {
+		const client = ordersClient([
+			{ _createdAt: '2026-08-21T12:00:00Z', status: 'complete' },
+			{ _createdAt: '2026-08-21T13:00:00Z', status: 'test' },
+			{ _createdAt: '2026-08-22T09:00:00Z', status: null },
+		])
+
+		const counts = await countOrders(client, orderQueryOptions({ documentType: 'order' }, base))
+
+		expect(counts.total).toBe(3)
+		expect(counts.statusFiltered).toBe(false)
+		// The breakdown is always reported: an operator cannot configure countedStatuses without
+		// first seeing what their own orders actually say.
+		expect(counts.byStatus).toEqual({ complete: 1, test: 1, '(no status)': 1 })
+	})
+
+	it('excludes orders outside the status allow-list and says how many', async () => {
+		const client = ordersClient([
+			{ _createdAt: '2026-08-21T12:00:00Z', status: 'complete' },
+			{ _createdAt: '2026-08-21T13:00:00Z', status: 'test' },
+			{ _createdAt: '2026-08-22T09:00:00Z', status: 'refunded' },
+		])
+
+		const counts = await countOrders(
+			client,
+			orderQueryOptions({ documentType: 'order', countedStatuses: ['complete'] }, base),
+		)
+
+		expect(counts.total).toBe(1)
+		expect(counts.excludedByStatus).toBe(2)
+		expect(counts.statusFiltered).toBe(true)
+	})
+
+	it('matches statuses case-insensitively', async () => {
+		const client = ordersClient([{ _createdAt: '2026-08-21T12:00:00Z', status: 'Complete' }])
+		const counts = await countOrders(
+			client,
+			orderQueryOptions({ documentType: 'order', countedStatuses: ['complete'] }, base),
+		)
+		expect(counts.total).toBe(1)
+	})
+
+	it('reports revenue as null rather than zero when no total field is configured', async () => {
+		// Null and zero are different answers: one means "not measured here", the other "sold
+		// nothing". Rendering them alike is the defect this whole codebase exists to avoid.
+		const client = ordersClient([{ _createdAt: '2026-08-21T12:00:00Z', status: 'complete' }])
+		const counts = await countOrders(client, orderQueryOptions({ documentType: 'order' }, base))
+		expect(counts.revenue).toBeNull()
+		expect(counts.revenueByDate).toBeNull()
+	})
+
+	it('sums revenue and buckets it by day when a total field is configured', async () => {
+		const client = ordersClient([
+			{ _createdAt: '2026-08-21T12:00:00Z', status: 'complete', orderTotal: 120 },
+			{ _createdAt: '2026-08-21T18:00:00Z', status: 'complete', orderTotal: 40 },
+			{ _createdAt: '2026-08-22T09:00:00Z', status: 'complete', orderTotal: 400 },
+		])
+
+		const counts = await countOrders(
+			client,
+			orderQueryOptions({ documentType: 'order', totalField: 'total' }, base),
+		)
+
+		expect(counts.revenue).toBe(560)
+		expect(counts.revenueByDate).toEqual({ '2026-08-21': 160, '2026-08-22': 400 })
+	})
+
+	it('ignores a total that is not a finite number', async () => {
+		const client = ordersClient([
+			{ _createdAt: '2026-08-21T12:00:00Z', status: 'complete', orderTotal: '120' },
+			{ _createdAt: '2026-08-21T13:00:00Z', status: 'complete', orderTotal: null },
+			{ _createdAt: '2026-08-21T14:00:00Z', status: 'complete', orderTotal: 50 },
+		])
+		const counts = await countOrders(
+			client,
+			orderQueryOptions({ documentType: 'order', totalField: 'total' }, base),
+		)
+		// Three orders counted, one usable total. A string total must not become NaN and poison the sum.
+		expect(counts.total).toBe(3)
+		expect(counts.revenue).toBe(50)
+	})
+
+	it('counts distinct orders per typeface, not line references', async () => {
+		// A three-family order used to add 3 here while adding 1 to the range total, so summing the
+		// Bought column and comparing it against Orders did not reconcile and nothing explained why.
+		const client = ordersClient([
+			{
+				_createdAt: '2026-08-21T12:00:00Z',
+				status: 'complete',
+				typefaces: [{ title: 'Omnes' }, { title: 'Freight' }, { title: 'Omnes' }],
+			},
+		])
+
+		const counts = await countOrdersByTypeface(
+			client,
+			orderQueryOptions({ documentType: 'order' }, base),
+			'typefaces',
+		)
+
+		// Omnes appears twice on the one order and is still one order for Omnes.
+		expect(counts?.byTypeface).toEqual({ Omnes: 1, Freight: 1 })
+		expect(counts?.orders).toBe(1)
+	})
+
+	it('apportions an order total evenly across the families on it', async () => {
+		const client = ordersClient([
+			{ _createdAt: '2026-08-21T12:00:00Z', status: 'complete', orderTotal: 300, typefaces: [{ title: 'A' }, { title: 'B' }] },
+		])
+
+		const counts = await countOrdersByTypeface(
+			client,
+			orderQueryOptions({ documentType: 'order', totalField: 'total' }, base),
+			'typefaces',
+		)
+
+		// Attributing the full 300 to each would double-count a two-family order.
+		expect(counts?.revenueByTypeface).toEqual({ A: 150, B: 150 })
+	})
+
+	it('returns null rather than an empty result when orders do not resolve to typefaces', async () => {
+		const client = ordersClient([])
+		expect(await countOrdersByTypeface(client, orderQueryOptions({ documentType: 'order' }, base), null)).toBeNull()
+	})
+})
+
+describe('hostname scoping', () => {
+	it('ANDs the hostname filter into every report a client runs', async () => {
+		// Applied at the client rather than per call site on purpose: a filter each report has to
+		// remember is a filter some report will forget, and forgetting it does not fail — it adds
+		// two businesses together and calls the total one site.
+		const filter = hostnameFilter(['www.dardenstudio.com'])
+		expect(filter).toEqual({
+			filter: { fieldName: 'hostName', inListFilter: { values: ['www.dardenstudio.com'] } },
+		})
+	})
+
+	it('combines filters without wrapping a single one in a redundant group', () => {
+		const a = { filter: { fieldName: 'eventName' } }
+		expect(andFilters(a, undefined)).toBe(a)
+		expect(andFilters(undefined, undefined)).toBeUndefined()
+		expect(andFilters(a, { filter: { fieldName: 'hostName' } })).toEqual({
+			andGroup: { expressions: [a, { filter: { fieldName: 'hostName' } }] },
+		})
+	})
+})
+
+describe('journey outcomes', () => {
+	it('reports enquiries and subscribes beside the funnel, not inside it', async () => {
+		// An enquiry is an alternative ending, not a later stage: slotting it into the sequence
+		// would imply a visitor passes through it on the way to a purchase. Before this, a visitor
+		// who read three typeface pages and emailed was scored as a drop-off.
+		const config = siteConfig({
+			eventNames: { enquiry: ['enquiry_submit'], subscribe: ['subscribe'] },
+			eventCutovers: { ...siteConfig().eventCutovers, enquiry_submit: PREEXISTING, subscribe: PREEXISTING },
+		})
+		const ga4 = createFakeGa4Client({ batch: (requests) => requests.map(() => makeGa4Total(12)) })
+
+		const result = await journey(config, ga4, range, [])
+
+		expect(result.outcomes.map((o) => o.key)).toEqual(['enquiry', 'subscribe'])
+		expect(result.outcomes[0]?.count).toEqual({ status: 'ok', value: 12 })
+	})
+
+	it('reports an uninstrumented outcome as unavailable, never as zero', async () => {
+		const config = siteConfig({ eventNames: { enquiry: ['enquiry_submit'] } })
+		const ga4 = createFakeGa4Client({ batch: (requests) => requests.map(() => makeGa4Total(12)) })
+
+		const result = await journey(config, ga4, range, [])
+
+		expect(result.outcomes[0]?.count.status).toBe('unavailable')
+	})
+
+	it('lists no outcomes on a site that names none', async () => {
+		const ga4 = createFakeGa4Client({ batch: (requests) => requests.map(() => makeGa4Total(1)) })
+		expect((await journey(siteConfig(), ga4, range, [])).outcomes).toEqual([])
+	})
+})
+
+describe('typeface interest completeness', () => {
+	it('reports a family missing from a truncated result as unknown, not as zero', async () => {
+		// The one place this codebase broke its own rule. A family past GA4's 100-row cap rendered
+		// as "Viewed 0, Bought 2", which reads as a family that sold without ever being seen.
+		const ga4 = createFakeGa4Client({
+			single: () => ({
+				...makeGa4Report([{ dimensions: ['Omnes'], metrics: [400] }]),
+				rowCount: 250,
+			}),
+		})
+		const sanity = createFakeSanityClient(() => [
+			{ _createdAt: '2026-08-21T12:00:00Z', status: 'complete', typefaces: [{ title: 'Quiet Family' }] },
+		])
+
+		const data = await typefaceInterest({ config: siteConfig(), range, ga4, sanity, notices: [] })
+		const quiet = data.rows.find((row) => row.typeface === 'Quiet Family')
+
+		expect(quiet?.viewed.status).toBe('unavailable')
+		expect(data.rowsTruncated).toBe(true)
+	})
+
+	it('reports a genuine zero when GA4 returned a complete result', async () => {
+		const ga4 = createFakeGa4Client({
+			single: () => makeGa4Report([{ dimensions: ['Omnes'], metrics: [400] }]),
+		})
+		const sanity = createFakeSanityClient(() => [
+			{ _createdAt: '2026-08-21T12:00:00Z', status: 'complete', typefaces: [{ title: 'Quiet Family' }] },
+		])
+
+		const data = await typefaceInterest({ config: siteConfig(), range, ga4, sanity, notices: [] })
+		const quiet = data.rows.find((row) => row.typeface === 'Quiet Family')
+
+		// Nothing was withheld or truncated, so absence here really does mean nobody viewed it.
+		expect(quiet?.viewed).toEqual({ status: 'ok', value: 0 })
 	})
 })

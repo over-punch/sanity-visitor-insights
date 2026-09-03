@@ -192,6 +192,56 @@ empty charts — pasting a measurement id here is caught by name.
 The service account needs **Viewer** on each GA4 property. Nothing here is `NEXT_PUBLIC_`; none of
 it reaches the browser.
 
+#### Scoping to your own hostnames
+
+`ga4.hostnames` restricts every GA4 report to the hosts you name. A GA4 property is not necessarily
+one website — Darden's also receives `impactsport.ca`, an unrelated business, which was inside the
+headline session count, both percentages computed from it, and the funnel's entry rung. Omit the
+field to accept every hostname, which is the old behaviour.
+
+```js
+ga4: {
+  propertyId: '123456789',
+  timezone: 'America/Los_Angeles',
+  hostnames: ['www.dardenstudio.com', 'dardenstudio.com'],
+}
+```
+
+#### Orders: status and revenue
+
+`orders.countedStatuses` names the statuses that count as a real sale; everything else is excluded
+and reported separately. Leave it unset and test, failed, pending and refunded orders all count as
+sales — at seven orders a quarter, one test order is a 14% error. The status breakdown is always
+reported so you can see what vocabulary your own orders use before configuring this.
+
+`orders.totalField` turns on revenue. Without it a $30 web licence and a $400 multi-seat desktop
+licence are the same integer, so nothing can be ranked by what it is worth. An order total is not a
+customer field; the PII projection allow-list is unchanged.
+
+```js
+orders: {
+  documentType: 'order',
+  typefacesField: 'typefaces',
+  statusField: 'orderStatus',
+  countedStatuses: ['complete', 'paid'],
+  totalField: 'total',
+  currency: 'USD',
+}
+```
+
+#### Conversions that are not a sale
+
+`eventNames.enquiry`, `.subscribe` and `.assetDownload` surface outcomes the funnel used to score as
+drop-offs. A custom commission is worth many multiples of a licence, and the funnel ended at
+`purchase` — so the visitor who read three typeface pages and emailed was counted as a leak.
+
+```js
+eventNames: {
+  enquiry: ['enquiry_submit'],
+  subscribe: ['subscribe'],
+}
+```
+
 #### The master switch
 
 `VISITOR_INSIGHTS_ENABLED` is an explicit opt-in. Unset, the route answers `503` with

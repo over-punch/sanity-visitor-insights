@@ -28,8 +28,8 @@
  * event-count funnel compares a number that inflates with engagement against one that does not.
  */
 
-import type { JourneyData, JourneyStep, LandingPage } from '../../reportData'
-import type { DateRange, MetricValue } from '../../types'
+import type { JourneyData, JourneyOutcome, JourneyStep, LandingPage } from '../../reportData'
+import { unavailable, type DateRange, type MetricValue } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
 import { applyCoverage, coverageForAny, coverageForRange } from '../../core/cutover'
 import { eventNamesFilter, sumFirstMetric, type Ga4Client } from '../ga4'
@@ -194,17 +194,31 @@ export async function journey(config: SiteAnalyticsConfig, ga4: Ga4Client, range
 	let topLandingPages: LandingPage[] = []
 	try {
 		const landings = await ga4.runReport({
-			dimensions: [{ name: 'landingPage' }],
-			metrics: [{ name: 'sessions' }],
+			// landingPagePlusQueryString, not landingPage. The bare dimension strips the query, so
+			// every paid landing page collapsed into its organic twin and no utm_ or gclid survived
+			// — which made the one table that could have distinguished an ad landing page from the
+			// page it copies unable to tell them apart.
+			dimensions: [{ name: 'landingPagePlusQueryString' }],
+			// Engagement alongside volume. Ranked by sessions alone, a page delivering 200 arrivals
+			// that leave immediately looks identical to one that feeds the shop, so the table listed
+			// the busiest pages rather than the ones worth doing something about.
+			metrics: [{ name: 'sessions' }, { name: 'engagedSessions' }],
 			dateRanges: [{ startDate: range.start, endDate: range.end }],
 			orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
-			limit: 10,
+			limit: 25,
 		})
 
-		topLandingPages = landings.rows.map((row) => ({
-			path: row.dimensions[0] ?? '(unknown)',
-			sessions: Number.isFinite(row.metrics[0]) ? (row.metrics[0] as number) : 0,
-		}))
+		topLandingPages = landings.rows.map((row) => {
+			const sessions = Number.isFinite(row.metrics[0]) ? (row.metrics[0] as number) : 0
+			const engaged = Number.isFinite(row.metrics[1]) ? (row.metrics[1] as number) : null
+			return {
+				path: row.dimensions[0] ?? '(unknown)',
+				sessions,
+				engagedSessions: engaged,
+				// Withheld rather than shown as 0% when there are no sessions to divide by.
+				engagementRate: engaged !== null && sessions > 0 ? engaged / sessions : null,
+			}
+		})
 	} catch (e) {
 		// Supplementary; losing it must not cost the funnel. Logged loudly rather than swallowed,
 		// which is how the previous version of this block stayed broken indefinitely.
@@ -214,10 +228,80 @@ export async function journey(config: SiteAnalyticsConfig, ga4: Ga4Client, range
 	return {
 		steps: sequencedSteps ?? steps,
 		topLandingPages,
+		outcomes: await otherOutcomes(config, ga4, range),
 		measurement: sequencedSteps ? 'sequence' : 'independent-totals',
 		approximate: !sequencedSteps,
 		approximationNote: sequencedSteps ? SEQUENCE_NOTE : APPROXIMATION_NOTE,
 	}
 }
 
-export type { JourneyData, JourneyStep, LandingPage } from '../../reportData'
+/**
+ * The conversions that are not a licence sale.
+ *
+ * The funnel ends at `purchase`, which made every other successful outcome look like a drop-off.
+ * A visitor who read three typeface pages and submitted a commission enquiry was scored as leaking
+ * between "Viewed a typeface" and "Added to cart" — and a commission is worth many multiples of a
+ * licence. Darden has fired `enquiry_submit` throughout and no report read it.
+ *
+ * Counted as distinct users over the same window as the funnel, so they sit on the same scale as
+ * its rungs without pretending to be a step in the same sequence — they are alternative endings,
+ * not a later stage.
+ */
+async function otherOutcomes(
+	config: SiteAnalyticsConfig,
+	ga4: Ga4Client,
+	range: DateRange,
+): Promise<JourneyOutcome[]> {
+	const defined: Array<{ key: string; label: string; events: string[]; note: string }> = [
+		{
+			key: 'enquiry',
+			label: 'Submitted an enquiry',
+			events: config.eventNames?.enquiry ?? [],
+			note: 'A custom-typeface or licensing enquiry — worth many multiples of a licence sale.',
+		},
+		{
+			key: 'subscribe',
+			label: 'Joined the mailing list',
+			events: config.eventNames?.subscribe ?? [],
+			note: 'The only audience a foundry owns outright rather than renting from a referrer.',
+		},
+		{
+			key: 'asset',
+			label: 'Downloaded a trial or specimen',
+			events: config.eventNames?.assetDownload ?? [],
+			note: 'The moment a buyer takes the work away to argue for it internally.',
+		},
+	]
+
+	const active = defined.filter((outcome) => outcome.events.length > 0)
+	if (active.length === 0) return []
+
+	const coverages = active.map((outcome) => coverageForAny(config.eventCutovers, outcome.events, range))
+
+	// One batch, one quota charge, one round trip — the same discipline the funnel steps use.
+	const reports = await ga4.batchRunReports(
+		active.map((outcome) => ({
+			metrics: [{ name: 'totalUsers' }],
+			dateRanges: [{ startDate: range.start, endDate: range.end }],
+			dimensionFilter: eventNamesFilter(outcome.events),
+		})),
+	).catch((e) => {
+		console.warn('Visitor insights: outcome counts unavailable:', (e as Error).message)
+		return null
+	})
+
+	return active.map((outcome, index) => {
+		const coverage = coverages[index]!
+		const report = reports?.[index]
+		return {
+			key: outcome.key,
+			label: outcome.label,
+			note: outcome.note,
+			count: report && coverage.status !== 'none'
+				? applyCoverage(sumFirstMetric(report), coverage)
+				: unavailable(coverage.status === 'none' ? 'not_instrumented' : 'source_error'),
+		}
+	})
+}
+
+export type { JourneyData, JourneyOutcome, JourneyStep, LandingPage } from '../../reportData'

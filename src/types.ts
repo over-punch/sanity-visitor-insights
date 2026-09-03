@@ -136,6 +136,16 @@ export interface ReportEnvelope<T> {
 	/** Caveats to surface in the UI, e.g. GA4 sampling or an instrumentation cutover in range. */
 	notices: string[]
 	data: T
+	/**
+	 * The same report over the immediately preceding equivalent window.
+	 *
+	 * A bare level is close to meaningless at these volumes: "389 sessions" is neither good nor bad
+	 * without last week beside it, and the 24 August collapse would have announced itself on every
+	 * panel as a delta while going unnoticed for over a week as a level. Absent when the comparison
+	 * could not be computed — a source failed, or the previous window predates the site's
+	 * instrumentation — because a missing comparison must not read as "no change".
+	 */
+	comparison?: { range: DateRange; data: T }
 }
 
 /** Error shape returned by the handler. Never leaks upstream error text to the browser. */

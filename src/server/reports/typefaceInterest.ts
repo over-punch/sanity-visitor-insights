@@ -20,7 +20,7 @@ import { ok, unavailable } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
 import { coverageForAny } from '../../core/cutover'
 import { eventNamesFilter, type Ga4Client } from '../ga4'
-import { countOrdersByTypeface, type SanityQueryClient } from '../orders'
+import { countOrdersByTypeface, orderQueryOptions, type SanityQueryClient } from '../orders'
 
 /** GA4 event evidencing a typeface page view. */
 const VIEW_EVENT = 'view_item'
@@ -45,7 +45,7 @@ async function countsByItem(
 	ga4: Ga4Client,
 	range: DateRange,
 	eventNames: string[],
-	quality: { thresholded: boolean; sampled: boolean },
+	quality: { thresholded: boolean; sampled: boolean; truncated: boolean },
 ): Promise<Map<string, number> | null> {
 	if (coverageForAny(config.eventCutovers, eventNames, range).status === 'none') return null
 
@@ -69,6 +69,9 @@ async function countsByItem(
 	// rendering a missing value as zero.
 	if (report.thresholded) quality.thresholded = true
 	if (report.sampled) quality.sampled = true
+	// The 100-row cap is a real boundary for a foundry: the long tail of quiet families is most of
+	// the catalogue. A family past the cap is unknown, not idle.
+	if (report.rowCount > report.rows.length) quality.truncated = true
 
 	const counts = new Map<string, number>()
 	for (const row of report.rows) {
@@ -94,7 +97,7 @@ export interface TypefaceInterestInput {
 export async function typefaceInterest(input: TypefaceInterestInput): Promise<TypefaceInterestData> {
 	const { config, range, ga4, sanity } = input
 
-	const quality = { thresholded: false, sampled: false }
+	const quality = { thresholded: false, sampled: false, truncated: false }
 	// Tester events are per-site; TDF names five of them. Counts are summed across whichever
 	// this site emits, so the tested column means the same thing everywhere.
 	const testerEvents = config.eventNames?.tester ?? [TEST_EVENT]
@@ -114,17 +117,18 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 		: null
 
 	let bought: Map<string, number> | null = null
+	let revenue: Map<string, number> | null = null
 	if (sanity) {
 		try {
 			const counts = await countOrdersByTypeface(
 				sanity,
-				config.orders.documentType,
+				orderQueryOptions(config.orders, range),
 				config.orders.typefacesField,
-				range.start,
-				range.end,
-				config.orders.excludeFilter,
 			)
-			if (counts) bought = new Map(Object.entries(counts.byTypeface))
+			if (counts) {
+				bought = new Map(Object.entries(counts.byTypeface))
+				if (counts.revenueByTypeface) revenue = new Map(Object.entries(counts.revenueByTypeface))
+			}
 		} catch (e) {
 			console.error('Visitor insights: per-typeface order count failed:', (e as Error).message)
 		}
@@ -136,10 +140,23 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 		...(viewed?.keys() ?? []),
 		...(tested?.keys() ?? []),
 		...(bought?.keys() ?? []),
+		...(revenue?.keys() ?? []),
 	])
 
-	const metric = (counts: Map<string, number> | null, family: string, missingReason: 'not_instrumented' | 'not_applicable'): MetricValue =>
-		counts === null ? unavailable(missingReason) : ok(counts.get(family) ?? 0)
+	// A family missing from a GA4 result means one of two different things, and they must not
+	// render alike. If the result was complete, absence is a real zero. If GA4 withheld low-count
+	// rows or the 100-row cap was hit, absence is unknown — and rendering it as `ok(0)` produced
+	// "Viewed 0, Bought 2", which reads as a family that sold without ever being seen. That was the
+	// one place this codebase broke its own rule that absence is never a measurement.
+	const gaResultIsComplete = !quality.thresholded && !quality.truncated
+	const metric = (counts: Map<string, number> | null, family: string, missingReason: 'not_instrumented' | 'not_applicable'): MetricValue => {
+		if (counts === null) return unavailable(missingReason)
+		const value = counts.get(family)
+		if (value !== undefined) return ok(value)
+		return gaResultIsComplete
+			? ok(0)
+			: unavailable('suppressed', 'GA4 withheld or truncated this row, so the count is unknown rather than zero')
+	}
 
 	const rows: TypefaceInterestRow[] = [...families].map((family) => {
 		const viewedMetric = metric(viewed, family, 'not_instrumented')
@@ -161,7 +178,29 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 				: null
 		const testRate = rateIsProportion && rawRate !== null ? Math.min(1, rawRate) : null
 
-		return { typeface: family, viewed: viewedMetric, tested: testedMetric, bought: boughtMetric, testRate }
+		// The ratio a foundry actually acts on. Orders over distinct viewers — the same shape as the
+		// test rate, and the column that sorts the catalogue into "looked at and not selling",
+		// which is where a pricing or specimen-page problem shows up.
+		const buyRate =
+			viewedMetric.status !== 'unavailable' &&
+			boughtMetric.status !== 'unavailable' &&
+			viewedMetric.value > 0
+				? Math.min(1, boughtMetric.value / viewedMetric.value)
+				: null
+
+		const revenueMetric: MetricValue = revenue === null
+			? unavailable('not_applicable', 'No order total field is configured for this site')
+			: ok(revenue.get(family) ?? 0)
+
+		return {
+			typeface: family,
+			viewed: viewedMetric,
+			tested: testedMetric,
+			bought: boughtMetric,
+			revenue: revenueMetric,
+			testRate,
+			buyRate,
+		}
 	})
 
 	// Most-viewed first, with unavailable views sorting last rather than as zero.
@@ -175,7 +214,14 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 		input.notices?.push('GA4 answered the typeface breakdown from a sample, so these counts are estimates.')
 	}
 
-	return { rows, interpretationNote: INTERPRETATION_NOTE, rowsWithheld: quality.thresholded }
+	return {
+		rows,
+		interpretationNote: INTERPRETATION_NOTE,
+		rowsWithheld: quality.thresholded,
+		rowsTruncated: quality.truncated,
+		revenueIsApportioned: revenue !== null,
+		currency: config.orders.currency ?? null,
+	}
 }
 
 export type { TypefaceInterestData, TypefaceInterestRow } from '../../reportData'

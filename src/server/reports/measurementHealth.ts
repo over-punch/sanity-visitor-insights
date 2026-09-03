@@ -25,7 +25,7 @@ import type { SiteAnalyticsConfig } from '../../core/siteConfig'
 import { coverageForAny } from '../../core/cutover'
 import { eventNamesFilter, sumFirstMetric, type Ga4Client } from '../ga4'
 import type { VercelClient } from '../vercel'
-import { countOrders, type SanityQueryClient } from '../orders'
+import { countOrders, orderQueryOptions, type SanityQueryClient } from '../orders'
 
 /** Whole days covered by a range, inclusive of both ends. */
 function daysInRange(range: DateRange): number {
@@ -118,11 +118,15 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 					dateRanges: [{ startDate: range.start, endDate: range.end }],
 				},
 				{
-					metrics: [{ name: 'sessions' }],
+					metrics: [{ name: 'sessions' }, { name: 'totalUsers' }],
 					dateRanges: [{ startDate: range.start, endDate: range.end }],
 				},
 				{
-					metrics: [{ name: 'eventCount' }],
+					// totalUsers, not eventCount. This figure is divided by a user count to make a
+					// rate, and one visitor can fire the consent event more than once — which is
+					// why the old computation needed a Math.min(100) clamp to stay plausible. A
+					// clamp that exists to hide a unit mismatch is the tell, not the fix.
+					metrics: [{ name: 'totalUsers' }],
 					dimensions: [{ name: 'eventName' }],
 					dateRanges: [{ startDate: range.start, endDate: range.end }],
 					dimensionFilter: eventNamesFilter(consentEvents),
@@ -150,15 +154,28 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 
 			if (views) ga4Pageviews = ok(sumFirstMetric(views))
 			if (sessions) ga4Sessions = ok(sumFirstMetric(sessions))
+
+			// The consent denominator. Users rather than sessions, to match the numerator.
+			const ga4Users = sessions
+				? sessions.rows.reduce((total, row) => {
+						const value = row.metrics[1]
+						return value !== undefined && Number.isFinite(value) ? total + value : total
+					}, 0)
+				: 0
 			if (views?.sampled || sessions?.sampled) {
 				input.notices?.push('GA4 answered from a sample, so its pageview and session figures are estimates — treat a small gap against Vercel as noise.')
 			}
 
 			const consentCoverage = coverageForAny(config.eventCutovers, consentEvents, range)
-			if (consentCoverage.status === 'full' && consent && ga4Sessions.status === 'ok' && ga4Sessions.value > 0) {
-				// Expressed as a percentage of sessions, capped since one session can fire it twice.
-				const rate = Math.min(100, (sumFirstMetric(consent) / ga4Sessions.value) * 100)
-				consentRate = ok(Math.round(rate * 10) / 10)
+			if (consentCoverage.status === 'full' && consent && ga4Users > 0) {
+				// Users who granted consent over users GA4 saw. Both sides are now the same unit, so
+				// no clamp is needed and a value above 100% would be a real signal rather than noise
+				// to be hidden. It is still bounded, because a rate over 1 here means the two
+				// queries disagree and the figure should not be shown as if it were sound.
+				const raw = sumFirstMetric(consent) / ga4Users
+				consentRate = raw <= 1
+					? ok(Math.round(raw * 1000) / 10)
+					: unavailable('source_error', 'Consent grants exceed the users GA4 reported, so the two queries disagree')
 			} else if (consentCoverage.status === 'partial') {
 				consentRate = unavailable('before_cutover', `Instrumented from ${consentCoverage.cutover}`)
 			}
@@ -170,28 +187,33 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	}
 
 	let vercelPageviews: MetricValue = unavailable('source_error', 'Vercel not configured')
+	// Vercel's own visitor count. Fetched on every call and previously discarded, though it is the
+	// only visitor figure in the tool that consent refusal and ad-blocking cannot reduce.
+	let vercelVisitors: MetricValue = unavailable('source_error', 'Vercel not configured')
 	if (vercel) {
 		try {
 			const result = await vercel.pageviews(range.start, range.end)
 			vercelPageviews = ok(result.total)
+			vercelVisitors = ok(result.visitors)
 			vercelByDate = result.byDate
 		} catch (e) {
 			console.error('Visitor insights: Vercel query failed:', (e as Error).message)
 			vercelPageviews = unavailable('source_error')
+			vercelVisitors = unavailable('source_error')
 		}
 	}
 
 	let orders: MetricValue = unavailable('source_error', 'Sanity not configured')
 	if (sanity) {
 		try {
-			const counts = await countOrders(
-				sanity,
-				config.orders.documentType,
-				range.start,
-				range.end,
-				config.orders.excludeFilter,
-			)
+			const counts = await countOrders(sanity, orderQueryOptions(config.orders, range))
 			orders = ok(counts.total)
+			if (counts.excludedByStatus > 0) {
+				input.notices?.push(
+					`${counts.excludedByStatus} order${counts.excludedByStatus === 1 ? '' : 's'} in this range ` +
+					`did not carry a counted status and ${counts.excludedByStatus === 1 ? 'is' : 'are'} excluded from every figure.`,
+				)
+			}
 		} catch (e) {
 			console.error('Visitor insights: order count failed:', (e as Error).message)
 			orders = unavailable('source_error')
@@ -204,25 +226,32 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 			? (vercelPageviews.value - ga4Pageviews.value) / vercelPageviews.value
 			: null
 
-	// One row per day either source reported, oldest first. Vercel's byDate is only daily on short
-	// ranges — granularityFor drops to week or month beyond 62 days — so the series is built only
-	// when its keys look like consecutive days. A weekly bucket plotted against a daily one would
-	// draw a 7x cliff that is purely an artefact of bucketing.
+	// Vercel's byDate is only daily on short ranges — granularityFor drops to week or month beyond
+	// 62 days. A weekly bucket plotted against a daily one would draw a 7x cliff that is purely an
+	// artefact of bucketing, so Vercel is omitted from the series when its keys are not days.
+	//
+	// The whole chart used to be dropped in that case. That was the wrong call: GA4's own series is
+	// daily at every range, and the chart exists because of the 24 August collapse — so it was
+	// disappearing at exactly the 90-day range where someone would go looking for when the gap
+	// opened. GA4 alone still dates the cliff; the second line is what is missing, and the panel is
+	// told so rather than left to render nothing.
 	const vercelDates = Object.keys(vercelByDate)
 	const vercelIsDaily = vercelDates.length === 0 || vercelDates.length > (daysInRange(range) * 0.7)
-	const daily: DailyPoint[] = vercelIsDaily
+	const seriesDates = vercelIsDaily
 		? Array.from(new Set([...ga4ByDate.keys(), ...vercelDates]))
-			.sort()
-			.map((date) => ({
-				date,
-				ga4: ga4ByDate.has(date) ? (ga4ByDate.get(date) as number) : null,
-				vercel: typeof vercelByDate[date] === 'number' ? vercelByDate[date] : null,
-			}))
-		: []
+		: Array.from(ga4ByDate.keys())
+
+	const daily: DailyPoint[] = seriesDates.sort().map((date) => ({
+		date,
+		ga4: ga4ByDate.has(date) ? (ga4ByDate.get(date) as number) : null,
+		vercel: vercelIsDaily && typeof vercelByDate[date] === 'number' ? vercelByDate[date] : null,
+	}))
 
 	return {
 		ga4Pageviews,
 		vercelPageviews,
+		vercelVisitors,
+		vercelDailyUnavailable: !vercelIsDaily,
 		shortfallRatio,
 		ga4Sessions,
 		orders,
