@@ -43,6 +43,7 @@ export interface OrderQueryOptions {
 	statusField?: string
 	countedStatuses?: readonly string[]
 	totalField?: string
+	totalInMinorUnits?: boolean
 }
 
 /**
@@ -62,6 +63,7 @@ export function orderQueryOptions(
 		statusField?: string
 		countedStatuses?: readonly string[]
 		totalField?: string
+		totalInMinorUnits?: boolean
 	},
 	range: { start: string; end: string; timezone: string },
 ): OrderQueryOptions {
@@ -74,6 +76,7 @@ export function orderQueryOptions(
 		statusField: orders.statusField,
 		countedStatuses: orders.countedStatuses,
 		totalField: orders.totalField,
+		totalInMinorUnits: orders.totalInMinorUnits,
 	}
 }
 
@@ -100,6 +103,11 @@ export interface OrderCounts {
 	byStatus: Record<string, number>
 	/** Orders dropped by `countedStatuses`. Zero when no allow-list is configured. */
 	excludedByStatus: number
+	/**
+	 * Counted orders that carried no usable total, so revenue covers fewer orders than `total`.
+	 * Always zero when no total field is configured.
+	 */
+	ordersMissingTotal: number
 	/** Whether a status allow-list was applied at all. */
 	statusFiltered: boolean
 }
@@ -196,9 +204,16 @@ function isCounted(status: string, countedStatuses?: readonly string[]): boolean
 	return countedStatuses.some((allowed) => allowed.toLowerCase() === normalised)
 }
 
-/** A finite number, or null. Guards against a total field holding a string or null in Sanity. */
-function money(value: unknown): number | null {
-	return typeof value === 'number' && Number.isFinite(value) ? value : null
+/**
+ * A finite number in major units, or null.
+ *
+ * Guards against a total field holding a string or null in Sanity, and converts minor units where
+ * the site stores them that way — reading cents as dollars would report every revenue figure a
+ * hundred times too large.
+ */
+function money(value: unknown, minorUnits?: boolean): number | null {
+	if (typeof value !== 'number' || !Number.isFinite(value)) return null
+	return minorUnits ? value / 100 : value
 }
 
 /**
@@ -220,6 +235,7 @@ export async function countOrders(
 	let total = 0
 	let revenue = 0
 	let excludedByStatus = 0
+	let missingTotal = 0
 
 	for (const order of orders) {
 		const status = statusKey(order.status)
@@ -236,10 +252,15 @@ export async function countOrders(
 		byDate[date] = (byDate[date] ?? 0) + 1
 		total += 1
 
-		const value = money(order.orderTotal)
+		const value = money(order.orderTotal, options.totalInMinorUnits)
 		if (value !== null) {
 			revenue += value
 			revenueByDate[date] = (revenueByDate[date] ?? 0) + value
+		} else if (options.totalField) {
+			// A counted order carrying no usable total. Darden's amountCharged is blank where
+			// nothing was captured or the order predates the field, so revenue can silently cover
+			// fewer orders than it appears to. Counted rather than ignored, so the panel can say so.
+			missingTotal += 1
 		}
 	}
 
@@ -250,6 +271,7 @@ export async function countOrders(
 		revenueByDate: options.totalField ? revenueByDate : null,
 		byStatus,
 		excludedByStatus,
+		ordersMissingTotal: missingTotal,
 		statusFiltered: Boolean(options.countedStatuses && options.countedStatuses.length > 0),
 	}
 }
@@ -296,7 +318,7 @@ export async function countOrdersByTypeface(
 		if (families.size === 0) continue
 
 		counted += 1
-		const value = money(order.orderTotal)
+		const value = money(order.orderTotal, options.totalInMinorUnits)
 		const share = value !== null ? value / families.size : null
 
 		for (const family of families) {

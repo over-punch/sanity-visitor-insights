@@ -1173,3 +1173,51 @@ describe('typeface interest completeness', () => {
 		expect(quiet?.viewed).toEqual({ status: 'ok', value: 0 })
 	})
 })
+
+describe('minor units and missing totals', () => {
+	function ordersClient(docs: unknown[]) {
+		return { async fetch<T>(): Promise<T> { return docs as T } }
+	}
+	const base = { start: '2026-08-20', end: '2026-08-26', timezone: 'UTC' }
+
+	it('converts minor units to major units', async () => {
+		// Darden stores amountCharged as the Stripe capture in integer cents, because that is the
+		// one figure that reconciles against Stripe. Read as dollars it would be 100x too large.
+		const counts = await countOrders(
+			ordersClient([{ _createdAt: '2026-08-21T12:00:00Z', status: 'verified', orderTotal: 12000 }]),
+			orderQueryOptions({ documentType: 'order', totalField: 'amountCharged', totalInMinorUnits: true }, base),
+		)
+		expect(counts.revenue).toBe(120)
+	})
+
+	it('leaves major units alone', async () => {
+		const counts = await countOrders(
+			ordersClient([{ _createdAt: '2026-08-21T12:00:00Z', status: 'verified', orderTotal: 120 }]),
+			orderQueryOptions({ documentType: 'order', totalField: 'total' }, base),
+		)
+		expect(counts.revenue).toBe(120)
+	})
+
+	it('counts orders whose total is missing, so revenue coverage can be stated', async () => {
+		// amountCharged is blank where nothing was captured or the order predates the field, so
+		// revenue can silently cover fewer orders than the count above it.
+		const counts = await countOrders(
+			ordersClient([
+				{ _createdAt: '2026-08-21T12:00:00Z', status: 'verified', orderTotal: 4000 },
+				{ _createdAt: '2026-08-21T13:00:00Z', status: 'verified' },
+			]),
+			orderQueryOptions({ documentType: 'order', totalField: 'amountCharged', totalInMinorUnits: true }, base),
+		)
+		expect(counts.total).toBe(2)
+		expect(counts.revenue).toBe(40)
+		expect(counts.ordersMissingTotal).toBe(1)
+	})
+
+	it('reports no missing totals when the site tracks no revenue at all', async () => {
+		const counts = await countOrders(
+			ordersClient([{ _createdAt: '2026-08-21T12:00:00Z', status: 'verified' }]),
+			orderQueryOptions({ documentType: 'order' }, base),
+		)
+		expect(counts.ordersMissingTotal).toBe(0)
+	})
+})

@@ -208,6 +208,12 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		try {
 			const counts = await countOrders(sanity, orderQueryOptions(config.orders, range))
 			orders = ok(counts.total)
+			if (counts.ordersMissingTotal > 0) {
+				input.notices?.push(
+					`${counts.ordersMissingTotal} of ${counts.total} counted orders carry no usable total, ` +
+					`so revenue covers fewer orders than the order count.`,
+				)
+			}
 			if (counts.excludedByStatus > 0) {
 				input.notices?.push(
 					`${counts.excludedByStatus} order${counts.excludedByStatus === 1 ? '' : 's'} in this range ` +

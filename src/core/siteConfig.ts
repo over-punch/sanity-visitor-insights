@@ -77,6 +77,15 @@ export interface OrdersConfig {
 	 * and still enforced by the projection allow-list; only the value crosses over.
 	 */
 	totalField?: string
+	/**
+	 * True when `totalField` holds minor units (cents) rather than major units (dollars).
+	 *
+	 * Darden's `amountCharged` is the Stripe capture in integer minor units, deliberately, because
+	 * it is the one figure that reconciles against Stripe. Reading it as dollars would report every
+	 * revenue figure a hundred times too large — a number wrong enough to be obvious once, and
+	 * quietly wrong forever in a ratio.
+	 */
+	totalInMinorUnits?: boolean
 	/** ISO 4217 code for `totalField`, e.g. `USD`. Used for formatting only. */
 	currency?: string
 }
