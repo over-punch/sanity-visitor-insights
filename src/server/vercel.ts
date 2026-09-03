@@ -18,9 +18,9 @@ const API_BASE = 'https://api.vercel.com/v1/query/web-analytics'
 /** Daily pageview counts, keyed by ISO date. */
 export interface VercelPageviews {
 	byDate: Record<string, number>
-	total: number
+	total: number | null
 	/** Distinct visitors over the whole range. Not a sum of the daily figures — visitors dedupe. */
-	visitors: number
+	visitors: number | null
 }
 
 /** A Vercel client bound to one project. */
@@ -108,8 +108,10 @@ export function createVercelClient(projectId: string, token: string, teamId?: st
 
 			return {
 				byDate,
-				total: totals.data?.pageviews ?? 0,
-				visitors: totals.data?.visitors ?? 0,
+				total: totals.data?.pageviews ?? null,
+				// Absent is not zero. A malformed or partial response used to become ok(0) and render
+				// as a measured figure — on the very panel whose job is to detect that.
+				visitors: totals.data?.visitors ?? null,
 			}
 		},
 	}

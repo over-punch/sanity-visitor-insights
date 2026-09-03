@@ -106,6 +106,7 @@ describe('MeasurementHealthPanel', () => {
 					ga4Pageviews: ok(33486), vercelPageviews: ok(33597), shortfallRatio: 0.0033,
 					ga4Sessions: ok(22781), orders: ok(64), consentRate: ok(78.4),
 					vercelVisitors: ok(21400), vercelDailyUnavailable: false,
+					revenue: ok(4820), currency: 'USD', orderStatuses: { verified: 60, refunded: 4 },
 					interpretation: 'Sources agree.', daily: [],
 				}}
 			/>,
@@ -121,6 +122,7 @@ describe('MeasurementHealthPanel', () => {
 					ga4Pageviews: unavailable('source_error'), vercelPageviews: ok(2620), shortfallRatio: null,
 					ga4Sessions: unavailable('source_error'), orders: ok(12), consentRate: unavailable('source_error'),
 					vercelVisitors: ok(1730), vercelDailyUnavailable: false,
+					revenue: unavailable('source_error'), currency: null, orderStatuses: {},
 					daily: [],
 			interpretation: 'Only one pageview source answered.',
 				}}
@@ -549,6 +551,7 @@ describe('panels tolerate an older route response', () => {
 			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
 			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
 					vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+					revenue: ok(910), currency: 'USD', orderStatuses: {},
 			interpretation: 'Sources differ.',
 		} as never
 
@@ -607,6 +610,7 @@ describe('layout does not depend on design tokens resolving', () => {
 					ga4Pageviews: ok(543), vercelPageviews: ok(2392), shortfallRatio: 0.773,
 					ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
 					vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+					revenue: ok(910), currency: 'USD', orderStatuses: {},
 					interpretation: 'Sources differ.', daily: [],
 				}}
 			/>,
@@ -781,5 +785,80 @@ describe('SortableTable interaction', () => {
 			/>,
 		)
 		expect(html).toContain('This is the top of a longer list.')
+	})
+})
+
+describe('panels survive an older API route', () => {
+	// The Studio bundle and the site's route deploy on separate rails. Darden's Studio ran 0.13.1
+	// against a production route still resolving 0.6.x, so every field added since arrived as
+	// undefined. Reading `.status` on one threw inside a sort comparator, which meant the panel
+	// rendered nothing at all rather than rendering without a column.
+
+	it('renders TypefaceInterestPanel when revenue, buyRate and currency are absent', () => {
+		const html = render(
+			<TypefaceInterestPanel
+				data={{
+					rowsWithheld: false,
+					interpretationNote: 'Aggregate interest per family.',
+					rows: [
+						// Exactly what a 0.12 route returns: no revenue, no buyRate.
+						{ typeface: 'Omnes', viewed: ok(3792), tested: ok(910), bought: ok(21), testRate: 0.24 },
+					],
+				} as never}
+			/>,
+		)
+		expect(html).toContain('Omnes')
+		expect(html).toContain('3,792')
+		// And no NaN leaks into the two columns the route did not send.
+		expect(html).not.toContain('NaN')
+	})
+
+	it('renders MeasurementHealthPanel when the new Vercel and revenue fields are absent', () => {
+		const html = render(
+			<MeasurementHealthPanel
+				data={{
+					ga4Pageviews: ok(543), vercelPageviews: ok(2392), shortfallRatio: 0.773,
+					ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+					interpretation: 'Sources differ.', daily: [],
+				} as never}
+			/>,
+		)
+		expect(html).toContain('543')
+		expect(html).not.toContain('NaN')
+	})
+
+	it('renders AcquisitionPanel without NaN when the share fields are absent', () => {
+		// `!== null` let undefined through, and formatPercent(undefined) printed "NaN%" in the
+		// largest type on the panel.
+		const html = render(
+			<AcquisitionPanel
+				data={{
+					rows: [],
+					rowsWithheld: false,
+				} as never}
+			/>,
+		)
+		expect(html).not.toContain('NaN')
+	})
+})
+
+describe('DiagnosticsPanel verdicts', () => {
+	it('does not describe a healthy site as broken when checks merely skipped', () => {
+		// The severity order was fixed server-side so an all-skipped run stops reading as a problem,
+		// but the panel still fell through to "0 failing, 0 worth a look. Panels depending on these
+		// will be wrong or incomplete" — alarming, and false. Checks skip routinely.
+		const html = render(
+			<DiagnosticsPanel
+				data={{
+					verdict: 'skipped',
+					checks: [
+						{ id: 'a', label: 'Purchases agree with orders', status: 'skipped', detail: 'No purchases in range' },
+						{ id: 'b', label: 'Vercel reachable', status: 'skipped', detail: 'Not configured' },
+					],
+				} as never}
+			/>,
+		)
+		expect(html).toContain('Nothing is failing')
+		expect(html).not.toContain('will be wrong or incomplete')
 	})
 })

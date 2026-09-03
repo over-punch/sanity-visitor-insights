@@ -303,7 +303,15 @@ export async function runDiagnostics(input: DiagnosticsInput): Promise<Diagnosti
 				}),
 				countOrders(
 					sanity,
-					orderQueryOptions(config.orders, { start, end: today, timezone: config.ga4?.timezone ?? 'UTC' }),
+					{
+						...orderQueryOptions(config.orders, { start, end: today, timezone: config.ga4?.timezone ?? 'UTC' }),
+						// Deliberately UNFILTERED by status. This check compares GA4's raw purchase
+						// event count against the orders that exist, and countOrders became
+						// status-filtered — so a site allow-listing 'complete' showed a structural
+						// divergence forever, with remedy text blaming its instrumentation. The
+						// baseline moved under the check; this restores it.
+						countedStatuses: undefined,
+					},
 				),
 			])
 

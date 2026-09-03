@@ -80,6 +80,12 @@ export function createFakeGa4Client(script: Ga4Script = {}): FakeGa4Client {
 			batchCalls.push(requests)
 			if (script.failWith) throw script.failWith
 			if (script.batch) return script.batch(requests)
+			// Falls through to the single-report script when no batch script is given. A batched
+			// request is the same request shape as a single one, so a test that only cares what a
+			// given request returns should not have to know which call the report chose — and
+			// several reports moved from N concurrent runReport calls to one batch precisely to
+			// respect GA4's five-per-batch limit.
+			if (script.single) return requests.map((request) => script.single!(request))
 			return requests.map(() => makeGa4Report([]))
 		},
 

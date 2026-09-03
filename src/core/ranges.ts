@@ -66,7 +66,18 @@ export function zonedDayStartUtc(isoDate: string, timeZone: string): string {
 	if (Number.isNaN(naive)) throw new Error(`Invalid ISO date: ${isoDate}`)
 
 	// Two passes: the first guess can land on the wrong side of a DST transition, in which case its
-	// offset is the wrong one to subtract. Re-measuring at the corrected instant settles it.
+	// offset is the wrong one to subtract. Re-measuring at the corrected instant settles it for
+	// every zone whose transition is away from local midnight — which is all of them in practice,
+	// including both foundry zones, and verified across spring-forward and fall-back and for
+	// non-hour offsets (Kolkata +05:30, Kathmandu +05:45, Chatham +12:45/+13:45).
+	//
+	// It does NOT settle for a zone that transitions AT local midnight: the second pass measures
+	// the offset at the transition instant itself and never converges, leaving the day boundary an
+	// hour out in either direction (Santiago, Havana, Beirut, Cairo). Nothing double-counts,
+	// because day N's end is day N+1's start by construction, so the window merely shifts by an
+	// hour against the one GA4 was asked for. None of the three foundries uses such a zone; this is
+	// recorded rather than fixed because a third pass does not converge either — it needs the
+	// transition table, not another probe.
 	let instant = naive - zoneOffsetMs(new Date(naive), timeZone)
 	instant = naive - zoneOffsetMs(new Date(instant), timeZone)
 	return new Date(instant).toISOString()

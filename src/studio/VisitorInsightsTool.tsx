@@ -444,16 +444,20 @@ function ReportPanel({
 					<SourceStatusRow sources={state.envelope.sources} />
 					<NoticeList notices={state.envelope.notices} />
 
-					{state.envelope.comparison && (
-						// The baseline is named. A delta whose comparison window is not stated invites
-						// the reader to assume a calendar period, when these are trailing windows.
+					{/* Shown only on the panels that actually draw a delta. It used to render whenever
+					    `comparison` merely existed, which told the reader they were looking at
+					    period-over-period changes on two panels showing bare levels. */}
+					{state.envelope.comparison && COMPARED_REPORTS.includes(report) && (
 						<Text size={0} muted>
 							Changes are against {state.envelope.comparison.range.start} to {state.envelope.comparison.range.end},
 							the equivalent window immediately before this one.
+							{state.envelope.comparison.provisional && (
+								<> This window&rsquo;s last days are still being processed by GA4, so changes read low.</>
+							)}
 						</Text>
 					)}
 
-					{report === 'measurement-health' && <MeasurementHealthPanel data={state.envelope.data as never} />}
+					{report === 'measurement-health' && <MeasurementHealthPanel data={state.envelope.data as never} previous={state.envelope.comparison?.data as never} />}
 					{report === 'acquisition' && <AcquisitionPanel data={state.envelope.data as never} previous={state.envelope.comparison?.data as never} />}
 					{report === 'journey' && <JourneyPanel data={state.envelope.data as never} />}
 					{report === 'typeface-interest' && <TypefaceInterestPanel data={state.envelope.data as never} />}
@@ -478,6 +482,12 @@ function isoDaysAgo(days: number): string {
 	date.setDate(date.getDate() - days)
 	return date.toISOString().slice(0, 10)
 }
+
+/**
+ * Reports that draw a period-over-period delta. Must match the server's own list, which decides
+ * which reports pay for a second window.
+ */
+const COMPARED_REPORTS: ReportName[] = ['acquisition', 'measurement-health']
 
 /** The tool itself. */
 export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): React.ReactElement {

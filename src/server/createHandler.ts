@@ -14,6 +14,7 @@
 
 import {
 	isReportName,
+	type ReportName,
 	type DateRange,
 	type RangeKey,
 	type ReportEnvelope,
@@ -22,7 +23,7 @@ import {
 } from '../types'
 import { assertValidSiteConfig, type SiteAnalyticsConfig } from '../core/siteConfig'
 import { coverageNotices } from '../core/cutover'
-import { previousRange, resolveCustomRange, resolveRange, provisionalNotice } from '../core/ranges'
+import { previousRange, provisionalDates, resolveCustomRange, resolveRange, provisionalNotice } from '../core/ranges'
 import { applyCors, requireStudioUser, type HandlerRequest, type HandlerResponse } from './auth'
 import { createGa4Client, type Ga4Client } from './ga4'
 import { createVercelClient, type VercelClient } from './vercel'
@@ -81,6 +82,15 @@ export interface HandlerOptions {
 	/** Cache lifetime for report responses. */
 	cacheTtlMs?: number
 }
+
+/**
+ * Reports that render a period-over-period delta, and therefore pay for a second window.
+ *
+ * Deliberately a short list rather than "everything except diagnostics". Journey and typeface
+ * interest are the two most expensive reports and neither draws a delta; running them twice bought
+ * nothing and doubled the concurrent-request load on a property capped at ten.
+ */
+export const COMPARED_REPORTS: ReportName[] = ['acquisition', 'measurement-health']
 
 /** Valid range keys, as an allow-list for the query parameter. */
 const RANGE_KEYS: RangeKey[] = ['week', 'month', 'quarter', 'year', 'custom']
@@ -208,12 +218,16 @@ export function createVisitorInsightsHandler(options: HandlerOptions) {
 				// Its notices are discarded on purpose: they describe the previous window, and
 				// mixing them into this one's caveat list would attribute a cutover or a sampling
 				// warning to the wrong period.
+				//
+				// Only the reports that actually RENDER a delta pay for one. It used to run for all
+				// four non-diagnostics reports while the Studio passed the result to exactly one
+				// panel, so journey — the most expensive report in the package, three GA4 calls —
+				// cost six and discarded half, against a property whose concurrency ceiling is ten.
 				const priorRange = previousRange(range)
+				const wantsComparison = COMPARED_REPORTS.includes(reportName)
 				const [data, priorResult] = await Promise.all([
 					runReport(reportName, { config, range, ga4, vercel, sanity, notices }),
-					// Diagnostics describes the present configuration; there is no previous version
-					// of it to compare against, so it is the one report that skips this.
-					reportName === 'diagnostics'
+					!wantsComparison
 						? Promise.resolve(null)
 						: runReport(reportName, { config, range: priorRange, ga4, vercel, sanity, notices: [] })
 							.catch((e) => {
@@ -230,7 +244,22 @@ export function createVisitorInsightsHandler(options: HandlerOptions) {
 					sources,
 					notices,
 					data,
-					...(priorResult !== null ? { comparison: { range: priorRange, data: priorResult } } : {}),
+					...(priorResult !== null
+						? {
+							comparison: {
+								range: priorRange,
+								data: priorResult,
+								// Whether this window's tail is still settling. The current range ends
+								// today, so its last two days are unprocessed while the prior window is
+								// complete — which biased every GA4 delta downwards by up to two
+								// sevenths on the Week range, permanently, on the range most likely to
+								// be read. The panel marks the delta rather than hiding it, because
+								// the number is still directional and suppressing it entirely would
+								// lose the signal this feature exists to carry.
+								provisional: provisionalDates(range).length > 0,
+							},
+						}
+						: {}),
 				}
 			})
 

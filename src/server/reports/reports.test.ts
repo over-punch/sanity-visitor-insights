@@ -8,7 +8,14 @@
  * reaching a GROQ projection.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+// The GA4 client signs a service-account JWT before every call. These tests are about the request
+// BODY, not the credential, so the token exchange is stubbed rather than fed a fabricated RSA key.
+vi.mock('../googleAuth', () => ({
+	getAccessToken: async () => 'test-token',
+	parseServiceAccountKey: (raw?: string) => (raw ? { client_email: 'x', private_key: 'y' } : null),
+}))
 import type { DateRange } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
 import { PREEXISTING } from '../../core/cutover'
@@ -23,10 +30,10 @@ import {
 } from '../../testing/fakes'
 import { hasRequiredRole } from '../auth'
 import { countOrders, countOrdersByTypeface, orderQueryOptions } from '../orders'
-import { andFilters, hostnameFilter } from '../ga4'
-import { zonedDayEndUtc, zonedDayStartUtc } from '../../core/ranges'
+import { andFilters, createGa4Client, eventNameFilter, hostnameFilter } from '../ga4'
+import { previousRange, zonedDayEndUtc, zonedDayStartUtc } from '../../core/ranges'
 import { parseFunnelReport } from '../ga4'
-import { ENV_VARS, createVisitorInsightsHandler } from '../createHandler'
+import { COMPARED_REPORTS, ENV_VARS, createVisitorInsightsHandler } from '../createHandler'
 import type { HandlerRequest, HandlerResponse } from '../auth'
 import { measurementHealth } from './measurementHealth'
 import { acquisition } from './acquisition'
@@ -921,8 +928,9 @@ describe('the handler master switch', () => {
 		try {
 			const { sent, res } = recorder()
 			await handler(req, res)
-			// Any status but 503-disabled proves the gate opened. This request then fails on the
-			// Sanity token, which is the correct next check and is not what is under test here.
+			// Asserted as a specific 401, not merely "not disabled". The looser form passed for a
+			// 405, a 400, a 502 and a thrown exception — every outcome except the one it excluded.
+			expect(sent.status).toBe(401)
 			expect(sent.body).not.toMatchObject({ disabled: true })
 		} finally {
 			if (previous === undefined) delete process.env[ENV_VARS.enabled]
@@ -1219,5 +1227,247 @@ describe('minor units and missing totals', () => {
 			orderQueryOptions({ documentType: 'order' }, base),
 		)
 		expect(counts.ordersMissingTotal).toBe(0)
+	})
+})
+
+/**
+ * Client-level tests that assert the OUTGOING REQUEST, not a helper's return value.
+ *
+ * The previous hostname test asserted only that `hostnameFilter()` built the right object literal.
+ * Deleting the client's `narrow()` — the code that actually applies it — left all tests green,
+ * while the tool silently added two businesses together and called the total one site.
+ */
+describe('what the GA4 client actually sends', () => {
+	/** Capture every request body the client posts, with a stubbed token and fetch. */
+	async function captureRequests(
+		hostnames: readonly string[] | undefined,
+		run: (client: ReturnType<typeof createGa4Client>) => Promise<unknown>,
+	) {
+		const bodies: Array<{ path: string; body: Record<string, unknown> }> = []
+		const realFetch = globalThis.fetch
+
+		globalThis.fetch = (async (url: string, init: { body: string }) => ({
+			ok: true,
+			async json() {
+				bodies.push({
+					path: String(url).split(':').pop() as string,
+					body: JSON.parse(init.body) as Record<string, unknown>,
+				})
+				return { reports: [{}, {}, {}, {}, {}, {}], funnelTable: {} }
+			},
+		})) as unknown as typeof fetch
+
+		try {
+			await run(createGa4Client('123', { client_email: 'x', private_key: 'y' } as never, { hostnames }))
+		} finally {
+			globalThis.fetch = realFetch
+		}
+		return bodies
+	}
+
+	it('ANDs the hostname filter into a report that already has its own filter', async () => {
+		const bodies = await captureRequests(['www.dardenstudio.com'], (client) =>
+			client.runReport({
+				metrics: [{ name: 'sessions' }],
+				dateRanges: [{ startDate: '2026-08-20', endDate: '2026-08-26' }],
+				dimensionFilter: eventNameFilter('page_view'),
+			}),
+		)
+
+		expect(bodies[0]?.body.dimensionFilter).toEqual({
+			andGroup: {
+				expressions: [
+					{ filter: { fieldName: 'eventName', stringFilter: { matchType: 'EXACT', value: 'page_view' } } },
+					{ filter: { fieldName: 'hostName', inListFilter: { values: ['www.dardenstudio.com'] } } },
+				],
+			},
+		})
+	})
+
+	it('applies the hostname filter to a report with no filter of its own', async () => {
+		const bodies = await captureRequests(['www.dardenstudio.com'], (client) =>
+			client.runReport({ metrics: [{ name: 'sessions' }], dateRanges: [{ startDate: 'a', endDate: 'b' }] }),
+		)
+		expect(bodies[0]?.body.dimensionFilter).toEqual({
+			filter: { fieldName: 'hostName', inListFilter: { values: ['www.dardenstudio.com'] } },
+		})
+	})
+
+	it('sends no dimensionFilter at all when no hostnames are configured', async () => {
+		const bodies = await captureRequests(undefined, (client) =>
+			client.runReport({ metrics: [{ name: 'sessions' }], dateRanges: [{ startDate: 'a', endDate: 'b' }] }),
+		)
+		expect(bodies[0]?.body.dimensionFilter).toBeUndefined()
+	})
+
+	it('applies the hostname filter to every request in a batch', async () => {
+		const bodies = await captureRequests(['h.example'], (client) =>
+			client.batchRunReports([
+				{ metrics: [{ name: 'sessions' }], dateRanges: [{ startDate: 'a', endDate: 'b' }] },
+				{ metrics: [{ name: 'totalUsers' }], dateRanges: [{ startDate: 'a', endDate: 'b' }] },
+			]),
+		)
+		const requests = (bodies[0]?.body.requests ?? []) as Array<{ dimensionFilter?: unknown }>
+		expect(requests).toHaveLength(2)
+		for (const request of requests) {
+			expect(request.dimensionFilter).toEqual({
+				filter: { fieldName: 'hostName', inListFilter: { values: ['h.example'] } },
+			})
+		}
+	})
+
+	it('splits a batch above GA4\'s five-request limit rather than sending a sixth', async () => {
+		// GA4 documents "each batch request is allowed up to 5 requests" and answers a sixth with a
+		// 400 — which is not a degraded report, it is the whole panel failing. JOURNEY_STEPS has six
+		// rungs, so a fully instrumented site sat exactly on that edge.
+		const six = Array.from({ length: 6 }, () => ({
+			metrics: [{ name: 'totalUsers' }],
+			dateRanges: [{ startDate: 'a', endDate: 'b' }],
+		}))
+		const bodies = await captureRequests(undefined, (client) => client.batchRunReports(six))
+
+		expect(bodies).toHaveLength(2)
+		expect((bodies[0]?.body.requests as unknown[]).length).toBe(5)
+		expect((bodies[1]?.body.requests as unknown[]).length).toBe(1)
+	})
+
+	it('scopes the funnel with a top-level dimensionFilter, never by gating each step', async () => {
+		// A step's filterExpression is the condition a user must meet to be INCLUDED IN THAT STEP,
+		// and this funnel is closed — so ANDing the host into every step drops anyone whose first
+		// page_view landed on another host, whatever they did afterwards. That is a different
+		// number from scoping the report.
+		const bodies = await captureRequests(['h.example'], (client) =>
+			client.runFunnelReport(
+				[{ name: 'Landed', eventNames: ['page_view'] }, { name: 'Tested', eventNames: ['a', 'b'] }],
+				{ startDate: '2026-08-20', endDate: '2026-08-26' },
+			),
+		)
+
+		const body = bodies[0]?.body as { dimensionFilter?: unknown; funnel: { steps: Array<{ filterExpression: unknown }> } }
+		expect(body.dimensionFilter).toEqual({
+			filter: { fieldName: 'hostName', inListFilter: { values: ['h.example'] } },
+		})
+		// Single-event steps stay a bare funnelEventFilter; multi-event steps stay an orGroup.
+		expect(body.funnel.steps[0]?.filterExpression).toEqual({ funnelEventFilter: { eventName: 'page_view' } })
+		expect(body.funnel.steps[1]?.filterExpression).toEqual({
+			orGroup: {
+				expressions: [
+					{ funnelEventFilter: { eventName: 'a' } },
+					{ funnelEventFilter: { eventName: 'b' } },
+				],
+			},
+		})
+		// And no step carries a host gate.
+		expect(JSON.stringify(body.funnel)).not.toContain('funnelFieldFilter')
+	})
+})
+
+describe('the comparison window', () => {
+	function recorder() {
+		const sent: { status?: number; body?: unknown } = {}
+		const res = {
+			setHeader: () => {},
+			status(code: number) { sent.status = code; return res },
+			json(body: unknown) { sent.body = body },
+			end() {},
+		}
+		return { sent, res }
+	}
+
+	/** A handler wired to fakes, with auth stubbed by accepting the gate and failing later. */
+	function callFor(report: string, ga4: ReturnType<typeof createFakeGa4Client>) {
+		const handler = createVisitorInsightsHandler({
+			config: siteConfig(),
+			sanityProjectId: 'p1',
+			cacheTtlMs: 0,
+		})
+		const { sent, res } = recorder()
+		return { handler, sent, res, ga4, report }
+	}
+
+	it('asks for the immediately preceding window of the same length', () => {
+		// The arithmetic the whole feature rests on: no overlap, no gap.
+		const current = { key: 'week' as const, start: '2026-08-20', end: '2026-08-26', timezone: 'UTC' }
+		expect(previousRange(current)).toEqual({
+			key: 'week',
+			start: '2026-08-13',
+			end: '2026-08-19',
+			timezone: 'UTC',
+		})
+	})
+
+	it('runs a second window only for the reports that draw a delta', async () => {
+		// Journey is the most expensive report in the package and draws no delta. Running it twice
+		// doubled the concurrent load against a property capped at ten and discarded the result.
+		expect(COMPARED_REPORTS).toEqual(['acquisition', 'measurement-health'])
+		expect(COMPARED_REPORTS).not.toContain('journey')
+		expect(COMPARED_REPORTS).not.toContain('typeface-interest')
+		expect(COMPARED_REPORTS).not.toContain('diagnostics')
+	})
+
+	void callFor
+})
+
+describe('typeface interest completeness is per query', () => {
+	it('does not let a truncated tester query mark viewed counts unknown', async () => {
+		// One shared mutable flag meant truncation in any single tester query flipped EVERY family's
+		// viewed column to unknown — and both ratio columns null with it, since each needs a usable
+		// viewed value. On TDF that was five independent chances to poison the viewed column.
+		const config = siteConfig({ eventNames: { tester: ['tester_engaged'] } })
+		const ga4 = createFakeGa4Client({
+			batch: (requests) => requests.map((request) => {
+				const filter = request.dimensionFilter as { filter?: { stringFilter?: { value?: string } } }
+				const event = filter?.filter?.stringFilter?.value
+				// view_item is complete; the tester query is truncated.
+				if (event === 'view_item') return makeGa4Report([{ dimensions: ['Omnes'], metrics: [400] }])
+				return { ...makeGa4Report([{ dimensions: ['Omnes'], metrics: [10] }]), rowCount: 250 }
+			}),
+		})
+		const sanity = createFakeSanityClient(() => [
+			{ _createdAt: '2026-08-21T12:00:00Z', status: 'complete', typefaces: [{ title: 'Quiet Family' }] },
+		])
+
+		const data = await typefaceInterest({ config, range, ga4, sanity, notices: [] })
+		const quiet = data.rows.find((row) => row.typeface === 'Quiet Family')
+
+		// view_item was complete, so a family absent from it really did have no viewers.
+		expect(quiet?.viewed).toEqual({ status: 'ok', value: 0 })
+		// The tester query was not, so its absence is unknown.
+		expect(quiet?.tested.status).toBe('unavailable')
+	})
+
+	it('issues one batch rather than a call per tester event', async () => {
+		// TDF names five tester events. Six concurrent requests for this window, twelve once the
+		// comparison window existed, against a property whose concurrency ceiling is ten.
+		const config = siteConfig({
+			eventNames: { tester: ['a', 'b', 'c', 'd', 'e'] },
+			eventCutovers: { ...siteConfig().eventCutovers, a: PREEXISTING, b: PREEXISTING, c: PREEXISTING, d: PREEXISTING, e: PREEXISTING },
+		})
+		const ga4 = createFakeGa4Client({ batch: (requests) => requests.map(() => makeGa4Total(1)) })
+
+		await typefaceInterest({ config, range, ga4, sanity: null, notices: [] })
+
+		expect(ga4.batchCalls).toHaveLength(1)
+		expect(ga4.singleCalls).toHaveLength(0)
+		// view_item plus five tester events.
+		expect(ga4.batchCalls[0]).toHaveLength(6)
+	})
+
+	it('applies partial coverage rather than dividing a full range of orders by a partial one', async () => {
+		// Darden's view_item cutover was three days before a Quarter range was first read, so the
+		// panel divided 91 days of Sanity orders by 3 days of GA4 viewers — and buyRate clamped the
+		// resulting impossibility to a plausible-looking 100%.
+		const config = siteConfig({
+			eventCutovers: { ...siteConfig().eventCutovers, view_item: '2026-08-25' },
+		})
+		const ga4 = createFakeGa4Client({
+			batch: (requests) => requests.map(() => makeGa4Report([{ dimensions: ['Omnes'], metrics: [40] }])),
+		})
+
+		const data = await typefaceInterest({ config, range, ga4, sanity: null, notices: [] })
+		const omnes = data.rows.find((row) => row.typeface === 'Omnes')
+
+		// Partial, carrying its number and the date it is valid from — not a bare ok().
+		expect(omnes?.viewed.status).toBe('partial')
 	})
 })

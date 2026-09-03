@@ -77,7 +77,8 @@ export default visitorInsights
 
 export { VisitorInsightsTool, type VisitorInsightsToolProps } from './studio/VisitorInsightsTool'
 export { useReport, type ReportState, type UseReportOptions } from './studio/useReport'
-export { MetricFigure, ComparisonBar, NoticeList, formatCount, formatPercent } from './studio/Figure'
+export { MetricFigure, ComparisonBar, Delta, FunnelChart, NoticeList, SortableTable, TrendChart, formatCount, formatMoney, formatPercent } from './studio/Figure'
+export type { DeltaProps, SortColumn, SortableTableProps } from './studio/Figure'
 export {
 	AcquisitionPanel,
 	DiagnosticsPanel,
@@ -91,3 +92,6 @@ export * from './types'
 export { PREEXISTING, coverageForRange, type EventCutover, type Coverage } from './core/cutover'
 export { validateSiteConfig, type SiteAnalyticsConfig } from './core/siteConfig'
 export { resolveRange, previousRange } from './core/ranges'
+// The response shapes. A consumer importing a panel could not name the type of the data it takes,
+// which is exactly the code that needs these types when the Studio and the route are version-skewed.
+export type * from './reportData'

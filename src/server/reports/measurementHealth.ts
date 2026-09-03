@@ -60,7 +60,10 @@ function interpret(ga4Views: MetricValue, vercelViews: MetricValue, shortfall: n
 	const percent = Math.round(Math.abs(shortfall) * 100)
 
 	if (Math.abs(shortfall) < 0.05) {
-		return `GA4 and Vercel agree to within ${percent}% on pageviews. Nothing here suggests a measurement problem.`
+		// Rounded UP, not to nearest: a 4.5% gap rounded to "within 5%" from a branch whose
+		// condition was "< 5%", which reads as the boundary being met exactly when it was not.
+		const bound = Math.ceil(Math.abs(shortfall) * 100)
+		return `GA4 and Vercel agree to within ${bound}% on pageviews. Nothing here suggests a measurement problem.`
 	}
 
 	const direction = shortfall > 0 ? 'fewer' : 'more'
@@ -74,6 +77,16 @@ function interpret(ga4Views: MetricValue, vercelViews: MetricValue, shortfall: n
 	// magnitude accurately and framed it, as it framed every other magnitude, as expected loss with
 	// an unexplained remainder — so a total measurement outage read as a slightly worse than usual
 	// week. A tool called Measurement Health has to be able to say when measurement has failed.
+	// Both directions. A surplus of the same magnitude — GA4 reporting 2.5x Vercel, from bot
+	// traffic or a double-fired tag or a second stream — is an equally clear measurement failure,
+	// and it used to fall through to a sentence explaining it with consent refusal, which cannot
+	// account for GA4 exceeding Vercel in either direction.
+	if (shortfall < -0.6) {
+		return `${base} GA4 is reporting far MORE than Vercel, which consent and blocking cannot cause — `
+			+ `they only ever reduce GA4. Look for a double-fired tag, a second data stream on the `
+			+ `property, or bot traffic GA4 is counting and Vercel is not.`
+	}
+
 	if (shortfall > 0.6) {
 		return `${base} That is far more than consent refusal and ad-blocking can account for — those `
 			+ `typically cost tens of percent, not most of the traffic. Treat this as a measurement `
@@ -172,10 +185,24 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 				// no clamp is needed and a value above 100% would be a real signal rather than noise
 				// to be hidden. It is still bounded, because a rate over 1 here means the two
 				// queries disagree and the figure should not be shown as if it were sound.
-				const raw = sumFirstMetric(consent) / ga4Users
+				// The consent report is dimensioned by eventName, so each row is distinct users FOR THAT
+				// EVENT. Summing them double-counts anyone who fired two — which is the same
+				// events-over-events mistake this file's comment above says it was fixing. The max
+				// is the tightest correct bound available from this response: at least that many
+				// distinct people granted consent, and no row can exceed the true union.
+				const grants = consent.rows.reduce((most, row) => {
+					const value = row.metrics[0]
+					return value !== undefined && Number.isFinite(value) ? Math.max(most, value) : most
+				}, 0)
+				const raw = grants / ga4Users
 				consentRate = raw <= 1
 					? ok(Math.round(raw * 1000) / 10)
 					: unavailable('source_error', 'Consent grants exceed the users GA4 reported, so the two queries disagree')
+			} else if (consentCoverage.status === 'full' && consent && ga4Users === 0) {
+				// Instrumented, but there is no denominator. Distinct from "never instrumented",
+				// which is what this used to fall through to — telling the reader to go instrument
+				// an event they already have.
+				consentRate = unavailable('source_error', 'GA4 reported no users in this range, so there is nothing to divide by')
 			} else if (consentCoverage.status === 'partial') {
 				consentRate = unavailable('before_cutover', `Instrumented from ${consentCoverage.cutover}`)
 			}
@@ -193,8 +220,15 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	if (vercel) {
 		try {
 			const result = await vercel.pageviews(range.start, range.end)
-			vercelPageviews = ok(result.total)
-			vercelVisitors = ok(result.visitors)
+			// Null rather than zero when Vercel's response did not carry the figure: this panel
+			// exists to distinguish "measured nothing" from "did not measure", and it must hold
+			// itself to that first.
+			vercelPageviews = result.total === null
+				? unavailable('source_error', 'Vercel returned no pageview total')
+				: ok(result.total)
+			vercelVisitors = result.visitors === null
+				? unavailable('source_error', 'Vercel returned no visitor count')
+				: ok(result.visitors)
 			vercelByDate = result.byDate
 		} catch (e) {
 			console.error('Visitor insights: Vercel query failed:', (e as Error).message)
@@ -204,10 +238,23 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	}
 
 	let orders: MetricValue = unavailable('source_error', 'Sanity not configured')
+	let revenue: MetricValue = unavailable('source_error', 'Sanity not configured')
+	let currency: string | null = null
+	/** The status vocabulary this site's own orders use, so countedStatuses can be configured. */
+	let orderStatuses: Record<string, number> = {}
 	if (sanity) {
 		try {
 			const counts = await countOrders(sanity, orderQueryOptions(config.orders, range))
 			orders = ok(counts.total)
+			// Revenue was computed on every one of these requests and thrown away, which is the
+			// same sin this file's other comments congratulate themselves for fixing. It is also
+			// the figure the owner opens the tool for, and the only one in the package that GA4's
+			// collapse could not touch.
+			revenue = counts.revenue === null
+				? unavailable('not_applicable', 'No order total field is configured for this site')
+				: ok(counts.revenue)
+			currency = config.orders.currency ?? null
+			orderStatuses = counts.byStatus
 			if (counts.ordersMissingTotal > 0) {
 				input.notices?.push(
 					`${counts.ordersMissingTotal} of ${counts.total} counted orders carry no usable total, ` +
@@ -223,6 +270,7 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		} catch (e) {
 			console.error('Visitor insights: order count failed:', (e as Error).message)
 			orders = unavailable('source_error')
+			revenue = unavailable('source_error')
 		}
 	}
 
@@ -261,6 +309,9 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		shortfallRatio,
 		ga4Sessions,
 		orders,
+		revenue,
+		currency,
+		orderStatuses,
 		consentRate,
 		interpretation: interpret(ga4Pageviews, vercelPageviews, shortfallRatio, consentRate),
 		daily,

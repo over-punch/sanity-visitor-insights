@@ -219,6 +219,57 @@ export function validateSiteConfig(config: Partial<SiteAnalyticsConfig> | undefi
 		}
 	}
 
+	// The GROQ field slots. Not a sandbox — the config author is the site's own code author — but
+	// the realistic mistake is a typo or a paste that points one of these at a customer field, and
+	// a leak through them would be silent: PII read as a status becomes "(no status)" and PII read
+	// as a total becomes null, so it never surfaces in a panel to be noticed.
+	const FIELD_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/
+	const PII_HINTS = ['email', 'name', 'phone', 'address', 'postcode', 'postal', 'zip', 'customer', 'billing']
+
+	const fieldSlots: Array<[string, string | null | undefined]> = [
+		['orders.statusField', config.orders?.statusField],
+		['orders.totalField', config.orders?.totalField],
+		['orders.typefacesField', config.orders?.typefacesField],
+	]
+
+	for (const [field, value] of fieldSlots) {
+		if (!value) continue
+		if (!FIELD_PATH.test(value)) {
+			problems.push({ field, message: `Must be a plain field path, e.g. "orderStatus.status": ${value}` })
+			continue
+		}
+		const lowered = value.toLowerCase()
+		const hint = PII_HINTS.find((word) => lowered.includes(word))
+		if (hint) {
+			problems.push({
+				field,
+				message: `Looks like it may point at personal data ("${hint}"). No query in this package may project a customer field.`,
+			})
+		}
+	}
+
+	// A revenue figure with no currency renders as a bare integer beside columns that are counts,
+	// which is indistinguishable from one.
+	if (config.orders?.totalField && !config.orders.currency) {
+		problems.push({
+			field: 'orders.currency',
+			message: 'Required when totalField is set, or revenue renders as an unlabelled number beside counts',
+		})
+	}
+
+	// An event named here but absent from eventCutovers reports as an unknown event and silently
+	// contributes nothing — a cross-field constraint that is cheap to check and easy to miss.
+	for (const [concept, names] of Object.entries(config.eventNames ?? {})) {
+		for (const name of names ?? []) {
+			if (config.eventCutovers && !(name in config.eventCutovers)) {
+				problems.push({
+					field: `eventNames.${concept}`,
+					message: `"${name}" is not in eventCutovers, so it will report as an unknown event`,
+				})
+			}
+		}
+	}
+
 	for (const host of config.ga4?.hostnames ?? []) {
 		// A scheme or a path here would silently match nothing: GA4's hostName dimension is the
 		// bare host. Catching it at construction beats an empty dashboard.

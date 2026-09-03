@@ -36,9 +36,33 @@ import type { MetricValue } from '../types'
  * of an ascending column beside genuine zeros, which is the confusion MetricValue exists to prevent.
  * SortableTable sinks nulls in both directions instead.
  */
-function metricSortValue(metric: MetricValue): number | null {
-	return metric.status === 'unavailable' ? null : metric.value
+function metricSortValue(metric: MetricValue | undefined): number | null {
+	if (!metric || metric.status === 'unavailable') return null
+	return Number.isFinite(metric.value) ? metric.value : null
 }
+
+/**
+ * Read a metric field that may not exist in the response at all.
+ *
+ * The Studio bundle and the site's API route deploy on separate rails, so a Studio can be several
+ * versions ahead of the route it calls — Darden's Studio was on 0.13.1 while its production route
+ * still resolved 0.6.x. Every field added since then arrives as `undefined`, and reading `.status`
+ * on it threw inside a sort comparator, which meant the panel rendered nothing at all rather than
+ * rendering without one column.
+ *
+ * Array fields were already guarded with `?? []`. Metric fields were not, and this is the guard
+ * they needed.
+ *
+ * @param metric - the possibly-absent field
+ * @param detail - what to say when it is absent
+ */
+function metricOr(metric: MetricValue | undefined, detail: string): MetricValue {
+	if (metric) return metric
+	return { status: 'unavailable', reason: 'not_applicable', detail }
+}
+
+/** What an absent field means: the route predates the field, not the site lacking the data. */
+const OLDER_ROUTE = 'This site\u2019s API route predates this figure. Redeploy the site to see it.'
 
 /** Largest available value across metrics, for scaling bars. */
 function maxOf(metrics: MetricValue[]): number {
@@ -57,6 +81,22 @@ const tableWrap: React.CSSProperties = { overflowX: 'auto', width: '100%' }
  * section regardless of what the shim resolves.
  */
 const sectionHeading: React.CSSProperties = { margin: '0 0 2px', lineHeight: 1.3 }
+
+/**
+ * A usable number, or null.
+ *
+ * Narrower than a `!== null` check, which lets `undefined` through — and `undefined` is exactly
+ * what an older API route sends for a field added since it was deployed. `formatPercent(undefined)`
+ * then renders "NaN%" in the largest type on the panel.
+ */
+function finiteOrNull(value: number | null | undefined): number | null {
+	return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/** Identity for a source row: every dimension the report groups by. */
+function acquisitionRowKey(row: SourceRow): string {
+	return [row.source, row.channel, row.medium ?? '', row.campaign ?? ''].join(' \u203a ')
+}
 
 /** A figure with its period-over-period delta alongside, wrapping on a narrow pane. */
 const figureRow: React.CSSProperties = {
@@ -109,7 +149,7 @@ const numericCell: React.CSSProperties = { ...cell, textAlign: 'right' }
  * Compares pageviews to pageviews. Sessions and orders sit alongside as context and are never
  * subtracted from a pageview count.
  */
-export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }): React.ReactElement {
+export function MeasurementHealthPanel({ data, previous }: { data: MeasurementHealthData; previous?: MeasurementHealthData }): React.ReactElement {
 	const pageviewMax = maxOf([data.ga4Pageviews, data.vercelPageviews])
 
 	return (
@@ -168,6 +208,31 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 				</Stack>
 			)}
 
+			{Object.keys(data.orderStatuses ?? {}).length > 0 && (
+				<Stack space={3}>
+					<Heading size={1} style={sectionHeading}>Order statuses in this range</Heading>
+					{/* The only place a site's own status vocabulary is visible. Without it nobody can
+					    configure which statuses count as a sale — and getting that wrong zeroes every
+					    order-derived figure in the tool with nothing on screen to explain it. */}
+					<Text size={1} muted>
+						What the orders actually say, before any filtering. Use these values to set which
+						statuses count as a sale.
+					</Text>
+					<div style={cardGrid}>
+						{Object.entries(data.orderStatuses ?? {})
+							.sort((a, b) => b[1] - a[1])
+							.map(([status, count]) => (
+								<Card key={status} padding={3} radius={2} tone="transparent" border>
+									<Stack space={3}>
+										<Label size={1} muted>{status}</Label>
+										<Text size={3}>{formatCount(count)}</Text>
+									</Stack>
+								</Card>
+							))}
+					</div>
+				</Stack>
+			)}
+
 			<Stack space={3}>
 				<Heading size={1} style={sectionHeading}>Context</Heading>
 				<Text size={1} muted>
@@ -176,10 +241,26 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 				<div style={cardGrid}>
 					<Card padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
+							<Label size={1} muted>Revenue</Label>
+							{/* The figure the owner opens the tool for, and the only one here that
+							    survived the GA4 collapse untouched — orders are server-side. */}
+							<div style={figureRow}>
+								{metricOr(data.revenue, OLDER_ROUTE).status === 'ok'
+									? <Text size={4}>{formatMoney((data.revenue as { value: number }).value, data.currency ?? null)}</Text>
+									: <MetricFigure metric={metricOr(data.revenue, OLDER_ROUTE)} label="Revenue" />}
+								<Delta
+									current={metricSortValue(data.revenue)}
+									previous={metricSortValue(previous?.revenue)}
+								/>
+							</div>
+						</Stack>
+					</Card>
+					<Card padding={3} radius={2} tone="transparent" border>
+						<Stack space={3}>
 							<Label size={1} muted>Vercel visitors</Label>
 							{/* Fetched on every call and previously discarded, though it is the only
 							    visitor figure here that consent refusal and ad-blocking cannot reduce. */}
-							<MetricFigure metric={data.vercelVisitors} label="Vercel visitors" />
+							<MetricFigure metric={metricOr(data.vercelVisitors, OLDER_ROUTE)} label="Vercel visitors" />
 							<Text size={0} muted>Counted server-side, so neither consent nor ad-blocking reduces it.</Text>
 						</Stack>
 					</Card>
@@ -192,7 +273,10 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 					<Card padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
 							<Label size={1} muted>Orders</Label>
-							<MetricFigure metric={data.orders} label="Orders" />
+							<div style={figureRow}>
+								<MetricFigure metric={data.orders} label="Orders" />
+								<Delta current={metricSortValue(data.orders)} previous={metricSortValue(previous?.orders)} />
+							</div>
 						</Stack>
 					</Card>
 					<Card padding={3} radius={2} tone="transparent" border>
@@ -209,6 +293,10 @@ export function MeasurementHealthPanel({ data }: { data: MeasurementHealthData }
 
 /** Acquisition — where visitors came from, with design-industry referrers called out. */
 export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; previous?: AcquisitionData }): React.ReactElement {
+	const designShare = finiteOrNull(data.designIndustryShare)
+	const unattributedShare = finiteOrNull(data.unattributedShare)
+	const sessions = finiteOrNull(data.totalSessions)
+
 	return (
 		<Stack space={4}>
 			<div style={cardGrid}>
@@ -216,20 +304,20 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 					<Stack space={3}>
 						<Label size={1} muted>Sessions</Label>
 						<div style={figureRow}>
-							<Text size={4}>{formatCount(data.totalSessions)}</Text>
-							<Delta current={data.totalSessions} previous={previous?.totalSessions ?? null} />
+							<Text size={4}>{sessions === null ? '\u2014' : formatCount(sessions)}</Text>
+							<Delta current={sessions} previous={finiteOrNull(previous?.totalSessions)} />
 						</div>
 					</Stack>
 				</Card>
-				{data.designIndustryShare !== null && (
+				{designShare !== null && (
 					<Card padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
 							<Label size={1} muted>From design-industry referrers</Label>
 							<div style={figureRow}>
-								<Text size={4}>{formatPercent(data.designIndustryShare, 1)}</Text>
+								<Text size={4}>{formatPercent(designShare, 1)}</Text>
 								<Delta
-									current={data.designIndustryShare * 100}
-									previous={previous?.designIndustryShare != null ? previous.designIndustryShare * 100 : null}
+									current={designShare * 100}
+									previous={finiteOrNull(previous?.designIndustryShare) !== null ? (previous!.designIndustryShare as number) * 100 : null}
 									unit="percent"
 								/>
 							</div>
@@ -239,15 +327,15 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 						</Stack>
 					</Card>
 				)}
-				{data.unattributedShare !== null && (
+				{unattributedShare !== null && (
 					<Card padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
 							<Label size={1} muted>Unattributed</Label>
 							<div style={figureRow}>
-								<Text size={4}>{formatPercent(data.unattributedShare, 1)}</Text>
+								<Text size={4}>{formatPercent(unattributedShare, 1)}</Text>
 								<Delta
-									current={data.unattributedShare * 100}
-									previous={previous?.unattributedShare != null ? previous.unattributedShare * 100 : null}
+									current={unattributedShare * 100}
+									previous={finiteOrNull(previous?.unattributedShare) !== null ? (previous!.unattributedShare as number) * 100 : null}
 									riseIsGood={false}
 									unit="percent"
 								/>
@@ -267,7 +355,11 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 					caption="Traffic sources by sessions"
 					initialSort="sessions"
 					rows={data.rows ?? []}
-					rowKey={(row) => `${row.source}-${row.channel}`}
+					// Every dimension the report requests, not just two of them. With medium and
+					// campaign added, several rows share a source and channel — which is the point
+					// of the column — and a two-part key gave duplicate React keys and made one
+					// exclude click remove every row that shared it.
+					rowKey={acquisitionRowKey}
 					filterOn={(row) => `${row.source} ${row.channel} ${row.medium ?? ''} ${row.campaign ?? ''}`}
 					filterPlaceholder="Filter sources"
 					exportName="traffic-sources"
@@ -311,6 +403,7 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 							key: 'campaign',
 							label: 'Campaign',
 							sortValue: (row) => row.campaign,
+							exportValue: (row) => row.campaign ?? row.medium ?? '',
 							// Every campaign, ad group and keyword used to collapse into one row, so
 							// there was no unit of spend here that a buyer could pause.
 							render: (row) => row.campaign
@@ -328,12 +421,13 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 							key: 'engagement',
 							label: 'Engaged',
 							numeric: true,
-							sortValue: (row) => row.engagementRate,
+							sortValue: (row) => finiteOrNull(row.engagementRate),
+							exportValue: (row) => { const r = finiteOrNull(row.engagementRate); return r === null ? null : formatPercent(r, 0) },
 							// The quality signal. Ranked by volume alone, 27 Display sessions looked
 							// equal to 27 from Search, which flatters the worst line of spend.
-							render: (row) => row.engagementRate === null
+							render: (row) => finiteOrNull(row.engagementRate) === null
 								? <Text size={1} muted>—</Text>
-								: <Text size={1}>{formatPercent(row.engagementRate, 0)}</Text>,
+								: <Text size={1}>{formatPercent(row.engagementRate as number, 0)}</Text>,
 						},
 					]}
 				/>
@@ -448,12 +542,13 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 								key: 'engagement',
 								label: 'Engaged',
 								numeric: true,
-								sortValue: (page) => page.engagementRate,
+								sortValue: (page) => finiteOrNull(page.engagementRate),
+								exportValue: (page) => { const r = finiteOrNull(page.engagementRate); return r === null ? null : formatPercent(r, 0) },
 								// Volume alone could not distinguish a page that delivers 200 arrivals
 								// which leave from one that feeds the shop.
-								render: (page) => page.engagementRate === null
+								render: (page) => finiteOrNull(page.engagementRate) === null
 									? <Text size={1} muted>—</Text>
-									: <Text size={1}>{formatPercent(page.engagementRate, 0)}</Text>,
+									: <Text size={1}>{formatPercent(page.engagementRate as number, 0)}</Text>,
 							},
 						]}
 					/>
@@ -520,21 +615,32 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 							label: 'Revenue',
 							numeric: true,
 							sortValue: (row) => metricSortValue(row.revenue),
+							exportValue: (row) => {
+								const value = metricSortValue(row.revenue)
+								return value === null ? null : formatMoney(value, data.currency ?? null)
+							},
 							// The column that lets a catalogue be ranked by what it is worth rather
 							// than by unit count, where a $30 web licence and a $400 desktop family
 							// were the same integer.
-							render: (row) => row.revenue.status === 'unavailable'
-								? <MetricFigure metric={row.revenue} label={`${row.typeface} revenue`} size={1} />
-								: <Text size={1}>{formatMoney(row.revenue.value, data.currency)}</Text>,
+							// Only a plain `ok` takes the bare-text branch. A `partial` value kept its
+							// number but lost the caution badge and the note explaining what it
+							// covers, which every other numeric column in this table keeps.
+							render: (row) => {
+								const revenue = metricOr(row.revenue, OLDER_ROUTE)
+								return revenue.status === 'ok'
+									? <Text size={1}>{formatMoney(revenue.value, data.currency ?? null)}</Text>
+									: <MetricFigure metric={revenue} label={`${row.typeface} revenue`} size={1} />
+							},
 						},
 						{
 							key: 'buyRate',
 							label: 'Buy rate',
 							numeric: true,
-							sortValue: (row) => row.buyRate,
+							sortValue: (row) => finiteOrNull(row.buyRate),
+							exportValue: (row) => { const r = finiteOrNull(row.buyRate); return r === null ? null : formatPercent(r, 2) },
 							render: (row) => (
-								<Text size={1} muted aria-label={row.buyRate === null ? `${row.typeface} buy rate unavailable` : undefined}>
-									{row.buyRate === null ? '—' : formatPercent(row.buyRate, 2)}
+								<Text size={1} muted aria-label={finiteOrNull(row.buyRate) === null ? `${row.typeface} buy rate unavailable` : undefined}>
+									{finiteOrNull(row.buyRate) === null ? '—' : formatPercent(row.buyRate as number, 2)}
 								</Text>
 							),
 						},
@@ -542,10 +648,11 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 							key: 'testRate',
 							label: 'Test rate',
 							numeric: true,
-							sortValue: (row) => row.testRate,
+							sortValue: (row) => finiteOrNull(row.testRate),
+							exportValue: (row) => { const r = finiteOrNull(row.testRate); return r === null ? null : formatPercent(r, 1) },
 							render: (row) => (
-								<Text size={1} muted aria-label={row.testRate === null ? `${row.typeface} test rate unavailable` : undefined}>
-									{row.testRate === null ? '—' : formatPercent(row.testRate, 1)}
+								<Text size={1} muted aria-label={finiteOrNull(row.testRate) === null ? `${row.typeface} test rate unavailable` : undefined}>
+									{finiteOrNull(row.testRate) === null ? '—' : formatPercent(row.testRate as number, 1)}
 								</Text>
 							),
 						},
@@ -609,7 +716,14 @@ export function DiagnosticsPanel({ data }: { data: DiagnosticReport }): React.Re
 			? 'No checks ran. Nothing here has been verified either way.'
 			: data.verdict === 'pass'
 				? 'Configuration and credentials check out. That covers the wiring, not whether the figures are worth trusting — the caveats on each panel still apply.'
-				: `${failing} failing, ${warning} worth a look. Panels depending on these will be wrong or incomplete until they are resolved.`
+				// A verdict of `skipped` is not a failure. The server-side severity order was fixed
+				// so an all-skipped run stops reporting as a problem, but this branch still fell
+				// through to the failure sentence and printed "0 failing, 0 worth a look. Panels
+				// depending on these will be wrong or incomplete" — alarming, and false. Checks skip
+				// routinely: no Vercel project, no purchases in the window, no orders in thirty days.
+				: failing === 0 && warning === 0
+					? `Nothing is failing. ${checks.length - failing - warning} check${checks.length - failing - warning === 1 ? '' : 's'} could not run in this range — usually because there was nothing to check, not because something is wrong.`
+					: `${failing} failing, ${warning} worth a look. Panels depending on these will be wrong or incomplete until they are resolved.`
 
 	return (
 		<Stack space={4}>

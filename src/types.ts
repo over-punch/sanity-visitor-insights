@@ -142,10 +142,19 @@ export interface ReportEnvelope<T> {
 	 * A bare level is close to meaningless at these volumes: "389 sessions" is neither good nor bad
 	 * without last week beside it, and the 24 August collapse would have announced itself on every
 	 * panel as a delta while going unnoticed for over a week as a level. Absent when the comparison
-	 * could not be computed — a source failed, or the previous window predates the site's
-	 * instrumentation — because a missing comparison must not read as "no change".
+	 * could not be computed, because a missing comparison must not read as "no change". Absent
+	 * means the prior run threw, or this report does not draw deltas; there is deliberately no
+	 * cutover check here, and an earlier version of this comment claimed one existed.
 	 */
-	comparison?: { range: DateRange; data: T }
+	comparison?: {
+		range: DateRange
+		data: T
+		/**
+		 * True when the CURRENT window still has unprocessed days while the comparison window is
+		 * complete, which biases every GA4-derived delta downwards.
+		 */
+		provisional: boolean
+	}
 }
 
 /** Error shape returned by the handler. Never leaks upstream error text to the browser. */

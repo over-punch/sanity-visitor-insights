@@ -63,6 +63,18 @@ export interface MeasurementHealthData {
 	ga4Sessions: MetricValue
 	/** Orders in range. Ground truth for conversions, shown as context. */
 	orders: MetricValue
+	/** Revenue across counted orders. Unavailable when the site names no total field. */
+	revenue: MetricValue
+	/** ISO 4217 code for `revenue`, or null. */
+	currency: string | null
+	/**
+	 * How many orders carried each status, before any status filtering.
+	 *
+	 * The only place a site's own status vocabulary is visible. Without it an operator cannot
+	 * configure `countedStatuses`, and misconfiguring it zeroes every order-derived figure in the
+	 * tool with nothing on screen to explain why.
+	 */
+	orderStatuses: Record<string, number>
 	/** Share of sessions that granted consent, where the event exists. */
 	consentRate: MetricValue
 	/** Plain-language reading of the numbers above, for a non-analyst audience. */

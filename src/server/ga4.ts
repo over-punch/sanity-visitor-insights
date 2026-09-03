@@ -1,10 +1,17 @@
 /**
  * GA4 Data API client.
  *
- * Only `runReport` and `batchRunReports` are used. `runFunnelReport` is deliberately not called:
- * it is an alpha surface with its own stricter quota, and it returns step-conversion marginals
- * rather than observed paths — drawing a flow diagram from it would imply co-occurrence that was
- * never measured. The journey report approximates instead, and says so.
+ * Three endpoints are used: `runReport`, `batchRunReports` and `runFunnelReport`.
+ *
+ * An earlier version of this comment said `runFunnelReport` was "deliberately not called" because
+ * it "returns step-conversion marginals rather than observed paths". That was wrong on the facts —
+ * it returns an ordered, closed, per-user sequence — and journey.ts documents the reversal. The
+ * claim is retracted here rather than left standing, because a stale docblock at the top of a file
+ * is what a reader trusts instead of re-deriving the behaviour.
+ *
+ * Two API limits are enforced in this module rather than at the call sites, so no caller has to
+ * remember them: `batchRunReports` accepts at most five requests per call, and a client-wide
+ * hostname filter is ANDed into every request.
  */
 
 import { getAccessToken, type ServiceAccountKey } from './googleAuth'
@@ -224,6 +231,14 @@ export interface Ga4Client {
 	runFunnelReport(steps: readonly Ga4FunnelStep[], range: { startDate: string; endDate: string }): Promise<Ga4FunnelReport>
 }
 
+/**
+ * Most requests GA4 accepts in one `batchRunReports` call.
+ *
+ * Documented as "each batch request is allowed up to 5 requests". Exceeding it is a 400, not a
+ * truncation, so it takes the whole report down.
+ */
+const MAX_BATCH_REQUESTS = 5
+
 /** Options narrowing what a client will report on. */
 export interface Ga4ClientOptions {
 	/**
@@ -314,25 +329,48 @@ export function createGa4Client(propertyId: string, key: ServiceAccountKey, opti
 		async batchRunReports(requests) {
 			if (requests.length === 0) return []
 
-			const raw = await post<{ reports?: RawReport[] }>('batchRunReports', { requests: requests.map(narrow) })
-			return (raw.reports ?? []).map(parseReport)
+			// GA4 allows at most five requests per batch. The journey funnel has six rungs, so a
+			// fully instrumented site sent six and got a 400 — which is not a degraded funnel, it
+			// is the whole panel 502ing, because that call is not individually caught. Chunking
+			// here rather than at each call site means no caller has to know the limit.
+			const chunks: Ga4ReportRequest[][] = []
+			for (let i = 0; i < requests.length; i += MAX_BATCH_REQUESTS) {
+				chunks.push(requests.slice(i, i + MAX_BATCH_REQUESTS))
+			}
+
+			const responses = await Promise.all(
+				chunks.map((chunk) =>
+					post<{ reports?: RawReport[] }>('batchRunReports', { requests: chunk.map(narrow) }),
+				),
+			)
+
+			// Order is preserved across chunks, because callers index the result positionally
+			// against the requests they passed in.
+			return responses.flatMap((raw) => (raw.reports ?? []).map(parseReport))
 		},
 
 		async runFunnelReport(steps, range) {
-			// RunFunnelReportRequest takes only dateRanges, funnel and funnelBreakdown — there is no
-			// top-level dimension filter to hang the hostname on. A step's filterExpression does
-			// accept a funnelFieldFilter though, so the host is ANDed into every step instead.
-			const hostStepFilter = hosts
-				? { funnelFieldFilter: { fieldName: 'hostName', inListFilter: { values: [...hosts] } } }
-				: null
-
-			const body = {
+			// The hostname goes in a TOP-LEVEL dimensionFilter, not into each step.
+			//
+			// An earlier version ANDed a funnelFieldFilter into every step's filterExpression, on
+			// the belief that the request had no top-level filter. That is both unverified and
+			// semantically wrong: a step's filterExpression is the condition a user must meet to be
+			// INCLUDED IN THAT STEP, and this funnel is closed (isOpenFunnel is unset, so users must
+			// enter at step one). Gating entry on the hostname silently drops anyone whose first
+			// page_view happened on another host, regardless of what they did afterwards — a
+			// different number from scoping the report, reported as if it were the same one.
+			//
+			// If GA4 rejects this field the call throws and journey() falls back to per-step
+			// totals, which batchRunReports scopes correctly. That fallback is now reported to the
+			// reader rather than only to a server log.
+			const body: Record<string, unknown> = {
 				dateRanges: [range],
 				funnel: {
-					steps: steps.map((step) => {
+					steps: steps.map((step) => ({
+						name: step.name,
 						// One event satisfies the step directly; several go in an orGroup, which is
 						// how GA4 expresses "any of these" — TDF maps five tester events onto one rung.
-						const eventExpression = step.eventNames.length === 1
+						filterExpression: step.eventNames.length === 1
 							? { funnelEventFilter: { eventName: step.eventNames[0] } }
 							: {
 								orGroup: {
@@ -340,17 +378,12 @@ export function createGa4Client(propertyId: string, key: ServiceAccountKey, opti
 										funnelEventFilter: { eventName },
 									})),
 								},
-							}
-
-						return {
-							name: step.name,
-							filterExpression: hostStepFilter
-								? { andGroup: { expressions: [eventExpression, hostStepFilter] } }
-								: eventExpression,
-						}
-					}),
+							},
+					})),
 				},
 			}
+
+			if (hostFilter) body.dimensionFilter = hostFilter
 
 			const raw = await post<RawFunnelReport>('runFunnelReport', body, DATA_API_ALPHA)
 			return parseFunnelReport(raw)

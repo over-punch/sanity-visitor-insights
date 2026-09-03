@@ -9,7 +9,8 @@
 export { createVisitorInsightsHandler, ENV_VARS, type HandlerOptions } from './server/createHandler'
 export type { HandlerRequest, HandlerResponse, StudioUser } from './server/auth'
 export { verifyStudioRequest, requireStudioUser, applyCors } from './server/auth'
-export type { SanityQueryClient } from './server/orders'
+export { countOrders, countOrdersByTypeface, orderQueryOptions, UNKNOWN_STATUS } from './server/orders'
+export type { OrderCounts, OrderQueryOptions, SanityQueryClient, TypefaceOrderCounts } from './server/orders'
 export { clearCache } from './server/cache'
 
 // Report result shapes, so a consuming site can type a custom surface against them.
@@ -26,7 +27,9 @@ export { runDiagnostics, type DiagnosticsInput } from './server/diagnostics'
 export { createGa4Client, eventNameFilter, sumFirstMetric, type Ga4Client, type Ga4Report, type Ga4ReportRequest } from './server/ga4'
 export { createVercelClient, type VercelClient, type VercelPageviews } from './server/vercel'
 export { parseServiceAccountKey, type ServiceAccountKey } from './server/googleAuth'
-export type { CheckStatus, DiagnosticCheck, DiagnosticReport } from './reportData'
+// Every response shape, not a hand-picked three. A consumer building a compatibility shim needs
+// to name the type of whatever the route returned.
+export type * from './reportData'
 
 // Shared contract, re-exported so the server entry is self-sufficient.
 export * from './types'

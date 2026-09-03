@@ -76,37 +76,45 @@ export interface DeltaProps {
  * "no change", which is a different and much more reassuring claim.
  */
 export function Delta({ current, previous, riseIsGood = true, unit = 'count' }: DeltaProps): React.ReactElement | null {
-	if (current === null || previous === null) return null
+	// isFinite, not a null check. An older API route sends undefined for a field it does not know
+	// about, and a NaN can reach here from a division the server got wrong — both pass `!== null`
+	// and render "NaN%" beside a confident arrow.
+	if (!Number.isFinite(current as number) || !Number.isFinite(previous as number)) return null
+	const now = current as number
+	const before = previous as number
 
-	// A change from zero has no defined percentage. Saying "new" is honest where "+100%" is not,
-	// and "+∞%" is what a naive division produces.
-	const isNew = previous === 0 && current > 0
-	const change = previous === 0 ? null : (current - previous) / Math.abs(previous)
-	const absolute = current - previous
+	const absolute = now - before
 
-	if (!isNew && absolute === 0) {
+	if (absolute === 0) {
 		return <span style={deltaStyle('flat')}>no change</span>
 	}
 
+	// A change from zero has no defined percentage in either direction. "+∞%" is what a naive
+	// division produces, and asserting `change` non-null let a fall to zero print "↓ 0%".
+	const change = before === 0 ? null : absolute / Math.abs(before)
 	const rising = absolute > 0
 	const tone = rising === riseIsGood ? 'good' : 'bad'
 	const arrow = rising ? '\u2191' : '\u2193'
 
-	const magnitude = isNew
-		? 'new'
+	// The baseline is formatted in the figure's own unit. Reading "Previous period: 43" under a
+	// 43.2% consent rate is the same defect MetricFigure's `unit` was added to fix.
+	const baseline = unit === 'percent' ? `${before.toFixed(1)}%` : formatCount(before)
+
+	const magnitude = change === null
+		? (rising ? 'new' : 'gone')
 		: unit === 'percent'
 			// Percentage points, not a percentage of a percentage: a consent rate moving 40% → 44%
 			// rose by 4 points, and calling that "+10%" is a different and confusing claim.
-			? `${rising ? '+' : ''}${(absolute).toFixed(1)} pts`
-			: `${rising ? '+' : ''}${formatPercent(change as number, 0)}`
+			? `${rising ? '+' : ''}${absolute.toFixed(1)} pts`
+			: `${rising ? '+' : ''}${formatPercent(change, 0)}`
 
 	return (
-		<span style={deltaStyle(tone)} title={`Previous period: ${formatCount(previous)}`}>
+		<span style={deltaStyle(tone)} title={`Previous period: ${baseline}`}>
 			<span aria-hidden="true">{arrow}</span>
 			{' '}
 			{magnitude}
 			<span style={visuallyHidden}>
-				{' '}compared with {formatCount(previous)} in the previous period
+				{' '}compared with {baseline} in the previous period
 			</span>
 		</span>
 	)
@@ -117,18 +125,20 @@ export function Delta({ current, previous, riseIsGood = true, unit = 'count' }: 
  * meaning survives a monochrome or colour-blind reading.
  */
 function deltaStyle(tone: 'good' | 'bad' | 'flat'): React.CSSProperties {
-	const colors: Record<string, string> = {
-		good: 'var(--card-fg-color, currentColor)',
-		bad: 'var(--card-fg-color, currentColor)',
-		flat: 'currentColor',
-	}
+	// A bad move is set in a heavier weight and full opacity; a good one recedes. `riseIsGood` used
+	// to compute this tone and then map both values to the same colour and opacity, so a rising
+	// Unattributed figure looked identical to a rising Sessions figure — the one distinction the
+	// prop exists to draw. Weight and opacity rather than hue, so it survives a monochrome reading
+	// and does not collide with the Studio's own semantic colours.
 	return {
 		fontFamily: 'inherit',
 		fontSize: '0.8em',
-		fontWeight: 500,
-		opacity: tone === 'flat' ? 0.55 : 0.85,
-		color: colors[tone],
+		fontWeight: tone === 'bad' ? 600 : 500,
+		opacity: tone === 'flat' ? 0.55 : tone === 'bad' ? 1 : 0.7,
+		color: 'currentColor',
 		whiteSpace: 'nowrap',
+		// A bad move gets a rule under it, so direction is not carried by weight alone.
+		borderBottom: tone === 'bad' ? '1px solid currentColor' : 'none',
 	}
 }
 
@@ -764,6 +774,14 @@ export interface SortColumn<Row> {
 	 * direction, because an unmeasured row is not a small one and must not lead an ascending sort.
 	 */
 	sortValue: (row: Row) => number | string | null
+	/**
+	 * Value written to the CSV, when it differs from the sort key.
+	 *
+	 * Defaults to `sortValue`, which is right for a plain count and wrong for anything formatted:
+	 * a rate sorts on 0.4318 and displays 43%, revenue sorts on a bare number and displays a
+	 * currency, and a column with a fallback displays something `sortValue` returns null for.
+	 */
+	exportValue?: (row: Row) => number | string | null
 	render: (row: Row) => React.ReactNode
 }
 
@@ -818,7 +836,13 @@ export function SortableTable<Row>({
 	)
 	const [query, setQuery] = React.useState('')
 	const [excluded, setExcluded] = React.useState<ReadonlySet<string>>(() => new Set())
-	const [copied, setCopied] = React.useState(false)
+	const [copied, setCopied] = React.useState<'idle' | 'done' | 'failed'>('idle')
+	// Held so repeated clicks cannot stack timers and revert the label early, and so the pending
+	// one is cleared on unmount.
+	const copyTimer = React.useRef<number | null>(null)
+	React.useEffect(() => () => {
+		if (copyTimer.current !== null) window.clearTimeout(copyTimer.current)
+	}, [])
 
 	const active = sort ? columns.find((c) => c.key === sort.key) : undefined
 
@@ -869,20 +893,29 @@ export function SortableTable<Row>({
 	const copyCsv = async () => {
 		const header = columns.map((column) => column.label)
 		const lines = [header, ...ordered.map((row) => columns.map((column) => {
-			const value = column.sortValue(row)
-			return value === null ? '' : String(value)
+			// `exportValue` where a column defines one, because `sortValue` is a SORT KEY and is
+			// routinely a different thing from what the cell shows: engagement sorts on 0.4318 and
+			// displays 43%, revenue sorts on a bare number and displays a currency, and campaign
+			// sorts on null where the cell shows the medium it falls back to. The comment below
+			// promised a copy of what is on screen and delivered the sort keys instead.
+			const value = column.exportValue ? column.exportValue(row) : column.sortValue(row)
+			return value === null || value === undefined ? '' : String(value)
 		}))]
-		const csv = lines
-			.map((cells) => cells.map((cell) => (/[",\n]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell)).join(','))
-			.join('\n')
+
+		const csv = lines.map((cells) => cells.map(csvCell).join(',')).join('\n')
 
 		try {
 			await navigator.clipboard.writeText(csv)
-			setCopied(true)
-			window.setTimeout(() => setCopied(false), 2000)
+			setCopied('done')
+			if (copyTimer.current !== null) window.clearTimeout(copyTimer.current)
+			copyTimer.current = window.setTimeout(() => setCopied('idle'), 2000)
 		} catch {
-			// Clipboard permission can be refused; say so rather than appearing to succeed.
-			setCopied(false)
+			// Reachable, not exotic: navigator.clipboard is undefined in any non-secure context, so
+			// a Studio served over plain http or on an internal IP lands here every time. It used
+			// to set the flag back to idle, which rendered as the button doing nothing at all.
+			setCopied('failed')
+			if (copyTimer.current !== null) window.clearTimeout(copyTimer.current)
+			copyTimer.current = window.setTimeout(() => setCopied('idle'), 4000)
 		}
 	}
 
@@ -918,7 +951,7 @@ export function SortableTable<Row>({
 					<span style={{ flex: 1 }} />
 					{exportName && (
 						<button type="button" style={tableControlButton} onClick={() => void copyCsv()}>
-							{copied ? 'Copied' : 'Copy as CSV'}
+							{copied === 'done' ? 'Copied' : copied === 'failed' ? 'Could not copy' : 'Copy as CSV'}
 						</button>
 					)}
 				</div>
@@ -1000,6 +1033,19 @@ export function SortableTable<Row>({
 		{truncatedNote && <Text size={0} muted>{truncatedNote}</Text>}
 		</Stack>
 	)
+}
+
+/**
+ * Escape one CSV cell.
+ *
+ * Quotes the separators, and neutralises a leading `=`, `+`, `-`, `@`, tab or carriage return.
+ * That second part matters because source and campaign values are attacker-influenceable from
+ * outside: anyone can request the site with `?utm_campaign==HYPERLINK("...")`, GA4 stores it, and
+ * pasting the export into a spreadsheet would evaluate it as a live formula.
+ */
+function csvCell(cell: string): string {
+	const neutralised = /^[=+\-@\t\r]/.test(cell) ? `'${cell}` : cell
+	return /[",\n]/.test(neutralised) ? `"${neutralised.replace(/"/g, '""')}"` : neutralised
 }
 
 /** The controls above a table: filter, hidden-row count, export. */

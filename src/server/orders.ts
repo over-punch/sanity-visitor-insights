@@ -4,8 +4,20 @@
  * Orders on these sites carry customer names, emails and postal addresses. Joining that to
  * behavioural analytics would turn aggregate statistics into personal-data processing and put the
  * GA4 property at risk under Google's terms, so no query in this file may project a PII field.
- * The projections below are allow-lists, not conveniences: every GROQ query here names the exact
- * fields it returns, and none of them is a customer identifier.
+ *
+ * That rule is enforced by REVIEW AND BY CONFIG VALIDATION, not by this module's structure. An
+ * earlier version of this header claimed "every GROQ query here names the exact fields it returns"
+ * — which stopped being true once `statusField`, `totalField` and `typefacesField` became
+ * caller-supplied strings interpolated into the projection, joining `excludeFilter`, which has been
+ * interpolated into the filter since the beginning. Four of the field slots are named by config and
+ * only `_createdAt` is hard-coded. `validateSiteConfig` now refuses anything that is not a plain
+ * dotted field path and rejects a short list of obvious PII names, which catches the realistic
+ * mistake — a typo or a paste pointing a field at an email. It is not a sandbox, and the config
+ * author is the site's own code author, at the same trust level.
+ *
+ * The reason this matters more than it looks: a leak here would be SILENT. PII read through
+ * `statusField` becomes `(no status)` and PII read through `totalField` becomes null, so it reaches
+ * the server process and its logs and never appears in a panel.
  *
  * Revenue used to be excluded on the grounds that this package reports behaviour and the sales
  * portal reports sales. That was the wrong line to draw. An order total is not a customer field,
@@ -133,6 +145,14 @@ export interface TypefaceOrderCounts {
 	revenueByTypeface: Record<string, number> | null
 	/** Distinct orders that resolved to at least one typeface. */
 	orders: number
+	/** Counted orders carrying no usable total, so their families have no revenue attributed. */
+	ordersMissingTotal: number
+	/**
+	 * Revenue on orders whose typefaces did not resolve, so it belongs to no family.
+	 * Null when no total field is configured. Reported so the column can be reconciled against
+	 * the range's total rather than quietly summing to less than it.
+	 */
+	unattributedRevenue: number | null
 }
 
 /** What this module needs from a Sanity client — kept minimal so it is trivial to stub in tests. */
@@ -304,6 +324,8 @@ export async function countOrdersByTypeface(
 	const byTypeface: Record<string, number> = {}
 	const revenueByTypeface: Record<string, number> = {}
 	let counted = 0
+	let ordersMissingTotal = 0
+	let unattributedRevenue = 0
 
 	for (const order of orders) {
 		if (!isCounted(statusKey(order.status), options.countedStatuses)) continue
@@ -315,14 +337,25 @@ export async function countOrdersByTypeface(
 			const title = typeface?.title
 			if (title) families.add(title)
 		}
-		if (families.size === 0) continue
+		const value = money(order.orderTotal, options.totalInMinorUnits)
+
+		if (families.size === 0) {
+			// An order whose typefaces do not resolve. Its whole total is real revenue that no
+			// family can carry, so it is counted rather than silently dropped — otherwise the
+			// revenue column sums to less than the range's revenue with nothing to explain it.
+			if (value !== null) unattributedRevenue += value
+			continue
+		}
 
 		counted += 1
-		const value = money(order.orderTotal, options.totalInMinorUnits)
 		const share = value !== null ? value / families.size : null
+		if (share === null && options.totalField) ordersMissingTotal += 1
 
 		for (const family of families) {
 			byTypeface[family] = (byTypeface[family] ?? 0) + 1
+			// Only families on an order that HAS a total get a revenue entry. A family whose orders
+			// all lack a total must read as unavailable, not as $0.00 — that is the same defect as
+			// rendering a withheld view count as zero, in the column beside it.
 			if (share !== null) revenueByTypeface[family] = (revenueByTypeface[family] ?? 0) + share
 		}
 	}
@@ -331,5 +364,7 @@ export async function countOrdersByTypeface(
 		byTypeface,
 		revenueByTypeface: options.totalField ? revenueByTypeface : null,
 		orders: counted,
+		ordersMissingTotal,
+		unattributedRevenue: options.totalField ? unattributedRevenue : null,
 	}
 }
