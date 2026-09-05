@@ -32,7 +32,7 @@ vi.mock('sanity', () => ({
 	definePlugin: (definition: unknown) => definition,
 }))
 import visitorInsights from '../index'
-import { Delta, MetricFigure, NoticeList, SortableTable, TrendChart } from './Figure'
+import { Delta, MetricFigure, NoticeList, ProportionChart, SortableTable, TrendChart } from './Figure'
 import { ok, partial, unavailable } from '../types'
 import { UI } from '@liiift-studio/sanity-ui-compat'
 
@@ -108,7 +108,7 @@ describe('MeasurementHealthPanel', () => {
 					vercelVisitors: ok(21400), vercelDailyUnavailable: false,
 					revenue: ok(4820), currency: 'USD', orderStatuses: { verified: 60, refunded: 4 },
 					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
-					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
+					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [], crossSource: [], timelineEvents: [],
 					interpretation: 'Sources agree.', daily: [],
 				}}
 			/>,
@@ -126,7 +126,7 @@ describe('MeasurementHealthPanel', () => {
 					vercelVisitors: ok(1730), vercelDailyUnavailable: false,
 					revenue: unavailable('source_error'), currency: null, orderStatuses: {},
 					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
-					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
+					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [], crossSource: [], timelineEvents: [],
 					daily: [],
 			interpretation: 'Only one pageview source answered.',
 				}}
@@ -307,7 +307,7 @@ describe('TypefaceInterestPanel', () => {
 		const html = render(
 			<TypefaceInterestPanel
 				data={{
-					rowsWithheld: false, rowsTruncated: false, revenueIsApportioned: true, currency: 'USD',
+					rowsWithheld: false, rowsTruncated: false, revenueIsApportioned: true, currency: 'USD', licences: [],
 					interpretationNote: 'Aggregate interest per family, not individual journeys.',
 					rows: [
 						{ typeface: 'Omnes', viewed: ok(3792), tested: ok(910), bought: ok(21), revenue: ok(6300), buyRate: 0.0055, testRate: 0.24 },
@@ -557,7 +557,7 @@ describe('panels tolerate an older route response', () => {
 					vercelVisitors: ok(1580), vercelDailyUnavailable: false,
 					revenue: ok(910), currency: 'USD', orderStatuses: {},
 					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
-					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
+					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [], crossSource: [], timelineEvents: [],
 			interpretation: 'Sources differ.',
 		} as never
 
@@ -618,7 +618,7 @@ describe('layout does not depend on design tokens resolving', () => {
 					vercelVisitors: ok(1580), vercelDailyUnavailable: false,
 					revenue: ok(910), currency: 'USD', orderStatuses: {},
 					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
-					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
+					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [], crossSource: [], timelineEvents: [],
 					interpretation: 'Sources differ.', daily: [],
 				}}
 			/>,
@@ -878,7 +878,7 @@ describe('capture model rendering', () => {
 		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
 		revenue: ok(910), currency: 'USD', orderStatuses: {},
 		interpretation: 'Sources differ.', daily: [],
-		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
+		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [], crossSource: [], timelineEvents: [],
 	}
 
 	it('never renders an inferred figure as a measured one', () => {
@@ -934,5 +934,93 @@ describe('capture model rendering', () => {
 			/>,
 		)
 		expect(html).not.toContain('How much GA4 is seeing')
+	})
+})
+
+describe('CrossSourceTimeline', () => {
+	const days = ['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-05']
+	const base = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		revenue: ok(910), currency: 'USD', orderStatuses: {},
+		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
+		capture: { estimates: [], rate: 0.25, low: 0.2, high: 0.3, discrepancy: null },
+		estimatedSessions: unavailable('not_applicable'),
+		interpretation: 'Sources differ.', daily: [],
+		crossSource: days.map((date, i) => ({
+			date, vercelPageviews: 300 + i * 10, ga4Sessions: 60 + i, orders: i, revenue: i * 120,
+		})),
+		timelineEvents: [{ date: '2026-09-03', label: 'September release', detail: '1,200 sent, 84 clicked' }],
+	}
+
+	it('draws every source against one shared axis', () => {
+		const html = render(<MeasurementHealthPanel data={base as never} />)
+		expect(html).toContain('Everything, on one time axis')
+		expect(html).toContain('Pageviews')
+		expect(html).toContain('Sessions')
+		expect(html).toContain('Revenue')
+	})
+
+	it('states that the rows are not co-scaled', () => {
+		// The reason small multiples were chosen over a dual axis. A reader who assumes a shared
+		// scale would read a crossing as a fact rather than as an artefact of the ratio picked.
+		const html = render(<MeasurementHealthPanel data={base as never} />)
+		expect(html).toContain('not co-scaled')
+	})
+
+	it('marks a lossy source as dashed and a complete one as solid', () => {
+		const html = render(<MeasurementHealthPanel data={base as never} />)
+		// GA4's row carries a dash array; Vercel's and Sanity's do not.
+		expect(html).toContain('stroke-dasharray="1.5 1"')
+		expect(html).toContain('Dashed means the source misses things')
+	})
+
+	it('rules a campaign send through the chart', () => {
+		// Three sources and a fourth as a marker — the only view that can answer whether the send
+		// moved traffic and money.
+		const html = render(<MeasurementHealthPanel data={base as never} />)
+		expect(html).toContain('Vertical rules mark campaign sends')
+	})
+
+	it('renders nothing rather than an empty frame below three days', () => {
+		const html = render(<MeasurementHealthPanel data={{ ...base, crossSource: base.crossSource.slice(0, 2) } as never} />)
+		expect(html).not.toContain('Everything, on one time axis')
+	})
+})
+
+describe('ProportionChart', () => {
+	it('scales bars against the sum, not the largest row', () => {
+		// Against the max, the top row is full width whatever it is worth — which is the misreading
+		// the funnel avoids by anchoring to its entry step.
+		const html = render(
+			<ProportionChart
+				bars={[
+					{ key: 'a', label: 'Desktop', sublabel: 'Perpetual', value: 750 },
+					{ key: 'b', label: 'Web', sublabel: '1 year', value: 250 },
+				]}
+				format={(v) => `$${v}`}
+				totalLabel="Total"
+			/>,
+		)
+		expect(html).toContain('width:75%')
+		expect(html).toContain('width:25%')
+		expect(html).toContain('$1000')
+	})
+
+	it('shows the share and the absolute together', () => {
+		// A share alone hides that the leading row might be two orders; an absolute alone hides
+		// that it is most of the business.
+		const html = render(
+			<ProportionChart bars={[{ key: 'a', label: 'Desktop', value: 3 }]} format={(v) => `${v} orders`} totalLabel="Total" />,
+		)
+		expect(html).toContain('3 orders')
+		expect(html).toContain('100%')
+	})
+
+	it('renders nothing when the rows sum to zero', () => {
+		expect(renderToStaticMarkup(
+			<ProportionChart bars={[{ key: 'a', label: 'x', value: 0 }]} format={String} totalLabel="Total" />,
+		)).toBe('')
 	})
 })

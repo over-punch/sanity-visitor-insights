@@ -20,7 +20,7 @@ import { ok, unavailable } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
 import { applyCoverage, coverageForAny } from '../../core/cutover'
 import { eventNamesFilter, type Ga4Client, type Ga4Report } from '../ga4'
-import { countOrdersByTypeface, orderQueryOptions, type SanityQueryClient } from '../orders'
+import { countLicenceTiers, countOrdersByTypeface, orderQueryOptions, type LicenceTier, type SanityQueryClient } from '../orders'
 
 /** GA4 event evidencing a typeface page view. */
 const VIEW_EVENT = 'view_item'
@@ -263,7 +263,25 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 		input.notices?.push('GA4 answered the typeface breakdown from a sample, so these counts are estimates.')
 	}
 
+	// The licence mix. Exact, Sanity-only, and unaffected by whatever GA4 is doing — which makes it
+	// the most trustworthy thing on this panel and the answer to the live pricing question: which
+	// tier sells, at what term.
+	let licences: LicenceTier[] | null = null
+	if (sanity && config.orders.licenceFields) {
+		try {
+			licences = await countLicenceTiers(
+				sanity,
+				orderQueryOptions(config.orders, range),
+				config.orders.typefacesField,
+				config.orders.licenceFields,
+			)
+		} catch (e) {
+			console.error('Visitor insights: licence tier count failed:', (e as Error).message)
+		}
+	}
+
 	return {
+		licences: licences ?? [],
 		rows,
 		interpretationNote: INTERPRETATION_NOTE,
 		rowsWithheld: anyThresholded,

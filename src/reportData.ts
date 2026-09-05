@@ -89,6 +89,15 @@ export interface MeasurementHealthData {
 	audienceGrowth: MetricValue
 	/** Campaigns sent in the range. Empty when Mailchimp is unconfigured. */
 	campaigns: EmailCampaign[]
+	/**
+	 * Every source that reports daily, on one shared set of dates.
+	 *
+	 * The only view here that can answer whether something we did moved something we care about: a
+	 * send date from Mailchimp, traffic from Vercel, behaviour from GA4, money from Sanity.
+	 */
+	crossSource: CrossSourceDay[]
+	/** Dated events to rule through that timeline. */
+	timelineEvents: TimelineEvent[]
 	/** Revenue across counted orders. Unavailable when the site names no total field. */
 	revenue: MetricValue
 	/** ISO 4217 code for `revenue`, or null. */
@@ -137,6 +146,32 @@ export interface EmailCampaign {
 	/** Distinct subscribers who clicked. One person, one expected GA4 session. */
 	clicks: number
 	unsubscribed: number
+}
+
+/**
+ * One day, across every source that reports daily.
+ *
+ * Assembled server-side rather than joined in the panel so the union of dates is computed once and
+ * every row is guaranteed to cover the same span — a chart whose rows silently end on different
+ * days invites reading a data gap as a fall.
+ */
+export interface CrossSourceDay {
+	date: string
+	/** Vercel pageviews. Complete: server-side, so neither consent nor ad-blocking reduces it. */
+	vercelPageviews: number | null
+	/** GA4 sessions. Lossy by the capture rate. */
+	ga4Sessions: number | null
+	/** Orders placed. Exact. */
+	orders: number | null
+	/** Revenue taken, in major units. Exact where a total field is configured. */
+	revenue: number | null
+}
+
+/** A dated event to rule through the timeline — currently a campaign send. */
+export interface TimelineEvent {
+	date: string
+	label: string
+	detail?: string
 }
 
 export interface DailyPoint {
@@ -261,6 +296,19 @@ export interface JourneyData {
 // ---------------------------------------------------------------------------
 
 /** One family's interest figures. */
+/** One licence tier at one term, as orders record it. */
+export interface LicenceTierRow {
+	/** Licence type, e.g. Desktop. */
+	type: string
+	/** Tier label as shown at checkout, e.g. "1–5 users". */
+	tier: string
+	/** Term label, e.g. "1 year" or "Perpetual". */
+	term: string
+	orders: number
+	/** Revenue apportioned to this row, or null when no total field is configured. */
+	revenue: number | null
+}
+
 export interface TypefaceInterestRow {
 	typeface: string
 	viewed: MetricValue
@@ -288,6 +336,13 @@ export interface TypefaceInterestData {
 	interpretationNote: string
 	/** True when GA4 withheld low-count rows, so quiet families may be missing entirely. */
 	rowsWithheld: boolean
+	/**
+	 * Orders and revenue by licence type, tier and term.
+	 *
+	 * Sanity-only and therefore exact — the one figure on this panel that survives whatever GA4 is
+	 * doing. Empty on a site whose orders do not record tiers.
+	 */
+	licences: LicenceTierRow[]
 	/** GA4's row cap was reached, so families past it are missing rather than idle. */
 	rowsTruncated: boolean
 	/** Whether the revenue column is an apportionment rather than a measured per-family value. */

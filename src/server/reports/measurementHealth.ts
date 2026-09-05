@@ -18,7 +18,7 @@
  * and the panel says why.
  */
 
-import type { EmailCampaign, MeasurementHealthData, DailyPoint } from '../../reportData'
+import type { CrossSourceDay, EmailCampaign, MeasurementHealthData, DailyPoint, TimelineEvent } from '../../reportData'
 import type { DateRange, MetricValue } from '../../types'
 import { estimated, ok, unavailable } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
@@ -124,6 +124,8 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	let consentRate: MetricValue = unavailable('not_instrumented')
 	/** Daily GA4 pageviews keyed by ISO date, for the trend. */
 	const ga4ByDate = new Map<string, number>()
+	/** Daily GA4 sessions, for the behavioural row of the cross-source timeline. */
+	const ga4SessionsByDate = new Map<string, number>()
 	/** Daily Vercel pageviews keyed by ISO date. Already fetched; previously discarded. */
 	let vercelByDate: Record<string, number> = {}
 	/** GA4's own purchase count, for the orders-based capture estimate. */
@@ -156,7 +158,10 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 				// The daily series. Same batch, so it costs one row in an existing request rather
 				// than another quota-charged call.
 				{
-					metrics: [{ name: 'screenPageViews' }],
+					// Sessions alongside pageviews: the cross-source timeline plots the behavioural
+					// row from this, and a second metric on an existing request costs nothing while
+					// a second request would cost a slot against a ten-concurrent ceiling.
+					metrics: [{ name: 'screenPageViews' }, { name: 'sessions' }],
 					dimensions: [{ name: 'date' }],
 					dateRanges: [{ startDate: range.start, endDate: range.end }],
 					orderBys: [{ dimension: { dimensionName: 'date' } }],
@@ -207,6 +212,16 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 			}
 
 			ga4Purchases = purchases ? sumFirstMetric(purchases) : null
+
+			// Daily sessions for the behavioural row. Read from the daily report that already
+			// carries pageviews, so it costs a metric rather than another request.
+			for (const row of daily?.rows ?? []) {
+				const date = row.dimensions[0]
+				const value = row.metrics[1]
+				if (date && date.length === 8 && value !== undefined && Number.isFinite(value)) {
+					ga4SessionsByDate.set(`${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`, value)
+				}
+			}
 			emailSessions = emailReport ? sumFirstMetric(emailReport) : null
 
 			const consentCoverage = coverageForAny(config.eventCutovers, consentEvents, range)
@@ -271,6 +286,10 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	let revenue: MetricValue = unavailable('source_error', 'Sanity not configured')
 	/** The exact order count, as the capture model's denominator. */
 	let orderTotal: number | null = null
+	/** Orders per day, for the timeline. */
+	let ordersByDate: Record<string, number> = {}
+	/** Revenue per day, or null when the site names no total field. */
+	let revenueByDate: Record<string, number> | null = null
 	let currency: string | null = null
 	/** The status vocabulary this site's own orders use, so countedStatuses can be configured. */
 	let orderStatuses: Record<string, number> = {}
@@ -279,6 +298,8 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 			const counts = await countOrders(sanity, orderQueryOptions(config.orders, range))
 			orders = ok(counts.total)
 			orderTotal = counts.total
+			ordersByDate = counts.byDate
+			revenueByDate = counts.revenueByDate
 			// Revenue was computed on every one of these requests and thrown away, which is the
 			// same sin this file's other comments congratulate themselves for fixing. It is also
 			// the figure the owner opens the tool for, and the only one in the package that GA4's
@@ -403,7 +424,39 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		)
 		: unavailable('not_applicable', 'Not enough overlap between sources to estimate a true figure')
 
+	// The cross-source timeline. Built from the union of every source's dates so the rows share a
+	// span; a row that silently ended earlier than its neighbours would read as a fall rather than
+	// as an absence.
+	const crossDates = [...new Set([
+		...ga4SessionsByDate.keys(),
+		...(vercelIsDaily ? Object.keys(vercelByDate) : []),
+		...Object.keys(ordersByDate),
+		...Object.keys(revenueByDate ?? {}),
+	])].sort()
+
+	const crossSource: CrossSourceDay[] = crossDates.map((date) => ({
+		date,
+		vercelPageviews: vercelIsDaily && typeof vercelByDate[date] === 'number' ? vercelByDate[date] : null,
+		ga4Sessions: ga4SessionsByDate.has(date) ? (ga4SessionsByDate.get(date) as number) : null,
+		// Zero rather than null: Sanity is exact, so a day with no order really did have none.
+		// Null here would draw a gap and read as "not measured", which is the opposite of the truth.
+		orders: ordersByDate[date] ?? 0,
+		revenue: revenueByDate ? revenueByDate[date] ?? 0 : null,
+	}))
+
+	// Campaign sends. Date and title only — a marker says when and what; the table below it carries
+	// the campaign's actual numbers.
+	const timelineEvents: TimelineEvent[] = campaigns
+		.filter((campaign) => campaign.sentAt)
+		.map((campaign) => ({
+			date: campaign.sentAt.slice(0, 10),
+			label: campaign.title,
+			detail: `${formatInt(campaign.sent)} sent, ${formatInt(campaign.clicks)} clicked`,
+		}))
+
 	return {
+		crossSource,
+		timelineEvents,
 		ga4Pageviews,
 		vercelPageviews,
 		vercelVisitors,
@@ -426,3 +479,9 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 }
 
 export type { MeasurementHealthData } from '../../reportData'
+
+
+/** Whole number for a marker's detail line. */
+function formatInt(value: number): string {
+	return new Intl.NumberFormat('en-US').format(Math.round(value))
+}

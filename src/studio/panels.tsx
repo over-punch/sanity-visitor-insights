@@ -15,7 +15,8 @@
 
 import React from 'react'
 import { Badge, Box, Card, Flex, Grid, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ComparisonBar, Delta, FunnelChart, MetricFigure, NoticeList, SortableTable, TrendChart, formatCount, formatMoney, formatPercent } from './Figure'
+import { ComparisonBar, Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, SortableTable, TrendChart, formatCount, formatMoney, formatPercent } from './Figure'
+import { CrossSourceTimeline } from './CrossSourceTimeline'
 import type {
 	AcquisitionData,
 	CheckStatus,
@@ -185,6 +186,63 @@ export function MeasurementHealthPanel({ data, previous }: { data: MeasurementHe
 					<Text size={1} muted>{data.interpretation}</Text>
 				</Stack>
 			</Card>
+
+			{/* The cross-source view, first on the panel because it is the only one that answers a
+			    question no single source can: did the thing we did move the thing we care about. */}
+			{(data.crossSource?.length ?? 0) >= 3 && (
+				<Stack space={3}>
+					<Heading size={1} style={sectionHeading}>Everything, on one time axis</Heading>
+					<Text size={1} muted>
+						Each row keeps its own scale — traffic and revenue are not co-scaled, because whatever
+						factor made them share an axis would invent a correlation the data never claimed.
+						Aligned rows show the same co-movement and assert nothing about relative size.
+					</Text>
+					<CrossSourceTimeline
+						currency={data.currency ?? null}
+						markers={data.timelineEvents ?? []}
+						series={[
+							{
+								key: 'vercel',
+								label: 'Pageviews',
+								source: 'Vercel',
+								complete: true,
+								unit: 'count',
+								points: (data.crossSource ?? []).map((d) => ({ date: d.date, value: d.vercelPageviews })),
+							},
+							{
+								key: 'ga4',
+								label: 'Sessions',
+								source: 'GA4',
+								complete: false,
+								unit: 'count',
+								// The band runs from what GA4 measured up to where the capture model
+								// says it probably sits. The measured line is never replaced by it.
+								grossUpFactor: data.capture?.rate && data.capture.rate > 0 && data.capture.rate < 1
+									? 1 / data.capture.rate
+									: undefined,
+								points: (data.crossSource ?? []).map((d) => ({ date: d.date, value: d.ga4Sessions })),
+							},
+							...(data.crossSource?.some((d) => d.revenue !== null)
+								? [{
+									key: 'revenue',
+									label: 'Revenue',
+									source: 'Sanity' as const,
+									complete: true,
+									unit: 'money' as const,
+									points: (data.crossSource ?? []).map((d) => ({ date: d.date, value: d.revenue })),
+								}]
+								: [{
+									key: 'orders',
+									label: 'Orders',
+									source: 'Sanity' as const,
+									complete: true,
+									unit: 'count' as const,
+									points: (data.crossSource ?? []).map((d) => ({ date: d.date, value: d.orders })),
+								}]),
+						]}
+					/>
+				</Stack>
+			)}
 
 			{/* What GA4 is actually seeing, measured against the sources that are not lossy.
 			    Three ratios of the same quantity: agreement makes it a measurement, and
@@ -767,6 +825,35 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 					]}
 				/>
 			</Stack>
+
+			{(data.licences?.length ?? 0) > 0 && (
+				<Stack space={3}>
+					<Heading size={1} style={sectionHeading}>How licences sell</Heading>
+					<Text size={1} muted>
+						From the orders themselves, so this is exact and unaffected by whatever GA4 is doing.
+						Tier and term are separate rows, because they are the two variables in the pricing
+						question and a tier that sells well at one year may not at perpetual.
+					</Text>
+					<ProportionChart
+						bars={(data.licences ?? []).map((row) => ({
+							key: `${row.type}-${row.tier}-${row.term}`,
+							label: `${row.type} · ${row.tier}`,
+							sublabel: row.term,
+							// Ranked by revenue where it is known, by orders where it is not — a
+							// count would put a cheap tier above one worth ten times as much.
+							value: row.revenue ?? row.orders,
+						}))}
+						format={(value) => (data.licences ?? []).some((r) => r.revenue !== null)
+							? formatMoney(value, data.currency ?? null)
+							: `${formatCount(value)} orders`}
+						totalLabel={(data.licences ?? []).some((r) => r.revenue !== null) ? 'Total across licences' : 'Total licence lines'}
+					/>
+					<Text size={0} muted>
+						An order covering several licences is split evenly between them: the documents carry
+						no per-licence line value, so this is an apportionment rather than a measurement.
+					</Text>
+				</Stack>
+			)}
 
 			{/* Both completeness flags were computed by the server and drawn nowhere, so a table
 			    holding part of the catalogue was presented as the catalogue. */}

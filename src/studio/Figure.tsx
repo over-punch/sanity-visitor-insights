@@ -277,6 +277,69 @@ export function ComparisonBar({ label, metric, max, tone = 'default' }: Comparis
 	)
 }
 
+/** One bar of a proportion chart. */
+export interface ProportionBar {
+	key: string
+	label: string
+	sublabel?: string
+	value: number
+}
+
+/** Props for ProportionChart. */
+export interface ProportionChartProps {
+	bars: ProportionBar[]
+	/** How to write each value out. */
+	format: (value: number) => string
+	/** What the bars sum to, named — a share is meaningless without its denominator stated. */
+	totalLabel: string
+}
+
+/**
+ * A ranked part-to-whole bar chart.
+ *
+ * For a breakdown whose rows sum to something meaningful — licence revenue by tier, say. Each bar
+ * carries its share of the total AND its absolute value, because a share alone hides that the
+ * leading row might be two orders, and an absolute alone hides that it is most of the business.
+ *
+ * Bars scale against the SUM rather than against the largest row, so the widths read as shares of
+ * the whole. Scaling to the max would make the top row full-width whatever it was worth, which is
+ * the same misreading the funnel avoids by anchoring to its entry step.
+ */
+export function ProportionChart({ bars, format, totalLabel }: ProportionChartProps): React.ReactElement | null {
+	if (bars.length === 0) return null
+
+	const total = bars.reduce((sum, bar) => sum + bar.value, 0)
+	if (total <= 0) return null
+
+	const ordered = [...bars].sort((a, b) => b.value - a.value)
+
+	return (
+		<Stack space={2}>
+			{ordered.map((bar) => {
+				const share = bar.value / total
+				return (
+					<Stack space={1} key={bar.key}>
+						<div style={barHeader}>
+							<Text size={1} weight="medium">
+								{bar.label}
+								{bar.sublabel && <Text size={0} muted as="span">{' '}· {bar.sublabel}</Text>}
+							</Text>
+							<Text size={1}>
+								{format(bar.value)}
+								<Text size={0} muted as="span">{' '}({formatPercent(share, 0)})</Text>
+							</Text>
+						</div>
+						<Card aria-hidden="true" radius={2} tone="transparent" border style={{ height: 8, overflow: 'hidden' }}>
+							<Card tone="primary" radius={2} style={{ width: `${Math.max(1, share * 100)}%`, height: '100%' }} />
+						</Card>
+					</Stack>
+				)
+			})}
+			<Text size={0} muted>{totalLabel}: {format(total)}</Text>
+		</Stack>
+	)
+}
+
 /** One rung of the funnel, already filtered to steps that are actually measured. */
 export interface FunnelStage {
 	key: string
