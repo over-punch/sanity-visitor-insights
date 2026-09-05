@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 import { PREEXISTING, applyCoverage, coverageForRange, coverageNotices, type EventCutover } from './cutover'
 import { RANGE_DAYS, daysBetween, formatInTimeZone, previousRange, provisionalNotice, resolveCustomRange, resolveRange, shiftDays } from './ranges'
 import { validateSiteConfig } from './siteConfig'
+import { captureModel, fromEmail, fromOrders, fromPageviews, grossUp } from './capture'
 import { zonedDayEndUtc, zonedDayStartUtc } from './ranges'
 import { ENV_VARS, isEnabled } from '../server/createHandler'
 import { valueOrNull } from '../types'
@@ -425,5 +426,78 @@ describe('config validation additions', () => {
 			orders: { documentType: 'order', typefacesField: null, countedStatuses: [] },
 		})
 		expect(problems.some((p) => p.field === 'orders.countedStatuses')).toBe(true)
+	})
+})
+
+describe('GA4 capture rate', () => {
+	it('refuses an estimate whose denominator is too small to mean anything', () => {
+		// At seven orders a quarter, one order either way moves this rate fourteen points. A ratio
+		// that noisy is not a measurement, and showing it with a caveat nobody reads is worse than
+		// not showing it.
+		expect(fromOrders(1, 4)).toBeNull()
+		expect(fromOrders(3, 7)).not.toBeNull()
+	})
+
+	it('prefers the orders estimate over the pageview one as the point estimate', () => {
+		// Orders compare the same event on both sides against an exact denominator. Pageviews do
+		// not — Vercel counts crawlers and prefetches GA4 never sees.
+		const model = captureModel([fromPageviews(200, 1000), fromOrders(7, 10)])
+		expect(model.rate).toBeCloseTo(0.7, 5)
+		// And the spread becomes the interval rather than being averaged away.
+		expect(model.low).toBeCloseTo(0.2, 5)
+		expect(model.high).toBeCloseTo(0.7, 5)
+	})
+
+	it('never averages the estimates into one number', () => {
+		// The mean of a same-event ratio and a not-like-for-like one is neither of them.
+		const model = captureModel([fromPageviews(200, 1000), fromOrders(7, 10)])
+		expect(model.rate).not.toBeCloseTo(0.45, 2)
+	})
+
+	it('names the fault when purchases are captured but pageviews are not', () => {
+		const model = captureModel([fromOrders(9, 10), fromPageviews(200, 1000)])
+		expect(model.discrepancy).toContain('pageview comparison')
+		expect(model.discrepancy).toContain('crawlers')
+	})
+
+	it('names a different fault when pageviews are captured but purchases are not', () => {
+		// This one matters most: it is NOT consent or ad-blocking, which would cost both equally.
+		const model = captureModel([fromOrders(1, 10), fromPageviews(900, 1000)])
+		expect(model.discrepancy).toContain('not consent or ad-blocking')
+		expect(model.discrepancy).toContain('purchase event')
+	})
+
+	it('reads a shortfall on email traffic as attribution, not measurement', () => {
+		const model = captureModel([fromOrders(8, 10), fromEmail(10, 100)])
+		expect(model.discrepancy).toContain('attribution problem')
+	})
+
+	it('says nothing when the estimates agree', () => {
+		expect(captureModel([fromOrders(8, 10), fromPageviews(780, 1000)]).discrepancy).toBeNull()
+	})
+
+	it('says nothing when there is only one estimate', () => {
+		expect(captureModel([fromOrders(8, 10)]).discrepancy).toBeNull()
+	})
+
+	it('grosses a count up, inverting the interval', () => {
+		// The LOW capture rate implies the HIGH estimate of reality.
+		const model = captureModel([fromOrders(5, 10), fromPageviews(200, 1000)])
+		const up = grossUp(100, model)
+		expect(up?.value).toBeCloseTo(200, 5)   // observed / 0.5
+		expect(up?.high).toBeCloseTo(500, 5)    // observed / 0.2, the worst capture
+		expect(up?.low).toBeCloseTo(200, 5)     // observed / 0.5, the best capture
+	})
+
+	it('does not gross up when GA4 is already seeing everything', () => {
+		// Inflating a figure that is already complete would be inventing traffic.
+		expect(grossUp(100, captureModel([fromOrders(10, 10)]))).toBeNull()
+		expect(grossUp(100, captureModel([fromOrders(12, 10)]))).toBeNull()
+	})
+
+	it('returns null rather than inventing a number when nothing was measurable', () => {
+		const model = captureModel([null, null])
+		expect(model.rate).toBeNull()
+		expect(grossUp(100, model)).toBeNull()
 	})
 })

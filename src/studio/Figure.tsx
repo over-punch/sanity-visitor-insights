@@ -194,6 +194,34 @@ export function MetricFigure({ metric, label, size = 4, unit = 'count' }: Metric
 		)
 	}
 
+	if (metric.status === 'estimated') {
+		// Marked as inferred at every level: a tilde on the number, the interval beneath, a badge,
+		// and the basis in the accessible name. Adding the variant to the union was not enough on
+		// its own — this branch did not exist at first, so an estimate fell through to the plain
+		// return below and rendered as a measured figure, which is the one thing the variant was
+		// introduced to make impossible.
+		const range = unit === 'percent'
+			? `${metric.low.toFixed(1)}% to ${metric.high.toFixed(1)}%`
+			: `${formatCount(metric.low)} to ${formatCount(metric.high)}`
+
+		return (
+			<Stack space={2}>
+				<Text size={size} aria-label={`${label}: estimated ${formatted}, between ${range}. ${metric.basis}`}>
+					<span aria-hidden="true">~</span>{formatted}
+				</Text>
+				<Text size={0} muted>{range}</Text>
+				<Badge tone="primary" fontSize={0}>Estimated</Badge>
+			</Stack>
+		)
+	}
+
+	if (metric.status !== 'ok') {
+		// Exhaustiveness guard. `estimated` was added to the union and rendered as a measurement
+		// for exactly as long as it took to notice; this makes the compiler refuse the next one.
+		const unhandled: never = metric
+		void unhandled
+	}
+
 	return (
 		<Text size={size} aria-label={`${label}: ${formatted}`}>
 			{formatted}

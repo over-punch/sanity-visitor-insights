@@ -124,6 +124,34 @@ export interface OrderCounts {
 	statusFiltered: boolean
 }
 
+/**
+ * How a site names its licence tiers on an order.
+ *
+ * Darden carries four independent tier objects per typeface — desktop, web, app and fluid — each
+ * `{ value, label, yearsValue, yearsLabel }`, so an order records both the TIER bought and the
+ * TERM it was bought for. None of it is a customer field, and none of it was read: the tool
+ * reported a purchase as one undifferentiated event, which made the live pricing and packaging
+ * question — which tier sells, at which term — unanswerable from a source that already knew.
+ */
+export interface LicenceFieldMap {
+	/** Field name on the order's typeface entry to the human label for that licence type. */
+	[fieldName: string]: string
+}
+
+/** One licence tier, as an order records it. */
+export interface LicenceTier {
+	/** Licence type, e.g. `desktop`. */
+	type: string
+	/** Tier label as shown at checkout, e.g. "1–5 users". Falls back to the numeric value. */
+	tier: string
+	/** Term label, e.g. "1 year" or "Perpetual". */
+	term: string
+	/** Orders containing this tier at this term. */
+	orders: number
+	/** Revenue apportioned to it, or null when no total field is configured. */
+	revenue: number | null
+}
+
 /** Orders and revenue attributable to a typeface. */
 export interface TypefaceOrderCounts {
 	/**
@@ -367,4 +395,83 @@ export async function countOrdersByTypeface(
 		ordersMissingTotal,
 		unattributedRevenue: options.totalField ? unattributedRevenue : null,
 	}
+}
+
+
+/**
+ * Count orders and revenue by licence type, tier and term.
+ *
+ * The pricing question a foundry actually has — which tier sells, at what term — answered entirely
+ * from documents it already owns. No GA4 involvement, so this figure is exact and survives
+ * whatever GA4 is doing.
+ *
+ * An order's total is apportioned evenly across the licence rows it produces, for the same reason
+ * and with the same caveat as the per-family revenue: the documents carry no per-licence line
+ * value, so attributing the full total to each row would multiply a multi-licence order.
+ *
+ * @param licenceFields - order-entry field names to the licence type they represent
+ */
+export async function countLicenceTiers(
+	client: SanityQueryClient,
+	options: OrderQueryOptions,
+	typefacesField: string | null,
+	licenceFields: LicenceFieldMap,
+): Promise<LicenceTier[] | null> {
+	const fieldNames = Object.keys(licenceFields)
+	if (!typefacesField || fieldNames.length === 0) return null
+
+	// Projects only the tier objects. No customer field is named, and the tier object itself holds
+	// nothing but a number, two labels and a term.
+	const tierProjection = fieldNames.map((name) => `${name}{ value, label, yearsValue, yearsLabel }`).join(', ')
+	const query = `*[${orderFilter(options.documentType, options.excludeFilter)}]${projection(options, [
+		`"licences": ${typefacesField}[]{ ${tierProjection} }`,
+	])}`
+
+	const orders = await client.fetch<Array<SafeOrder & {
+		licences?: Array<Record<string, { value?: number; label?: string; yearsValue?: number; yearsLabel?: string } | null> | null> | null
+	}>>(query, orderParams(options))
+
+	// Keyed by type + tier + term, so the same tier at a one-year and a perpetual term are
+	// separate rows — which is the comparison that decides pricing.
+	const rows = new Map<string, LicenceTier>()
+
+	for (const order of orders) {
+		if (!isCounted(statusKey(order.status), options.countedStatuses)) continue
+
+		// Collected before apportioning, so the order's total divides across the rows it actually
+		// produced rather than across the licence fields it might have had.
+		const keys: Array<{ key: string; type: string; tier: string; term: string }> = []
+
+		for (const entry of order.licences ?? []) {
+			for (const field of fieldNames) {
+				const tier = entry?.[field]
+				// value 0 is Darden's initialValue and means "this licence type was not bought".
+				if (!tier || !tier.value) continue
+
+				const type = licenceFields[field] as string
+				const tierLabel = tier.label?.trim() || `Tier ${tier.value}`
+				const term = tier.yearsLabel?.trim() || (tier.yearsValue ? `${tier.yearsValue} year` : 'unspecified')
+				keys.push({ key: `${type}\u0000${tierLabel}\u0000${term}`, type, tier: tierLabel, term })
+			}
+		}
+
+		if (keys.length === 0) continue
+
+		const value = money(order.orderTotal, options.totalInMinorUnits)
+		const share = value !== null ? value / keys.length : null
+
+		// Deduped per order: the same tier on two typefaces of one order is one order for that row.
+		const seen = new Set<string>()
+		for (const { key, type, tier, term } of keys) {
+			const existing = rows.get(key) ?? { type, tier, term, orders: 0, revenue: options.totalField ? 0 : null }
+			if (!seen.has(key)) {
+				existing.orders += 1
+				seen.add(key)
+			}
+			if (share !== null && existing.revenue !== null) existing.revenue += share
+			rows.set(key, existing)
+		}
+	}
+
+	return [...rows.values()].sort((a, b) => (b.revenue ?? b.orders) - (a.revenue ?? a.orders))
 }

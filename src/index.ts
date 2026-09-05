@@ -95,3 +95,4 @@ export { resolveRange, previousRange } from './core/ranges'
 // The response shapes. A consumer importing a panel could not name the type of the data it takes,
 // which is exactly the code that needs these types when the Studio and the route are version-skewed.
 export type * from './reportData'
+export type { CaptureBasis, CaptureEstimate, CaptureModel } from './core/capture'

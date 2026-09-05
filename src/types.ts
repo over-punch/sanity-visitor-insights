@@ -33,7 +33,28 @@ export type UnavailableReason =
 export type MetricValue =
 	| { status: 'ok'; value: number }
 	| { status: 'partial'; value: number; coveredFrom: string; note: string }
+	/**
+	 * A figure inferred rather than counted — a GA4 count grossed up by its measured capture rate.
+	 *
+	 * Carries an interval, not just a point, because the capture rate is itself estimated from
+	 * several ratios that rarely agree exactly. Its own variant so it can never be read as a
+	 * measurement: the union forces every render site to handle it, which is the same reason
+	 * `unavailable` is a variant rather than a null.
+	 */
+	| { status: 'estimated'; value: number; low: number; high: number; basis: string }
 	| { status: 'unavailable'; reason: UnavailableReason; detail?: string }
+
+/**
+ * Construct an inferred metric.
+ *
+ * @param value - the point estimate
+ * @param low - the low end of the plausible range
+ * @param high - the high end
+ * @param basis - how it was inferred, in words the panel shows directly
+ */
+export function estimated(value: number, low: number, high: number, basis: string): MetricValue {
+	return { status: 'estimated', value, low, high, basis }
+}
 
 /** Construct an available metric. */
 export function ok(value: number): MetricValue {

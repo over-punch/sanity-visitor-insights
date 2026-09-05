@@ -88,6 +88,18 @@ export interface OrdersConfig {
 	totalInMinorUnits?: boolean
 	/** ISO 4217 code for `totalField`, e.g. `USD`. Used for formatting only. */
 	currency?: string
+	/**
+	 * Licence tier fields on each typeface entry of an order, mapped to the licence type they mean.
+	 *
+	 * Darden: `{ licenseDesktop: 'Desktop', licenseWeb: 'Web', licenseApp: 'App', licenseFluid: 'Fluid' }`.
+	 * Each names an object of `{ value, label, yearsValue, yearsLabel }`, so an order already records
+	 * both the tier bought and the term it was bought for — the two variables in the pricing
+	 * question — while the tool reported a purchase as one undifferentiated event.
+	 *
+	 * Omit on a site whose orders do not carry tiers; the licence report then reports as
+	 * unavailable rather than empty.
+	 */
+	licenceFields?: Record<string, string>
 }
 
 /**
@@ -231,6 +243,10 @@ export function validateSiteConfig(config: Partial<SiteAnalyticsConfig> | undefi
 		['orders.totalField', config.orders?.totalField],
 		['orders.typefacesField', config.orders?.typefacesField],
 	]
+
+	for (const name of Object.keys(config.orders?.licenceFields ?? {})) {
+		fieldSlots.push([`orders.licenceFields.${name}`, name])
+	}
 
 	for (const [field, value] of fieldSlots) {
 		if (!value) continue

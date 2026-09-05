@@ -9,8 +9,10 @@
 export { createVisitorInsightsHandler, ENV_VARS, type HandlerOptions } from './server/createHandler'
 export type { HandlerRequest, HandlerResponse, StudioUser } from './server/auth'
 export { verifyStudioRequest, requireStudioUser, applyCors } from './server/auth'
-export { countOrders, countOrdersByTypeface, orderQueryOptions, UNKNOWN_STATUS } from './server/orders'
-export type { OrderCounts, OrderQueryOptions, SanityQueryClient, TypefaceOrderCounts } from './server/orders'
+export { countLicenceTiers, countOrders, countOrdersByTypeface, orderQueryOptions, UNKNOWN_STATUS } from './server/orders'
+export { captureModel, fromEmail, fromOrders, fromPageviews, grossUp } from './core/capture'
+export type { LicenceFieldMap, LicenceTier, OrderCounts, OrderQueryOptions, SanityQueryClient, TypefaceOrderCounts } from './server/orders'
+export type { CaptureBasis, CaptureEstimate, CaptureModel } from './core/capture'
 export { clearCache } from './server/cache'
 
 // Report result shapes, so a consuming site can type a custom surface against them.

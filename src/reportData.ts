@@ -8,6 +8,7 @@
  */
 
 import type { MetricValue } from './types'
+import type { CaptureModel } from './core/capture'
 
 // ---------------------------------------------------------------------------
 // Diagnostics
@@ -63,6 +64,18 @@ export interface MeasurementHealthData {
 	ga4Sessions: MetricValue
 	/** Orders in range. Ground truth for conversions, shown as context. */
 	orders: MetricValue
+	/**
+	 * How much of reality GA4 appears to be seeing, measured several independent ways.
+	 *
+	 * The disagreement between the estimates is the useful output, not their average: it turns
+	 * "GA4 is missing data" into "GA4 is missing THIS data, for THIS reason".
+	 */
+	capture: CaptureModel
+	/**
+	 * Sessions grossed up by the capture rate. Always `estimated`, never `ok` — an inferred figure
+	 * must not be readable as a measured one.
+	 */
+	estimatedSessions: MetricValue
 	/** Revenue across counted orders. Unavailable when the site names no total field. */
 	revenue: MetricValue
 	/** ISO 4217 code for `revenue`, or null. */

@@ -107,6 +107,7 @@ describe('MeasurementHealthPanel', () => {
 					ga4Sessions: ok(22781), orders: ok(64), consentRate: ok(78.4),
 					vercelVisitors: ok(21400), vercelDailyUnavailable: false,
 					revenue: ok(4820), currency: 'USD', orderStatuses: { verified: 60, refunded: 4 },
+					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
 					interpretation: 'Sources agree.', daily: [],
 				}}
 			/>,
@@ -123,6 +124,7 @@ describe('MeasurementHealthPanel', () => {
 					ga4Sessions: unavailable('source_error'), orders: ok(12), consentRate: unavailable('source_error'),
 					vercelVisitors: ok(1730), vercelDailyUnavailable: false,
 					revenue: unavailable('source_error'), currency: null, orderStatuses: {},
+					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
 					daily: [],
 			interpretation: 'Only one pageview source answered.',
 				}}
@@ -552,6 +554,7 @@ describe('panels tolerate an older route response', () => {
 			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
 					vercelVisitors: ok(1580), vercelDailyUnavailable: false,
 					revenue: ok(910), currency: 'USD', orderStatuses: {},
+					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
 			interpretation: 'Sources differ.',
 		} as never
 
@@ -611,6 +614,7 @@ describe('layout does not depend on design tokens resolving', () => {
 					ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
 					vercelVisitors: ok(1580), vercelDailyUnavailable: false,
 					revenue: ok(910), currency: 'USD', orderStatuses: {},
+					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
 					interpretation: 'Sources differ.', daily: [],
 				}}
 			/>,
@@ -860,5 +864,70 @@ describe('DiagnosticsPanel verdicts', () => {
 		)
 		expect(html).toContain('Nothing is failing')
 		expect(html).not.toContain('will be wrong or incomplete')
+	})
+})
+
+describe('capture model rendering', () => {
+	const base = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		revenue: ok(910), currency: 'USD', orderStatuses: {},
+		interpretation: 'Sources differ.', daily: [],
+	}
+
+	it('never renders an inferred figure as a measured one', () => {
+		// The whole reason `estimated` is its own variant. Adding it to the union was not enough —
+		// MetricFigure had no branch for it at first, so it fell through and rendered as a plain
+		// number, which is exactly the claim the variant exists to prevent.
+		const html = render(
+			<MeasurementHealthPanel
+				data={{
+					...base,
+					capture: {
+						estimates: [{ basis: 'orders', rate: 0.5, observed: 5, actual: 10, note: 'Same event both sides.' }],
+						rate: 0.5, low: 0.4, high: 0.6, discrepancy: null,
+					},
+					estimatedSessions: { status: 'estimated', value: 714, low: 595, high: 892, basis: 'GA4 sees about half.' },
+				} as never}
+			/>,
+		)
+		expect(html).toContain('Estimated')
+		expect(html).toContain('595')
+		expect(html).toContain('892')
+	})
+
+	it('surfaces a disagreement between sources as a finding, not as context', () => {
+		const html = render(
+			<MeasurementHealthPanel
+				data={{
+					...base,
+					capture: {
+						estimates: [
+							{ basis: 'orders', rate: 0.9, observed: 9, actual: 10, note: 'Same event both sides.' },
+							{ basis: 'pageviews', rate: 0.2, observed: 200, actual: 1000, note: 'A lower bound.' },
+						],
+						rate: 0.9, low: 0.2, high: 0.9,
+						discrepancy: 'GA4 is capturing purchases far better than pageviews.',
+					},
+					estimatedSessions: unavailable('not_applicable'),
+				} as never}
+			/>,
+		)
+		expect(html).toContain('The sources disagree')
+		expect(html).toContain('capturing purchases far better')
+		// Both estimates shown side by side rather than averaged into one number.
+		expect(html).toContain('Measured against orders')
+		expect(html).toContain('Measured against Vercel')
+		expect(html).toContain('caution')
+	})
+
+	it('renders nothing for the section when no overlap was measurable', () => {
+		const html = render(
+			<MeasurementHealthPanel
+				data={{ ...base, capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable') } as never}
+			/>,
+		)
+		expect(html).not.toContain('How much GA4 is seeing')
 	})
 })

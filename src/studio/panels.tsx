@@ -185,6 +185,52 @@ export function MeasurementHealthPanel({ data, previous }: { data: MeasurementHe
 				</Stack>
 			</Card>
 
+			{/* What GA4 is actually seeing, measured against the sources that are not lossy.
+			    Three ratios of the same quantity: agreement makes it a measurement, and
+			    disagreement says where the fault is rather than merely that there is one. */}
+			{((data.capture?.estimates?.length ?? 0) > 0 || data.estimatedSessions?.status === 'estimated') && (
+				<Stack space={3}>
+					<Heading size={1} style={sectionHeading}>How much GA4 is seeing</Heading>
+					<div style={cardGrid}>
+						{(data.capture?.estimates ?? []).map((estimate) => (
+							<Card key={estimate.basis} padding={3} radius={2} tone="transparent" border>
+								<Stack space={3}>
+									<Label size={1} muted>
+										{estimate.basis === 'orders' ? 'Measured against orders'
+											: estimate.basis === 'email' ? 'Measured against email clicks'
+												: 'Measured against Vercel'}
+									</Label>
+									<Text size={4}>{formatPercent(Math.min(1, estimate.rate), 0)}</Text>
+									<Text size={0} muted>
+										{formatCount(estimate.observed)} of {formatCount(estimate.actual)}. {estimate.note}
+									</Text>
+								</Stack>
+							</Card>
+						))}
+					</div>
+
+					{/* The point of holding three estimates. Rendered in caution tone because a
+					    disagreement is a finding, not context. */}
+					{data.capture?.discrepancy && (
+						<Card padding={3} radius={2} tone="caution" border>
+							<Stack space={2}>
+								<Text size={1} weight="medium">The sources disagree, and that is informative</Text>
+								<Text size={1}>{data.capture.discrepancy}</Text>
+							</Stack>
+						</Card>
+					)}
+
+					{data.estimatedSessions && data.estimatedSessions.status === 'estimated' && (
+						<Card padding={3} radius={2} tone="transparent" border>
+							<Stack space={3}>
+								<Label size={1} muted>Sessions, corrected for what GA4 misses</Label>
+								<MetricFigure metric={data.estimatedSessions} label="Estimated sessions" />
+							</Stack>
+						</Card>
+					)}
+				</Stack>
+			)}
+
 			{/* The daily series. A scalar gap cannot tell a stable difference from one that opened
 			    overnight, and those need opposite responses. Rendered only when there are enough
 			    points to show a shape, and only when both sources reported by day. */}

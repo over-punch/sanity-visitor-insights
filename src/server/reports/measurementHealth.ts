@@ -20,9 +20,10 @@
 
 import type { MeasurementHealthData, DailyPoint } from '../../reportData'
 import type { DateRange, MetricValue } from '../../types'
-import { ok, unavailable } from '../../types'
+import { estimated, ok, unavailable } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
 import { coverageForAny } from '../../core/cutover'
+import { captureModel, fromOrders, fromPageviews, grossUp, type CaptureModel } from '../../core/capture'
 import { eventNamesFilter, sumFirstMetric, type Ga4Client } from '../ga4'
 import type { VercelClient } from '../vercel'
 import { countOrders, orderQueryOptions, type SanityQueryClient } from '../orders'
@@ -121,11 +122,13 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	const ga4ByDate = new Map<string, number>()
 	/** Daily Vercel pageviews keyed by ISO date. Already fetched; previously discarded. */
 	let vercelByDate: Record<string, number> = {}
+	/** GA4's own purchase count, for the orders-based capture estimate. */
+	let ga4Purchases: number | null = null
 
 	if (ga4) {
 		try {
 			// One batched call rather than three separate quota-charged requests.
-			const [views, sessions, consent, daily] = await ga4.batchRunReports([
+			const [views, sessions, consent, daily, purchases] = await ga4.batchRunReports([
 				{
 					metrics: [{ name: 'screenPageViews' }],
 					dateRanges: [{ startDate: range.start, endDate: range.end }],
@@ -153,6 +156,14 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 					orderBys: [{ dimension: { dimensionName: 'date' } }],
 					limit: 400,
 				},
+				{
+					// The same-event numerator for the capture model: GA4's purchase count against
+					// the orders that exist. Batched with the rest, so it costs a row and not a
+					// round trip.
+					metrics: [{ name: 'eventCount' }],
+					dateRanges: [{ startDate: range.start, endDate: range.end }],
+					dimensionFilter: eventNamesFilter(['purchase']),
+				},
 			])
 
 			// GA4 returns dates as YYYYMMDD; the Vercel side and the UI both use ISO.
@@ -178,6 +189,8 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 			if (views?.sampled || sessions?.sampled) {
 				input.notices?.push('GA4 answered from a sample, so its pageview and session figures are estimates — treat a small gap against Vercel as noise.')
 			}
+
+			ga4Purchases = purchases ? sumFirstMetric(purchases) : null
 
 			const consentCoverage = coverageForAny(config.eventCutovers, consentEvents, range)
 			if (consentCoverage.status === 'full' && consent && ga4Users > 0) {
@@ -239,6 +252,8 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 
 	let orders: MetricValue = unavailable('source_error', 'Sanity not configured')
 	let revenue: MetricValue = unavailable('source_error', 'Sanity not configured')
+	/** The exact order count, as the capture model's denominator. */
+	let orderTotal: number | null = null
 	let currency: string | null = null
 	/** The status vocabulary this site's own orders use, so countedStatuses can be configured. */
 	let orderStatuses: Record<string, number> = {}
@@ -246,6 +261,7 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		try {
 			const counts = await countOrders(sanity, orderQueryOptions(config.orders, range))
 			orders = ok(counts.total)
+			orderTotal = counts.total
 			// Revenue was computed on every one of these requests and thrown away, which is the
 			// same sin this file's other comments congratulate themselves for fixing. It is also
 			// the figure the owner opens the tool for, and the only one in the package that GA4's
@@ -301,6 +317,28 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		vercel: vercelIsDaily && typeof vercelByDate[date] === 'number' ? vercelByDate[date] : null,
 	}))
 
+	// The capture model. Each ratio is an independent estimate of the same quantity, which is what
+	// makes them worth holding together: one is a curiosity, three that agree are a measurement,
+	// and three that disagree say WHERE the problem is rather than merely that there is one.
+	const capture = captureModel([
+		ga4Purchases !== null && orderTotal !== null ? fromOrders(ga4Purchases, orderTotal) : null,
+		ga4Pageviews.status !== 'unavailable' && vercelPageviews.status !== 'unavailable'
+			? fromPageviews(ga4Pageviews.value, vercelPageviews.value)
+			: null,
+	])
+
+	// Sessions grossed up to what they probably were. Reported as `estimated`, never as `ok` — the
+	// tagged union makes it impossible to render this as a measurement by accident.
+	const grossed = ga4Sessions.status !== 'unavailable' ? grossUp(ga4Sessions.value, capture) : null
+	const estimatedSessions: MetricValue = grossed
+		? estimated(
+			Math.round(grossed.value),
+			Math.round(grossed.low),
+			Math.round(grossed.high),
+			`GA4 counted ${Math.round(ga4Sessions.status === 'unavailable' ? 0 : ga4Sessions.value)} and appears to be seeing ${Math.round((capture.rate ?? 0) * 100)}% of activity, measured against ${capture.estimates[0]?.basis === 'orders' ? 'the orders that exist' : 'Vercel'}.`,
+		)
+		: unavailable('not_applicable', 'Not enough overlap between sources to estimate a true figure')
+
 	return {
 		ga4Pageviews,
 		vercelPageviews,
@@ -309,6 +347,8 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		shortfallRatio,
 		ga4Sessions,
 		orders,
+		capture,
+		estimatedSessions,
 		revenue,
 		currency,
 		orderStatuses,
