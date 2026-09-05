@@ -954,12 +954,14 @@ describe('CrossSourceTimeline', () => {
 		timelineEvents: [{ date: '2026-09-03', label: 'September release', detail: '1,200 sent, 84 clicked' }],
 	}
 
-	it('draws every source against one shared axis', () => {
+	it('draws one line per row rather than competing sources', () => {
+		// Two peer lines made the reader reconcile before getting an answer, and GA4 is not a
+		// competing estimate of pageviews — it is a lossy subset of them.
 		const html = render(<MeasurementHealthPanel data={base as never} />)
 		expect(html).toContain('Everything, on one time axis')
 		expect(html).toContain('Pageviews')
-		expect(html).toContain('Sessions')
 		expect(html).toContain('Revenue')
+		expect(html).toContain('One line per row is the truest figure available')
 	})
 
 	it('states that the rows are not co-scaled', () => {
@@ -969,11 +971,23 @@ describe('CrossSourceTimeline', () => {
 		expect(html).toContain('not co-scaled')
 	})
 
-	it('marks a lossy source as dashed and a complete one as solid', () => {
+	it('draws the blind spot as a quantity, always visible, not behind a hover', () => {
+		// The 24 August collapse announced itself as this region widening. Putting it behind an
+		// interaction would switch the alarm off — so the fill is always drawn, and only the
+		// constituent LINES are revealed on demand.
 		const html = render(<MeasurementHealthPanel data={base as never} />)
-		// GA4's row carries a dash array; Vercel's and Sanity's do not.
-		expect(html).toContain('stroke-dasharray="1.5 1"')
-		expect(html).toContain('Dashed means the source misses things')
+		expect(html).toContain('what your analytics did not see')
+		expect(html).toContain('It is a quantity, not a margin of error')
+		// A filled region, not an outline.
+		expect(html).toMatch(/<path d="M[^"]*" fill="currentColor"/)
+	})
+
+	it('offers a non-pointer route to the per-source detail', () => {
+		// Hover is unavailable on touch and unreachable by keyboard, so detail that exists only
+		// under a pointer exists only for some people.
+		const html = render(<MeasurementHealthPanel data={base as never} />)
+		expect(html).toContain('Show what each source saw')
+		expect(html).toContain('aria-pressed="false"')
 	})
 
 	it('rules a campaign send through the chart', () => {

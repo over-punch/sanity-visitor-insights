@@ -37,22 +37,43 @@ export interface SeriesPoint {
 /** How a value should be written out. */
 export type SeriesUnit = 'count' | 'money' | 'percent'
 
-/** One row of the chart. */
+/**
+ * One row of the chart: one answer, with what a lossier source saw underneath it.
+ *
+ * A row shows a SINGLE line by default. Two peer lines make the reader reconcile before they get
+ * an answer, and at a glance a foundry owner wants "how much", not "here are two measurements that
+ * disagree". The disagreement is still drawn — as a filled region, and in full on hover — because
+ * hiding it entirely would switch off the alarm: the 24 August collapse was visible precisely
+ * because two lines came apart.
+ */
 export interface Series {
 	key: string
 	label: string
-	/** Which upstream this came from, shown so the reader can weigh it. */
+	/** Which upstream the LINE came from. */
 	source: 'GA4' | 'Vercel' | 'Sanity' | 'Mailchimp'
-	/**
-	 * Whether the source sees everything. GA4 does not; the others do.
-	 * Drives the dashed stroke and the uncertainty band rather than a footnote nobody reads.
-	 */
+	/** Whether the line's source sees everything. Drives the stroke and the wording. */
 	complete: boolean
 	unit: SeriesUnit
 	points: SeriesPoint[]
 	/**
-	 * Multiplier from observed to estimated-true, for a lossy series. 1 means no correction known.
-	 * Drawn as a band above the line, never as a replacement for it — the measured line stays.
+	 * What a lossier source saw of the same thing.
+	 *
+	 * Drawn as a filled region between the two, NOT as a symmetric uncertainty band. There is no
+	 * doubt about the traffic here: Vercel counted it server-side. What is uncertain is how much of
+	 * it the analytics could see, and the honest way to draw that is the area it missed — a
+	 * quantity, visible to scale, rather than a percentage on another tab.
+	 */
+	shortfall?: {
+		label: string
+		source: Series['source']
+		points: SeriesPoint[]
+	}
+	/**
+	 * Multiplier from observed to estimated-true, where the line itself is the lossy source.
+	 *
+	 * This one IS a symmetric band, because it is genuine uncertainty rather than a known blind
+	 * spot. The two must not look alike: one says "we do not know exactly", the other says "we know
+	 * exactly, and this much was invisible".
 	 */
 	grossUpFactor?: number
 }
@@ -101,6 +122,10 @@ function tickLabel(date: Date): string {
  */
 export function CrossSourceTimeline({ series, markers = [], currency }: CrossSourceTimelineProps): React.ReactElement | null {
 	const [hoverIndex, setHoverIndex] = useState<number | null>(null)
+	// Whether to draw the constituent sources. Hover reveals them; so does keyboard focus and the
+	// explicit toggle, because a chart whose detail exists only under a pointer is unreachable on a
+	// phone and to anyone navigating by keyboard.
+	const [pinned, setPinned] = useState(false)
 	const frameRef = useRef<SVGSVGElement | null>(null)
 
 	// Every date any series reported, ascending. Built from the union so a series with a gap does
@@ -139,6 +164,7 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 	if (dates.length < 3 || series.length === 0 || !x) return null
 
 	const hoveredDate = hoverIndex !== null ? dates[hoverIndex] : null
+	const revealed = pinned || hoverIndex !== null
 
 	return (
 		<Stack space={3}>
@@ -164,24 +190,43 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 						const grossed = row.grossUpFactor && row.grossUpFactor > 1 ? peak * row.grossUpFactor : peak
 						const y = scaleLinear().domain([0, grossed || 1]).nice().range([bottom, top])
 
+						const at = (p: SeriesPoint) => x(new Date(`${p.date}T00:00:00Z`))
 						const defined = (p: SeriesPoint) => p.value !== null
-						const lineGen = d3Line<SeriesPoint>()
-							.defined(defined)
-							.x((p) => x(new Date(`${p.date}T00:00:00Z`)))
-							.y((p) => y(p.value as number))
+
+						const lineGen = d3Line<SeriesPoint>().defined(defined).x(at).y((p) => y(p.value as number)).curve(curveMonotoneX)
+
+						// The blind spot: the area between what happened and what the lossier source
+						// saw of it. Filled, not outlined, because it is a QUANTITY — the traffic the
+						// analytics missed, drawn to scale, rather than a percentage on another tab.
+						// Always visible, never hover-gated: the 24 August collapse announced itself
+						// as this region widening, and putting that behind an interaction would
+						// switch the alarm off.
+						const shortfallPoints = row.shortfall?.points ?? []
+						const byDate = new Map(shortfallPoints.map((p) => [p.date, p.value]))
+						const gapGen = d3Area<SeriesPoint>()
+							.defined((p) => p.value !== null && byDate.get(p.date) != null)
+							.x(at)
+							.y0((p) => y(byDate.get(p.date) as number))
+							.y1((p) => y(p.value as number))
 							.curve(curveMonotoneX)
 
-						// The band between what was measured and what it probably was. Drawn only for
-						// a lossy source with a known correction, and never instead of the line.
+						// Genuine uncertainty, where the LINE itself is the lossy source. A symmetric
+						// band, deliberately unlike the blind-spot fill: one says "we do not know
+						// exactly", the other says "we know exactly, and this much was invisible".
 						const bandGen = d3Area<SeriesPoint>()
 							.defined(defined)
-							.x((p) => x(new Date(`${p.date}T00:00:00Z`)))
+							.x(at)
 							.y0((p) => y(p.value as number))
 							.y1((p) => y((p.value as number) * (row.grossUpFactor as number)))
 							.curve(curveMonotoneX)
 
 						const path = lineGen(row.points) ?? ''
+						const gap = row.shortfall ? gapGen(row.points) ?? '' : ''
 						const band = row.grossUpFactor && row.grossUpFactor > 1 ? bandGen(row.points) ?? '' : ''
+						// The lossier source's own line, revealed only while reading a day.
+						const shortfallLine = row.shortfall && revealed
+							? lineGen(shortfallPoints.filter((p) => p.value !== null)) ?? ''
+							: ''
 
 						return (
 							<g key={row.key}>
@@ -191,14 +236,20 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 								</text>
 								<text x={GUTTER - 4} y={bottom} textAnchor="end" fontSize={3} fill="currentColor" opacity={0.55}>0</text>
 
+								{gap && <path d={gap} fill="currentColor" opacity={revealed ? 0.16 : 0.09} />}
 								{band && <path d={band} fill="currentColor" opacity={0.1} />}
+
+								{shortfallLine && (
+									<path d={shortfallLine} fill="none" stroke="currentColor" strokeWidth={0.35} strokeDasharray="1.5 1" opacity={0.75} />
+								)}
+
 								<path
 									d={path}
 									fill="none"
 									stroke="currentColor"
 									strokeWidth={0.5}
-									// Dashed means the source misses things. Carried by the stroke rather
-									// than by colour, so it survives a monochrome or colour-blind reading.
+									// Dashed only where the LINE's own source misses things. A row whose
+									// line is complete stays solid even when it carries a blind-spot fill.
 									strokeDasharray={row.complete ? undefined : '1.5 1'}
 									opacity={row.complete ? 0.95 : 0.7}
 								/>
@@ -270,10 +321,17 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 				</Text>
 				{hoveredDate && series.map((row) => {
 					const point = row.points.find((p) => p.date === hoveredDate)
+					const seen = row.shortfall?.points.find((p) => p.date === hoveredDate)
 					return (
 						<Text key={row.key} size={0} muted>
 							{row.label}:{' '}
 							{point && point.value !== null ? formatValue(point.value, row.unit, currency) : '—'}
+							{/* The constituent source, revealed alongside rather than instead. Reading
+							    "2,356 · GA4 saw 475" is the whole point: one answer, and how much of
+							    it your analytics could account for. */}
+							{seen && seen.value !== null && (
+								<> · {row.shortfall?.source} saw {formatValue(seen.value, row.unit, currency)}</>
+							)}
 						</Text>
 					)
 				})}
@@ -283,14 +341,33 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 			</div>
 
 			<div style={legendRow}>
-				{series.map((row) => (
+				{series.some((row) => row.shortfall) && (
+					// Hover is not available on touch and not reachable by keyboard, so the reveal
+					// has an explicit control too. Without it the detail would exist only for people
+					// using a mouse.
+					<button
+						type="button"
+						style={revealButton}
+						aria-pressed={pinned}
+						onClick={() => setPinned((current) => !current)}
+					>
+						{pinned ? 'Hide what each source saw' : 'Show what each source saw'}
+					</button>
+				)}
+					{series.map((row) => (
 					<Text key={row.key} size={0} muted>
 						<span aria-hidden="true">{row.complete ? '───' : '╌╌╌'}</span> {row.label} ({row.source})
 					</Text>
 				))}
-				{series.some((row) => !row.complete) && (
+				{series.some((row) => row.shortfall) && (
 					<Text size={0} muted>
-						Dashed means the source misses things. The shaded band is where the figure probably sits.
+						The shaded area is what your analytics did not see. It is a quantity, not a margin of
+						error — the traffic happened, GA4 just missed it.
+					</Text>
+				)}
+				{series.some((row) => !row.complete && row.grossUpFactor) && (
+					<Text size={0} muted>
+						A dashed line is a lossy source; the band above it is where the true figure probably sits.
 					</Text>
 				)}
 				{markers.length > 0 && <Text size={0} muted>Vertical rules mark campaign sends.</Text>}
@@ -309,6 +386,20 @@ const readoutRow: React.CSSProperties = {
 	flexWrap: 'wrap',
 	alignItems: 'baseline',
 	minHeight: 18,
+}
+
+/** The explicit reveal control, so the detail is not pointer-only. */
+const revealButton: React.CSSProperties = {
+	appearance: 'none',
+	background: 'transparent',
+	border: '1px solid var(--card-border-color, rgba(128,128,128,0.3))',
+	borderRadius: 3,
+	color: 'inherit',
+	font: 'inherit',
+	fontSize: '0.8em',
+	padding: '3px 8px',
+	cursor: 'pointer',
+	whiteSpace: 'nowrap',
 }
 
 /** Legend, wrapping rather than overflowing. */

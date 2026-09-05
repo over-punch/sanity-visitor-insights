@@ -197,30 +197,30 @@ export function MeasurementHealthPanel({ data, previous }: { data: MeasurementHe
 						factor made them share an axis would invent a correlation the data never claimed.
 						Aligned rows show the same co-movement and assert nothing about relative size.
 					</Text>
+					<Text size={1} muted>
+						One line per row is the truest figure available. Hover a day, or use the control below,
+						to see what each source saw of it.
+					</Text>
 					<CrossSourceTimeline
 						currency={data.currency ?? null}
 						markers={data.timelineEvents ?? []}
 						series={[
 							{
-								key: 'vercel',
+								// One traffic row, not two. The line is what happened; GA4's view of it
+								// is the shaded area beneath. Two peer lines made the reader reconcile
+								// before getting an answer, and GA4 is not a competing estimate of
+								// pageviews — it is a lossy subset of them.
+								key: 'traffic',
 								label: 'Pageviews',
 								source: 'Vercel',
 								complete: true,
 								unit: 'count',
 								points: (data.crossSource ?? []).map((d) => ({ date: d.date, value: d.vercelPageviews })),
-							},
-							{
-								key: 'ga4',
-								label: 'Sessions',
-								source: 'GA4',
-								complete: false,
-								unit: 'count',
-								// The band runs from what GA4 measured up to where the capture model
-								// says it probably sits. The measured line is never replaced by it.
-								grossUpFactor: data.capture?.rate && data.capture.rate > 0 && data.capture.rate < 1
-									? 1 / data.capture.rate
-									: undefined,
-								points: (data.crossSource ?? []).map((d) => ({ date: d.date, value: d.ga4Sessions })),
+								shortfall: {
+									label: 'Seen by GA4',
+									source: 'GA4',
+									points: (data.crossSource ?? []).map((d) => ({ date: d.date, value: d.ga4Sessions })),
+								},
 							},
 							...(data.crossSource?.some((d) => d.revenue !== null)
 								? [{
