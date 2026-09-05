@@ -140,7 +140,7 @@ export type SourceStatus =
 	| { status: 'error'; message: string }
 
 /** Upstream data sources this package can read. */
-export type SourceName = 'ga4' | 'vercel' | 'sanity'
+export type SourceName = 'ga4' | 'vercel' | 'sanity' | 'mailchimp'
 
 /**
  * Envelope around every report response.

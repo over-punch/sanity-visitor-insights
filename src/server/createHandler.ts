@@ -27,6 +27,7 @@ import { previousRange, provisionalDates, resolveCustomRange, resolveRange, prov
 import { applyCors, requireStudioUser, type HandlerRequest, type HandlerResponse } from './auth'
 import { createGa4Client, type Ga4Client } from './ga4'
 import { createVercelClient, type VercelClient } from './vercel'
+import { createMailchimpClient, type MailchimpClient } from './mailchimp'
 import { parseServiceAccountKey } from './googleAuth'
 import { cacheKey, withCache, DEFAULT_TTL_MS } from './cache'
 import type { SanityQueryClient } from './orders'
@@ -43,6 +44,14 @@ export const ENV_VARS = {
 	googleServiceAccount: 'VISITOR_INSIGHTS_GA4_SERVICE_ACCOUNT',
 	/** Vercel API token with read access to the project. */
 	vercelToken: 'VISITOR_INSIGHTS_VERCEL_TOKEN',
+	/**
+	 * Mailchimp Marketing API key. Reuses the site's existing variable rather than introducing a
+	 * VISITOR_INSIGHTS_ prefixed one — the sites already have it, and a second copy of a credential
+	 * is a second thing to rotate and a second thing to get out of step.
+	 */
+	mailchimpKey: 'MAILCHIMP_API_KEY',
+	/** The audience to report on. Also already present on the sites that have Mailchimp. */
+	mailchimpList: 'MAILCHIMP_MAILING_LIST_ID',
 	/** Master switch. Must be truthy for the route to answer at all. See isEnabled. */
 	enabled: 'VISITOR_INSIGHTS_ENABLED',
 } as const
@@ -202,6 +211,22 @@ export function createVisitorInsightsHandler(options: HandlerOptions) {
 		const sanity = options.sanityClient ?? null
 		sources.sanity = sanity ? { status: 'ok' } : { status: 'unconfigured' }
 
+		const mailchimpKey = process.env[ENV_VARS.mailchimpKey]
+		const mailchimpList = process.env[ENV_VARS.mailchimpList]
+		let mailchimp: MailchimpClient | null = null
+		if (!config.mailchimp) {
+			sources.mailchimp = { status: 'unconfigured' }
+		} else if (!mailchimpKey || !mailchimpList) {
+			sources.mailchimp = { status: 'error', message: 'Mailchimp key or list id missing' }
+		} else {
+			mailchimp = createMailchimpClient(mailchimpKey, mailchimpList)
+			// A key with no datacenter suffix is an OAuth token or a typo. Caught here, it names
+			// itself; left alone it fails per-request as an unresolvable hostname.
+			sources.mailchimp = mailchimp
+				? { status: 'ok' }
+				: { status: 'error', message: 'Mailchimp key carries no datacenter suffix' }
+		}
+
 		try {
 			const key = cacheKey(['vi', config.siteId, reportName, range.key, range.start, range.end])
 
@@ -226,10 +251,10 @@ export function createVisitorInsightsHandler(options: HandlerOptions) {
 				const priorRange = previousRange(range)
 				const wantsComparison = COMPARED_REPORTS.includes(reportName)
 				const [data, priorResult] = await Promise.all([
-					runReport(reportName, { config, range, ga4, vercel, sanity, notices }),
+					runReport(reportName, { config, range, ga4, vercel, sanity, mailchimp, notices }),
 					!wantsComparison
 						? Promise.resolve(null)
-						: runReport(reportName, { config, range: priorRange, ga4, vercel, sanity, notices: [] })
+						: runReport(reportName, { config, range: priorRange, ga4, vercel, sanity, mailchimp, notices: [] })
 							.catch((e) => {
 								// A failed comparison must not fail the report. Absent reads as
 								// "no comparison available", which is true, rather than "no change".
@@ -279,16 +304,17 @@ interface RunContext {
 	ga4: Ga4Client | null
 	vercel: VercelClient | null
 	sanity: SanityQueryClient | null
+	mailchimp: MailchimpClient | null
 	notices: string[]
 }
 
 /** Dispatch to a report by name. A plain switch, so the set of reachable code paths is closed. */
 async function runReport(report: string, ctx: RunContext): Promise<unknown> {
-	const { config, range, ga4, vercel, sanity, notices } = ctx
+	const { config, range, ga4, vercel, sanity, mailchimp, notices } = ctx
 
 	switch (report) {
 		case 'measurement-health':
-			return measurementHealth({ config, range, ga4, vercel, sanity, notices })
+			return measurementHealth({ config, range, ga4, vercel, sanity, mailchimp, notices })
 
 		case 'acquisition':
 			if (!ga4) throw new Error('GA4 is required for the acquisition report')

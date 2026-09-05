@@ -14,6 +14,7 @@
 import type { Ga4Client, Ga4Report, Ga4ReportRequest, Ga4Row, Ga4FunnelStep, Ga4FunnelReport } from '../server/ga4'
 import type { VercelClient, VercelPageviews } from '../server/vercel'
 import type { SanityQueryClient } from '../server/orders'
+import type { MailchimpClient } from '../server/mailchimp'
 
 /** Build a GA4 report fixture from plain rows. */
 export function makeGa4Report(
@@ -163,4 +164,26 @@ export function createFakeSanityClient(respond: (query: string) => unknown): Fak
 /** Build order documents at given dates, in the shape the safe projection returns. */
 export function makeOrders(dates: string[]): Array<{ _createdAt: string; orderStatus: string }> {
 	return dates.map((date) => ({ _createdAt: `${date}T12:00:00Z`, orderStatus: 'complete' }))
+}
+
+/**
+ * Build a Mailchimp client fake.
+ *
+ * @param audience - the list figures to return
+ * @param campaigns - the campaigns to return, or an Error to simulate a failure
+ */
+export function createFakeMailchimpClient(
+	audience: { members: number; membersAtStart: number | null },
+	campaigns: Array<{ title: string; subject: string; sentAt: string; emailsSent: number; uniqueOpens: number; uniqueClicks: number; unsubscribed: number }> | Error = [],
+): MailchimpClient {
+	return {
+		async audience() {
+			if (campaigns instanceof Error) throw campaigns
+			return audience
+		},
+		async campaigns() {
+			if (campaigns instanceof Error) throw campaigns
+			return campaigns.map((c) => ({ id: c.title, ...c }))
+		},
+	}
 }

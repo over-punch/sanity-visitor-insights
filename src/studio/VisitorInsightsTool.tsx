@@ -285,6 +285,7 @@ const SOURCE_LABEL: Record<SourceName, string> = {
 	ga4: 'Google Analytics',
 	vercel: 'Vercel',
 	sanity: 'Orders',
+	mailchimp: 'Mailchimp',
 }
 
 /**

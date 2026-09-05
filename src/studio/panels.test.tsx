@@ -108,6 +108,7 @@ describe('MeasurementHealthPanel', () => {
 					vercelVisitors: ok(21400), vercelDailyUnavailable: false,
 					revenue: ok(4820), currency: 'USD', orderStatuses: { verified: 60, refunded: 4 },
 					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
+					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 					interpretation: 'Sources agree.', daily: [],
 				}}
 			/>,
@@ -125,6 +126,7 @@ describe('MeasurementHealthPanel', () => {
 					vercelVisitors: ok(1730), vercelDailyUnavailable: false,
 					revenue: unavailable('source_error'), currency: null, orderStatuses: {},
 					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
+					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 					daily: [],
 			interpretation: 'Only one pageview source answered.',
 				}}
@@ -555,6 +557,7 @@ describe('panels tolerate an older route response', () => {
 					vercelVisitors: ok(1580), vercelDailyUnavailable: false,
 					revenue: ok(910), currency: 'USD', orderStatuses: {},
 					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
+					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 			interpretation: 'Sources differ.',
 		} as never
 
@@ -615,6 +618,7 @@ describe('layout does not depend on design tokens resolving', () => {
 					vercelVisitors: ok(1580), vercelDailyUnavailable: false,
 					revenue: ok(910), currency: 'USD', orderStatuses: {},
 					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
+					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 					interpretation: 'Sources differ.', daily: [],
 				}}
 			/>,
@@ -874,6 +878,7 @@ describe('capture model rendering', () => {
 		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
 		revenue: ok(910), currency: 'USD', orderStatuses: {},
 		interpretation: 'Sources differ.', daily: [],
+		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 	}
 
 	it('never renders an inferred figure as a measured one', () => {

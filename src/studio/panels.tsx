@@ -22,6 +22,7 @@ import type {
 	SourceRow,
 	TypefaceInterestRow,
 	DiagnosticReport,
+	EmailCampaign,
 	JourneyData,
 	LandingPage,
 	MeasurementHealthData,
@@ -254,6 +255,48 @@ export function MeasurementHealthPanel({ data, previous }: { data: MeasurementHe
 				</Stack>
 			)}
 
+			{(data.campaigns?.length ?? 0) > 0 && (
+				<Stack space={3}>
+					<Heading size={1} style={sectionHeading}>Email campaigns</Heading>
+					<Text size={1} muted>
+						Clicks are distinct subscribers. Opens are inflated by Apple Mail Privacy Protection,
+						which fetches images on the recipient&rsquo;s behalf — so sort on clicks, not opens.
+					</Text>
+					<SortableTable<EmailCampaign>
+						caption="Email campaigns by clicks"
+						initialSort="clicks"
+						rows={data.campaigns ?? []}
+						rowKey={(c) => `${c.sentAt}-${c.title}`}
+						filterOn={(c) => `${c.title} ${c.subject}`}
+						filterPlaceholder="Filter campaigns"
+						exportName="email-campaigns"
+						columns={[
+							{
+								key: 'title',
+								label: 'Campaign',
+								sortValue: (c) => c.title,
+								render: (c) => (
+									<Stack space={1}>
+										<Text size={1}>{c.title}</Text>
+										<Text size={0} muted>{c.sentAt.slice(0, 10)}</Text>
+									</Stack>
+								),
+							},
+							{ key: 'sent', label: 'Sent', numeric: true, sortValue: (c) => c.sent, render: (c) => <Text size={1}>{formatCount(c.sent)}</Text> },
+							{ key: 'opens', label: 'Opens', numeric: true, sortValue: (c) => c.opens, render: (c) => <Text size={1} muted>{formatCount(c.opens)}</Text> },
+							{ key: 'clicks', label: 'Clicks', numeric: true, sortValue: (c) => c.clicks, render: (c) => <Text size={1}>{formatCount(c.clicks)}</Text> },
+							{
+								key: 'unsub',
+								label: 'Unsubscribed',
+								numeric: true,
+								sortValue: (c) => c.unsubscribed,
+								render: (c) => <Text size={1} muted>{formatCount(c.unsubscribed)}</Text>,
+							},
+						]}
+					/>
+				</Stack>
+			)}
+
 			{Object.keys(data.orderStatuses ?? {}).length > 0 && (
 				<Stack space={3}>
 					<Heading size={1} style={sectionHeading}>Order statuses in this range</Heading>
@@ -285,6 +328,25 @@ export function MeasurementHealthPanel({ data, previous }: { data: MeasurementHe
 					Different units to the figures above, and to each other. Shown for scale, never differenced.
 				</Text>
 				<div style={cardGrid}>
+					{/* The audience a foundry owns. Placed in Context beside orders rather than in a
+					    Mailchimp tab of its own: panels here are organised by the question they
+					    answer, not by which API the number came from. */}
+					<Card padding={3} radius={2} tone="transparent" border>
+						<Stack space={3}>
+							<Label size={1} muted>Mailing list</Label>
+							<div style={figureRow}>
+								<MetricFigure metric={metricOr(data.audience, OLDER_ROUTE)} label="Mailing list members" />
+								<Delta
+									current={metricSortValue(data.audience)}
+									previous={metricSortValue(previous?.audience)}
+								/>
+							</div>
+							<Text size={0} muted>
+								Mailchimp&rsquo;s own count. Not consent-gated or blockable, so it replaces the
+								site&rsquo;s subscribe event rather than sitting beside it.
+							</Text>
+						</Stack>
+					</Card>
 					<Card padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
 							<Label size={1} muted>Revenue</Label>

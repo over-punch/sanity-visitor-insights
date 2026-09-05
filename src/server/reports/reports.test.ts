@@ -22,6 +22,7 @@ import { PREEXISTING } from '../../core/cutover'
 import {
 	createFakeGa4Client,
 	createFakeSanityClient,
+	createFakeMailchimpClient,
 	createFakeVercelClient,
 	makeGa4Report,
 	makeGa4Total,
@@ -31,6 +32,7 @@ import {
 import { hasRequiredRole } from '../auth'
 import { countOrders, countOrdersByTypeface, orderQueryOptions } from '../orders'
 import { andFilters, createGa4Client, eventNameFilter, hostnameFilter } from '../ga4'
+import { createMailchimpClient, datacenterFromKey } from '../mailchimp'
 import { previousRange, zonedDayEndUtc, zonedDayStartUtc } from '../../core/ranges'
 import { parseFunnelReport } from '../ga4'
 import { COMPARED_REPORTS, ENV_VARS, createVisitorInsightsHandler } from '../createHandler'
@@ -1469,5 +1471,82 @@ describe('typeface interest completeness is per query', () => {
 
 		// Partial, carrying its number and the date it is valid from — not a bare ok().
 		expect(omnes?.viewed.status).toBe('partial')
+	})
+})
+
+describe('Mailchimp', () => {
+	it('derives the datacenter from the key rather than asking for it separately', () => {
+		// The host is https://us14.api.mailchimp.com. Deriving it means the two can never disagree,
+		// and a key rotated into another datacenter keeps working without a second edit.
+		expect(datacenterFromKey('abc123def456-us14')).toBe('us14')
+		expect(datacenterFromKey('abc123def456-us21')).toBe('us21')
+	})
+
+	it('refuses a key with no datacenter suffix rather than building a broken host', () => {
+		// An OAuth token carries none. Without this it fails per request as an unresolvable
+		// hostname, which names neither the cause nor the fix.
+		expect(datacenterFromKey('an-oauth-token')).toBeNull()
+		expect(datacenterFromKey('nodashes')).toBeNull()
+		expect(createMailchimpClient('an-oauth-token', 'list1')).toBeNull()
+	})
+
+	it('reports the list count, which replaces the site’s own subscribe event', async () => {
+		// Darden's subscribe event fires twice per signup and treats HTTP 400 — an address already
+		// on the list — as a success. This is the number it was approximating badly.
+		const data = await measurementHealth({
+			config: siteConfig({ mailchimp: { enabled: true } }),
+			range,
+			ga4: createFakeGa4Client({ batch: (requests) => requests.map(() => makeGa4Total(10)) }),
+			vercel: null,
+			sanity: null,
+			mailchimp: createFakeMailchimpClient({ members: 4210, membersAtStart: 4102 }),
+		})
+
+		expect(data.audience).toEqual({ status: 'ok', value: 4210 })
+		expect(data.audienceGrowth).toEqual({ status: 'ok', value: 108 })
+	})
+
+	it('withholds growth rather than approximating it when the range is not a whole month', async () => {
+		// Mailchimp reports growth by calendar month. A growth figure measured over a different
+		// window than the panel claims is worse than none.
+		const data = await measurementHealth({
+			config: siteConfig({ mailchimp: { enabled: true } }),
+			range,
+			ga4: createFakeGa4Client({ batch: (requests) => requests.map(() => makeGa4Total(10)) }),
+			vercel: null,
+			sanity: null,
+			mailchimp: createFakeMailchimpClient({ members: 4210, membersAtStart: null }),
+		})
+
+		expect(data.audienceGrowth.status).toBe('unavailable')
+		expect(data.audience.status).toBe('ok')
+	})
+
+	it('degrades to unavailable when Mailchimp fails, without failing the panel', async () => {
+		const data = await measurementHealth({
+			config: siteConfig({ mailchimp: { enabled: true } }),
+			range,
+			ga4: createFakeGa4Client({ batch: (requests) => requests.map(() => makeGa4Total(10)) }),
+			vercel: null,
+			sanity: null,
+			mailchimp: createFakeMailchimpClient({ members: 0, membersAtStart: null }, new Error('429')),
+		})
+
+		expect(data.audience.status).toBe('unavailable')
+		// The rest of the panel still answered.
+		expect(data.ga4Pageviews.status).toBe('ok')
+	})
+
+	it('reports no audience at all on a site without Mailchimp', async () => {
+		const data = await measurementHealth({
+			config: siteConfig(),
+			range,
+			ga4: createFakeGa4Client({ batch: (requests) => requests.map(() => makeGa4Total(10)) }),
+			vercel: null,
+			sanity: null,
+		})
+
+		expect(data.audience.status).toBe('unavailable')
+		expect(data.campaigns).toEqual([])
 	})
 })

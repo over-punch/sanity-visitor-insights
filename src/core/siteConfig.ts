@@ -143,6 +143,14 @@ export interface SiteAnalyticsConfig {
 	vercel: VercelConfig | null
 	orders: OrdersConfig
 	/**
+	 * Whether this site has a Mailchimp audience worth reporting on.
+	 *
+	 * A flag, not credentials: the key and list id come from the environment like every other
+	 * secret. TDF has no Mailchimp at all, so it omits this and the source reports as unconfigured
+	 * rather than erroring on every request.
+	 */
+	mailchimp?: { enabled: true }
+	/**
 	 * When each GA4 event began firing here. Events absent from this map report as `unknown_event`,
 	 * which is the honest answer for a flow the site does not have — distinct from `not_instrumented`,
 	 * which implies it is merely pending.

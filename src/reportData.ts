@@ -76,6 +76,19 @@ export interface MeasurementHealthData {
 	 * must not be readable as a measured one.
 	 */
 	estimatedSessions: MetricValue
+	/**
+	 * Subscribed members, per Mailchimp.
+	 *
+	 * This REPLACES the site's own subscribe event rather than accompanying it. Darden's fires
+	 * twice per signup and treats an HTTP 400 — what the provider returns for an address already on
+	 * the list — as a success, so the event counts some non-events as conversions. This is the
+	 * number that one was approximating badly.
+	 */
+	audience: MetricValue
+	/** Net change in members across the range, where Mailchimp's monthly history covers it. */
+	audienceGrowth: MetricValue
+	/** Campaigns sent in the range. Empty when Mailchimp is unconfigured. */
+	campaigns: EmailCampaign[]
 	/** Revenue across counted orders. Unavailable when the site names no total field. */
 	revenue: MetricValue
 	/** ISO 4217 code for `revenue`, or null. */
@@ -107,6 +120,25 @@ export interface MeasurementHealthData {
 }
 
 /** One day's pageviews from each source. `null` where that source has no figure for the day. */
+/**
+ * One email campaign, as Mailchimp reports it.
+ *
+ * Opens are included but should be read with suspicion: Apple Mail Privacy Protection pre-fetches
+ * images, so an open is often the mail client rather than a person. Clicks are not inflated that
+ * way, which is why the capture estimate uses clicks and not opens.
+ */
+export interface EmailCampaign {
+	title: string
+	subject: string
+	/** ISO 8601 send time. */
+	sentAt: string
+	sent: number
+	opens: number
+	/** Distinct subscribers who clicked. One person, one expected GA4 session. */
+	clicks: number
+	unsubscribed: number
+}
+
 export interface DailyPoint {
 	/** ISO date, YYYY-MM-DD. */
 	date: string

@@ -18,12 +18,13 @@
  * and the panel says why.
  */
 
-import type { MeasurementHealthData, DailyPoint } from '../../reportData'
+import type { EmailCampaign, MeasurementHealthData, DailyPoint } from '../../reportData'
 import type { DateRange, MetricValue } from '../../types'
 import { estimated, ok, unavailable } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
 import { coverageForAny } from '../../core/cutover'
-import { captureModel, fromOrders, fromPageviews, grossUp, type CaptureModel } from '../../core/capture'
+import { captureModel, fromEmail, fromOrders, fromPageviews, grossUp, type CaptureModel } from '../../core/capture'
+import type { MailchimpClient } from '../mailchimp'
 import { eventNamesFilter, sumFirstMetric, type Ga4Client } from '../ga4'
 import type { VercelClient } from '../vercel'
 import { countOrders, orderQueryOptions, type SanityQueryClient } from '../orders'
@@ -45,6 +46,8 @@ export interface MeasurementHealthInput {
 	ga4: Ga4Client | null
 	vercel: VercelClient | null
 	sanity: SanityQueryClient | null
+	/** Optional: most sites have no Mailchimp audience, and TDF has none at all. */
+	mailchimp?: MailchimpClient | null
 	/** Report-level caveats. Sampling is pushed here so the panel shows it without extra plumbing. */
 	notices?: string[]
 }
@@ -112,6 +115,7 @@ function interpret(ga4Views: MetricValue, vercelViews: MetricValue, shortfall: n
  */
 export async function measurementHealth(input: MeasurementHealthInput): Promise<MeasurementHealthData> {
 	const { config, range, ga4, vercel, sanity } = input
+	const mailchimp = input.mailchimp ?? null
 	// Consent event names are per-site, like tester events.
 	const consentEvents = config.eventNames?.consent ?? [CONSENT_EVENT]
 
@@ -124,11 +128,13 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	let vercelByDate: Record<string, number> = {}
 	/** GA4's own purchase count, for the orders-based capture estimate. */
 	let ga4Purchases: number | null = null
+	/** GA4 sessions whose medium is email, for the campaign-cohort capture estimate. */
+	let emailSessions: number | null = null
 
 	if (ga4) {
 		try {
 			// One batched call rather than three separate quota-charged requests.
-			const [views, sessions, consent, daily, purchases] = await ga4.batchRunReports([
+			const [views, sessions, consent, daily, purchases, emailReport] = await ga4.batchRunReports([
 				{
 					metrics: [{ name: 'screenPageViews' }],
 					dateRanges: [{ startDate: range.start, endDate: range.end }],
@@ -164,6 +170,16 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 					dateRanges: [{ startDate: range.start, endDate: range.end }],
 					dimensionFilter: eventNamesFilter(['purchase']),
 				},
+				{
+					// Sessions GA4 attributes to email. The denominator side of this comes from
+					// Mailchimp's unique subscriber clicks, so the two must describe the same
+					// people — which they only do where campaign links carry a UTM.
+					metrics: [{ name: 'sessions' }],
+					dateRanges: [{ startDate: range.start, endDate: range.end }],
+					dimensionFilter: {
+						filter: { fieldName: 'sessionMedium', stringFilter: { matchType: 'EXACT', value: 'email' } },
+					},
+				},
 			])
 
 			// GA4 returns dates as YYYYMMDD; the Vercel side and the UI both use ISO.
@@ -191,6 +207,7 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 			}
 
 			ga4Purchases = purchases ? sumFirstMetric(purchases) : null
+			emailSessions = emailReport ? sumFirstMetric(emailReport) : null
 
 			const consentCoverage = coverageForAny(config.eventCutovers, consentEvents, range)
 			if (consentCoverage.status === 'full' && consent && ga4Users > 0) {
@@ -317,6 +334,49 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		vercel: vercelIsDaily && typeof vercelByDate[date] === 'number' ? vercelByDate[date] : null,
 	}))
 
+	// Mailchimp. The audience a foundry owns, and the only count here that is neither consent-gated
+	// nor blockable — which is why it replaces the site's own subscribe event rather than sitting
+	// beside it.
+	let audience: MetricValue = unavailable('not_applicable', 'Mailchimp is not configured for this site')
+	let audienceGrowth: MetricValue = unavailable('not_applicable', 'Mailchimp is not configured for this site')
+	let campaigns: EmailCampaign[] = []
+	let campaignClicks: number | null = null
+
+	if (mailchimp) {
+		try {
+			const [list, sent] = await Promise.all([
+				mailchimp.audience({ start: range.start, end: range.end }),
+				mailchimp.campaigns({ start: range.start, end: range.end }),
+			])
+
+			audience = ok(list.members)
+			audienceGrowth = list.membersAtStart === null
+				// Growth history is monthly, so a trailing seven-day window has no start figure to
+				// difference against. Absent rather than approximated: a growth number measured over
+				// a different window than the panel claims is worse than none.
+				? unavailable('not_applicable', 'Mailchimp reports list growth by calendar month, so this range has no start figure')
+				: ok(list.members - list.membersAtStart)
+
+			campaigns = sent.map((campaign) => ({
+				title: campaign.title,
+				subject: campaign.subject,
+				sentAt: campaign.sentAt,
+				sent: campaign.emailsSent,
+				opens: campaign.uniqueOpens,
+				clicks: campaign.uniqueClicks,
+				unsubscribed: campaign.unsubscribed,
+			}))
+
+			// The cohort for the third capture estimate: distinct people who clicked through, each
+			// of whom should have produced a GA4 session.
+			campaignClicks = sent.reduce((total, campaign) => total + campaign.uniqueClicks, 0)
+		} catch (e) {
+			console.error('Visitor insights: Mailchimp query failed:', (e as Error).message)
+			audience = unavailable('source_error')
+			audienceGrowth = unavailable('source_error')
+		}
+	}
+
 	// The capture model. Each ratio is an independent estimate of the same quantity, which is what
 	// makes them worth holding together: one is a curiosity, three that agree are a measurement,
 	// and three that disagree say WHERE the problem is rather than merely that there is one.
@@ -325,6 +385,10 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		ga4Pageviews.status !== 'unavailable' && vercelPageviews.status !== 'unavailable'
 			? fromPageviews(ga4Pageviews.value, vercelPageviews.value)
 			: null,
+		// Only counted where the site tags its campaign links. Without a UTM the sessions are not
+		// attributable to email and the ratio would measure tagging rather than capture — which is
+		// a real finding, but a different one, and conflating them would hide both.
+		campaignClicks !== null && emailSessions !== null ? fromEmail(emailSessions, campaignClicks) : null,
 	])
 
 	// Sessions grossed up to what they probably were. Reported as `estimated`, never as `ok` — the
@@ -347,6 +411,9 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		shortfallRatio,
 		ga4Sessions,
 		orders,
+		audience,
+		audienceGrowth,
+		campaigns,
 		capture,
 		estimatedSessions,
 		revenue,
