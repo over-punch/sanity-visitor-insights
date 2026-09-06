@@ -65,6 +65,17 @@ export interface AcquisitionInput {
 	ga4: Ga4Client
 	/** Maximum source rows to return. */
 	limit?: number
+	/**
+	 * The exact revenue and order count for this window, from Sanity, or null when unavailable.
+	 *
+	 * GA4 supplies the SHAPE of the attribution and Sanity supplies the SCALE. GA4's own purchase
+	 * counts are as lossy as everything else it reports, so its absolute revenue figures would be an
+	 * undercount of unknown size — but a uniform loss cancels in a ratio, so the SPLIT between
+	 * channels survives it in a way the totals do not. Apportioning Sanity's exact total across
+	 * GA4's split gives a figure that is right in scale and honest about its derivation, which is
+	 * the whole reason to hold both sources.
+	 */
+	actuals?: { revenue: number | null; orders: number | null } | null
 	notices?: string[]
 }
 
@@ -74,7 +85,7 @@ export interface AcquisitionInput {
  * @param input - the site config, range and GA4 client
  */
 export async function acquisition(input: AcquisitionInput): Promise<AcquisitionData> {
-	const { config, range, ga4, notices } = input
+	const { config, range, ga4, notices, actuals } = input
 	const limit = input.limit ?? 25
 
 	const report = await ga4.runReport({
@@ -87,7 +98,11 @@ export async function acquisition(input: AcquisitionInput): Promise<AcquisitionD
 			{ name: 'sessionMedium' },
 			{ name: 'sessionCampaignName' },
 		],
-		metrics: [{ name: 'sessions' }, { name: 'engagedSessions' }],
+		// Transactions alongside sessions, so a channel can be ranked by what it BROUGHT rather than
+		// only by how many people it sent. Revenue is deliberately not read from GA4 here: its
+		// currency handling depends on property configuration, and the exact figure already exists
+		// in Sanity.
+		metrics: [{ name: 'sessions' }, { name: 'engagedSessions' }, { name: 'transactions' }],
 		dateRanges: [{ startDate: range.start, endDate: range.end }],
 		orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
 		limit,
@@ -106,8 +121,10 @@ export async function acquisition(input: AcquisitionInput): Promise<AcquisitionD
 		const source = row.dimensions[0] ?? '(not set)'
 		const sessions = row.metrics[0]
 		const engaged = row.metrics[1]
+		const purchases = row.metrics[2]
 		const sessionCount = Number.isFinite(sessions) ? (sessions as number) : 0
 		const engagedCount = Number.isFinite(engaged) ? (engaged as number) : null
+		const purchaseCount = Number.isFinite(purchases) ? (purchases as number) : null
 
 		return {
 			source,
@@ -117,6 +134,10 @@ export async function acquisition(input: AcquisitionInput): Promise<AcquisitionD
 			sessions: sessionCount,
 			engagedSessions: engagedCount,
 			engagementRate: engagedCount !== null && sessionCount > 0 ? engagedCount / sessionCount : null,
+			purchases: purchaseCount,
+			// Filled in below, once every row's purchases are known.
+			revenueShare: null,
+			apportionedRevenue: null,
 			designIndustry: isDesignIndustry(source, config.designIndustrySources),
 			unattributed: isUnattributed(source),
 		}
@@ -129,9 +150,33 @@ export async function acquisition(input: AcquisitionInput): Promise<AcquisitionD
 	const sumWhere = (predicate: (row: SourceRow) => boolean) =>
 		rows.filter(predicate).reduce((total, row) => total + row.sessions, 0)
 
+	// The attribution split, and Sanity's exact total spread across it.
+	//
+	// Withheld entirely rather than approximated when GA4 saw too few purchases to divide by: at
+	// these volumes a single tracked purchase would hand one channel 100% of the quarter's revenue,
+	// which is a fabrication wearing a percentage sign. The floor matches the capture model's.
+	const trackedPurchases = rows.reduce((total, row) => total + (row.purchases ?? 0), 0)
+	const MIN_TRACKED_PURCHASES = 5
+	if (trackedPurchases >= MIN_TRACKED_PURCHASES) {
+		for (const row of rows) {
+			if (row.purchases === null) continue
+			row.revenueShare = row.purchases / trackedPurchases
+			// Sanity's exact total, split by GA4's shape. Null when Sanity could not supply one, so
+			// the share still shows and only the money is withheld.
+			row.apportionedRevenue = actuals?.revenue != null ? actuals.revenue * row.revenueShare : null
+		}
+	} else if (trackedPurchases > 0) {
+		notices?.push(`GA4 attributed only ${trackedPurchases} purchase${trackedPurchases === 1 ? '' : 's'} to a source in this range, which is too few to split revenue by channel. Choose a longer range.`)
+	}
+
 	return {
 		rows,
 		totalSessions,
+		trackedPurchases,
+		/** Sanity's exact figures for the same window, so the panel can say what it apportioned. */
+		actualRevenue: actuals?.revenue ?? null,
+		actualOrders: actuals?.orders ?? null,
+		currency: config.orders?.currency ?? null,
 		// Withheld, not approximated, when the denominator cannot be trusted. A share of an unknown
 		// whole is not a smaller truth, it is a different number wearing a percent sign.
 		designIndustryShare: totalIsComplete && totalSessions > 0 ? sumWhere((r) => r.designIndustry) / totalSessions : null,

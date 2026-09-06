@@ -213,6 +213,18 @@ export interface SourceRow {
 	designIndustry: boolean
 	/** True for GA4's `(not set)` / `(direct)` style buckets, which are not real sources. */
 	unattributed: boolean
+	/** Purchases GA4 attributed to this source, or null when it reported none. */
+	purchases: number | null
+	/**
+	 * This source's share of every purchase GA4 attributed, or null when too few to divide.
+	 *
+	 * A SHARE, not a rate. GA4's absolute purchase counts are as lossy as the rest of it, but a
+	 * roughly uniform loss cancels in a ratio — so the split between channels survives where the
+	 * totals do not.
+	 */
+	revenueShare: number | null
+	/** Sanity's exact revenue apportioned by `revenueShare`, or null. Estimated, never measured. */
+	apportionedRevenue: number | null
 }
 
 /** Where visitors came from. */
@@ -230,6 +242,14 @@ export interface AcquisitionData {
 	 * The shares above are null in that case rather than divided by a partial total.
 	 */
 	rowsTruncated: boolean
+	/** Purchases GA4 attributed to any source at all, across every row. */
+	trackedPurchases: number
+	/** Sanity's exact revenue for the window, which the shares are applied to. Null when absent. */
+	actualRevenue: number | null
+	/** Sanity's exact order count for the window. Null when absent. */
+	actualOrders: number | null
+	/** ISO currency for the apportioned figures, from site config. Null when the site names none. */
+	currency: string | null
 }
 
 // ---------------------------------------------------------------------------

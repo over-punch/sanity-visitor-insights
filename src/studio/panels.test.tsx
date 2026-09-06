@@ -25,8 +25,10 @@ import {
 	OverviewPanel,
 	DataHealthPanel,
 	TypefaceInterestPanel,
+	buyRateIndex,
 	coverageOf,
 	gapOf,
+	medianOf,
 } from './panels'
 import { PanelBoundary, ReadyReport, VisitorInsightsTool } from './VisitorInsightsTool'
 
@@ -1834,5 +1836,86 @@ describe('every tab renders its own panel', () => {
 		const journey = render(<ReadyReport envelope={withComparison as never} tabId="journey" {...props} />)
 		expect(journey).not.toContain('Changes are against')
 		expect(journey).toContain('per-step totals')
+	})
+})
+
+describe('a lossy denominator is presented as a ranking, not a rate', () => {
+	it('needs at least three families before it claims a catalogue median', () => {
+		// A "median" of one or two families is the family itself, or an average of a pair — an index
+		// against it would say nothing about the catalogue.
+		expect(medianOf([0.01, 0.02])).toBeNull()
+		expect(medianOf([0.01, 0.02, 0.03])).toBe(0.02)
+	})
+
+	it('ignores absent and zero rates when finding the middle', () => {
+		// A family GA4 reported no views for has no rate; treating that as zero would drag the
+		// median down and make every other family look strong.
+		expect(medianOf([null, 0, 0.02, 0.04, 0.06])).toBe(0.04)
+	})
+
+	it('is unmoved when the tag breaks and every view count falls together', () => {
+		// The whole reason for the change. When Darden's GA4 count fell from 471/day to 70, every
+		// family's printed rate multiplied by about seven and the families that looked best were the
+		// ones GA4 had stopped seeing. A comparison between families survives that; a rate does not.
+		const healthy = [0.01, 0.02, 0.04]
+		const collapsed = healthy.map((r) => r * 6.7)
+		const index = (rates: number[]) => rates.map((r) => buyRateIndex({ buyRate: r }, medianOf(rates)))
+		expect(index(collapsed)).toEqual(index(healthy))
+	})
+
+	it('has no comparison for a family with no usable rate', () => {
+		expect(buyRateIndex({ buyRate: null }, 0.02)).toBeNull()
+		expect(buyRateIndex({ buyRate: 0.02 }, null)).toBeNull()
+	})
+})
+
+describe('a lifetime figure is not shown as a period figure', () => {
+	it('says the mailing-list card covers all time, beside three range-scoped cards', () => {
+		// It sat in a row with Revenue, Orders and Traffic — all scoped to the range — as Mailchimp's
+		// current all-time count, captioned only "not consent-gated or blockable", which reads as a
+		// boast about accuracy rather than a statement of scope.
+		const html = render(<OverviewPanel data={{
+			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.2,
+			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+			vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+			revenue: ok(910), currency: 'USD', orderStatuses: {},
+			audience: ok(4210), audienceGrowth: unavailable('not_applicable'), campaigns: [],
+			capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
+			estimatedSessions: unavailable('not_applicable'), interpretation: 'x', daily: [],
+			crossSource: [], timelineEvents: [],
+		} as never} />)
+		expect(html).toContain('Mailing list, total')
+		expect(html).toContain('not just this period')
+	})
+})
+
+describe('the new revenue attribution survives an older API route', () => {
+	// The live state between publishing this Studio and deploying the sites: the route returns no
+	// purchases, no revenueShare, no trackedPurchases. The column must read as absent, never as zero
+	// revenue, and the derivation note must not claim a split that was never computed.
+	const legacy = {
+		rows: [{
+			source: 'fontsinuse.com', channel: 'Referral', medium: 'referral', campaign: null,
+			sessions: 120, engagedSessions: 90, engagementRate: 0.75,
+			designIndustry: true, unattributed: false,
+		}],
+		totalSessions: 357, designIndustryShare: 0.3, unattributedShare: 0.1,
+		rowsWithheld: false, rowsTruncated: false,
+	}
+
+	it('renders the column as unavailable rather than as no revenue', () => {
+		const html = render(<AcquisitionPanel data={legacy as never} />)
+		expect(html).toContain('Revenue (est.)')
+		// Not a zero, and not a currency symbol with nothing behind it.
+		expect(html).not.toContain('of tracked sales')
+	})
+
+	it('does not print a derivation note for a split it never made', () => {
+		const html = render(<AcquisitionPanel data={legacy as never} />)
+		expect(html).not.toContain('purchases Google Analytics attributed')
+	})
+
+	it('still shows the sessions the older route did return', () => {
+		expect(render(<AcquisitionPanel data={legacy as never} />)).toContain('120')
 	})
 })

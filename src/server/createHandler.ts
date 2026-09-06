@@ -30,7 +30,7 @@ import { createVercelClient, type VercelClient } from './vercel'
 import { createMailchimpClient, type MailchimpClient } from './mailchimp'
 import { parseServiceAccountKey } from './googleAuth'
 import { cacheKey, withCache, DEFAULT_TTL_MS } from './cache'
-import type { SanityQueryClient } from './orders'
+import { countOrders, orderQueryOptions, type SanityQueryClient } from './orders'
 import { measurementHealth } from './reports/measurementHealth'
 import { acquisition } from './reports/acquisition'
 import { journey } from './reports/journey'
@@ -316,9 +316,18 @@ async function runReport(report: string, ctx: RunContext): Promise<unknown> {
 		case 'measurement-health':
 			return measurementHealth({ config, range, ga4, vercel, sanity, mailchimp, notices })
 
-		case 'acquisition':
+		case 'acquisition': {
 			if (!ga4) throw new Error('GA4 is required for the acquisition report')
-			return acquisition({ config, range, ga4, notices })
+			// Sanity's exact figures ride along, so the panel can apportion a real total across
+			// GA4's attribution split rather than reporting GA4's own lossy money.
+			const counted = sanity && config.orders
+				? await countOrders(sanity, orderQueryOptions(config.orders, range)).catch(() => null)
+				: null
+			return acquisition({
+				config, range, ga4, notices,
+				actuals: counted ? { revenue: counted.revenue, orders: counted.total } : null,
+			})
+		}
 
 		case 'journey': {
 			if (!ga4) throw new Error('GA4 is required for the journey report')

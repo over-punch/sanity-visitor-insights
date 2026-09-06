@@ -223,7 +223,12 @@ export function OverviewPanel({ data, previous, onBrush }: {
 				</Card>
 				<Card padding={3} radius={2} tone="transparent" border>
 					<Stack space={3}>
-						<Label size={1} muted>Mailing list</Label>
+						{/* "Total", in the label, because this card sits in a row with Revenue, Orders and
+						    Traffic — all scoped to the selected range — while it alone is Mailchimp's
+						    current all-time count. On a Week range the growth line beneath is withheld
+						    (Mailchimp reports growth by calendar month), so the card was a lifetime
+						    figure standing unlabelled beside three period figures. */}
+						<Label size={1} muted>Mailing list, total</Label>
 						<div style={figureRow}>
 							<MetricFigure metric={metricOr(data.audience, OLDER_ROUTE)} label="Mailing list members" />
 							{/* audienceGrowth, not a delta between windows. `member_count` is Mailchimp's
@@ -245,7 +250,8 @@ export function OverviewPanel({ data, previous, onBrush }: {
 							})()}
 						</div>
 						<Text size={0} muted>
-							Mailchimp&rsquo;s own count — not consent-gated or blockable.
+							Everyone subscribed today, not just this period. Mailchimp&rsquo;s own count, so it is
+							not consent-gated or blockable.
 						</Text>
 					</Stack>
 				</Card>
@@ -834,8 +840,61 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 								? <Text size={1} muted>—</Text>
 								: <Text size={1}>{formatPercent(row.engagementRate as number, 0)}</Text>,
 						},
+						{
+							/*
+							 * What the channel BROUGHT, which is the question a foundry opens this tool
+							 * with and the one it could not answer. Sessions and engagement rank
+							 * channels by attention; nothing ranked them by money, so "is the design
+							 * press worth chasing" and "did the newsletter sell anything" were
+							 * unaskable while revenue sat one tab away, split by typeface and by
+							 * licence — the two cuts already available from the order list.
+							 *
+							 * Sorted on the SHARE, so the ordering holds even when Sanity supplies no
+							 * total and the money column is empty.
+							 */
+							key: 'brought',
+							label: 'Revenue (est.)',
+							numeric: true,
+							sortValue: (row) => finiteOrNull(row.revenueShare),
+							exportValue: (row) => {
+								const money = finiteOrNull(row.apportionedRevenue)
+								return money === null ? null : formatMoney(money, data.currency ?? null)
+							},
+							render: (row) => {
+								// finiteOrNull, not `=== null`. An older API route omits these fields
+								// entirely, so they arrive as UNDEFINED — which slipped past a null check
+								// and rendered "NaN% of tracked sales" in every Studio between publishing
+								// this package and deploying the sites. That window is the normal state
+								// of this repo, not an edge case.
+								const share = finiteOrNull(row.revenueShare)
+								if (share === null) return <Text size={1} muted>—</Text>
+								const money = finiteOrNull(row.apportionedRevenue)
+								return (
+									<Stack space={1}>
+										{money !== null && <Text size={1}>{formatMoney(money, data.currency ?? null)}</Text>}
+										<Text size={0} muted>{formatPercent(share, 0)} of tracked sales</Text>
+									</Stack>
+								)
+							},
+						},
 					]}
 				/>
+
+				{(data.trackedPurchases ?? 0) > 0 && finiteOrNull(data.actualRevenue) !== null && (
+					// Says exactly what was combined and what was estimated. The money in that column
+					// is Sanity's real total spread across GA4's split — right in scale, and derived,
+					// which is a different claim from measured. Saying so here is what makes the
+					// column usable rather than another figure to distrust.
+					<Text size={0} muted>
+						Revenue is {formatMoney(finiteOrNull(data.actualRevenue) ?? 0, data.currency ?? null)} from{' '}
+						{finiteOrNull(data.actualOrders) === null ? 'your orders' : `${formatCount(data.actualOrders as number)} orders`} in Sanity,
+						split across the {formatCount(data.trackedPurchases)} purchase
+						{data.trackedPurchases === 1 ? '' : 's'} Google Analytics attributed to a source. Google
+						Analytics sees a fraction of your traffic, but it loses it fairly evenly across channels —
+						so the split is far more trustworthy than its own totals. Treat these as proportions with a
+						real total behind them, not as measured takings per channel.
+					</Text>
+				)}
 			</Stack>
 
 			{data.rowsWithheld && (
@@ -964,8 +1023,40 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 	)
 }
 
+/**
+ * The median of the values that exist, or null when fewer than three do.
+ *
+ * Three, because a "median" of one or two families is not a catalogue to compare against — it is
+ * the family itself, or an average of a pair, and an index computed from it would say nothing.
+ *
+ * @param values - one entry per row, null where the row has no usable figure
+ */
+export function medianOf(values: Array<number | null>): number | null {
+	const usable = values.filter((v): v is number => v !== null && Number.isFinite(v) && v > 0).sort((a, b) => a - b)
+	if (usable.length < 3) return null
+	const middle = Math.floor(usable.length / 2)
+	return usable.length % 2 === 0 ? ((usable[middle - 1]! + usable[middle]!) / 2) : usable[middle]!
+}
+
+/**
+ * A family's orders-per-view against the catalogue median, or null when not comparable.
+ *
+ * @param row - the family's row
+ * @param median - the catalogue median, or null when there were too few families
+ */
+export function buyRateIndex(row: { buyRate?: number | null }, median: number | null): number | null {
+	const rate = row.buyRate
+	if (median === null || median <= 0 || rate === null || rate === undefined || !Number.isFinite(rate)) return null
+	return rate / median
+}
+
 /** Typeface interest — viewed, tested and bought per family. */
 export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }): React.ReactElement {
+	// The middle family, by orders-per-view. Median rather than mean: at seven orders a quarter one
+	// family with a single sale and few views produces an outlier that would drag a mean and make
+	// every other family look weak against it.
+	const medianBuyRate = medianOf((data.rows ?? []).map((row) => finiteOrNull(row.buyRate)))
+
 	return (
 		<Stack space={4}>
 			<Card padding={3} radius={2} tone="transparent" border>
@@ -975,7 +1066,11 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 			<Stack space={3}>
 				<Heading size={1} style={sectionHeading}>Engagement by typeface</Heading>
 				<Text size={1} muted>
-					Sort by any column. Sort on buy rate to find families that are looked at and do not sell.
+					Sort by any column. &ldquo;Sells vs catalogue&rdquo; compares each family&rsquo;s orders-per-view
+					against the median family, which is the part of that ratio that holds even though Google
+					Analytics only sees a fraction of the views. It ranks families against each other; it is not
+					the share of visitors who buy, and at these order volumes a family with one or two sales
+					will swing a long way.
 				</Text>
 				<SortableTable<TypefaceInterestRow>
 					caption="Engagement by typeface"
@@ -1039,16 +1134,45 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 							},
 						},
 						{
+							/*
+							 * Relative to the catalogue, NOT an absolute rate.
+							 *
+							 * This is Sanity orders over GA4 views: a complete numerator on a lossy
+							 * denominator. Printed as "0.85%" it invited the reading "eight in a
+							 * thousand visitors buy this", which is wrong by whatever multiple GA4 is
+							 * missing — and it MOVES when the tag breaks. When Darden's GA4 count fell
+							 * from 471 a day to 70, every family's printed rate multiplied by about
+							 * seven, and the families that looked best were the ones GA4 had stopped
+							 * seeing.
+							 *
+							 * What survives that is the ORDER. The loss is roughly uniform across
+							 * families, so it cancels in a comparison between them even as it wrecks
+							 * the absolute figure. Showing each family against the catalogue median
+							 * keeps the one question this column can answer — which families convert
+							 * better or worse than the rest — and drops the one it cannot.
+							 */
 							key: 'buyRate',
-							label: 'Buy rate',
+							label: 'Sells vs catalogue',
 							numeric: true,
 							sortValue: (row) => finiteOrNull(row.buyRate),
-							exportValue: (row) => { const r = finiteOrNull(row.buyRate); return r === null ? null : formatPercent(r, 2) },
-							render: (row) => (
-								<Text size={1} muted aria-label={finiteOrNull(row.buyRate) === null ? `${row.typeface} buy rate unavailable` : undefined}>
-									{finiteOrNull(row.buyRate) === null ? '—' : formatPercent(row.buyRate as number, 2)}
-								</Text>
-							),
+							exportValue: (row) => {
+								const index = buyRateIndex(row, medianBuyRate)
+								return index === null ? null : `${index.toFixed(1)}x`
+							},
+							render: (row) => {
+								const index = buyRateIndex(row, medianBuyRate)
+								if (index === null) {
+									return <Text size={1} muted aria-label={`${row.typeface} not comparable`}>—</Text>
+								}
+								return (
+									<Text size={1}>
+										{index.toFixed(1)}×{' '}
+										<span style={{ opacity: 0.6, fontSize: '0.85em' }}>
+											{index >= 1.15 ? 'above' : index <= 0.85 ? 'below' : 'at'} median
+										</span>
+									</Text>
+								)
+							},
 						},
 						{
 							key: 'testRate',
