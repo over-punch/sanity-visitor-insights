@@ -495,14 +495,6 @@ function ReportPanel({
 				<Text size={0} muted>Updating…</Text>
 			)}
 
-			{state.status === 'ready' && state.revalidationError && (
-				<Card padding={3} radius={2} tone="caution" border>
-					<Text size={1}>
-						These figures are the last ones that loaded. Refreshing them failed: {state.revalidationError}
-					</Text>
-				</Card>
-			)}
-
 			{state.status === 'loading' && (
 				<Flex align="center" gap={3} padding={4}>
 					<Spinner muted />
@@ -534,26 +526,6 @@ function ReportPanel({
 
 			{state.status === 'ready' && (
 				<Stack space={4}>
-					<SourceStatusRow sources={state.envelope.sources} />
-					<NoticeList notices={state.envelope.notices} />
-
-					{/* Shown only on the panels that actually draw a delta. It used to render whenever
-					    `comparison` merely existed, which told the reader they were looking at
-					    period-over-period changes on two panels showing bare levels. */}
-					{/* Gated on the TAB. It was gated on the report, and the tab/report decoupling made those
-					    different things — Data health's report is measurement-health, so it printed
-					    "Changes are against…" above a panel that draws not one delta, which is
-					    verbatim the bug the comment here says was fixed. */}
-				{state.envelope.comparison && COMPARED_TABS.includes(tabId) && (
-						<Text size={0} muted>
-							Changes are against {state.envelope.comparison.range.start} to {state.envelope.comparison.range.end},
-							the equivalent window immediately before this one.
-							{state.envelope.comparison.provisional && (
-								<> This window&rsquo;s last days are still being processed by GA4, so changes read low.</>
-							)}
-						</Text>
-					)}
-
 					{tabId === 'overview' && <OverviewPanel data={state.envelope.data as never} previous={state.envelope.comparison?.data as never} onBrush={onBrush} />}
 					{tabId === 'data-health' && (
 						<Stack space={4}>
@@ -576,6 +548,40 @@ function ReportPanel({
 					{tabId === 'journey' && <JourneyPanel data={state.envelope.data as never} />}
 					{tabId === 'typeface-interest' && <TypefaceInterestPanel data={state.envelope.data as never} />}
 
+					{/*
+					  * Everything below this line is about the INSTRUMENT, not the business, and it
+					  * sits below the answer for that reason. It used to sit above: a reader opening
+					  * the tool met a source-status row, up to two amber caution cards and a
+					  * comparison sentence before reaching a single figure, so the visual peak of the
+					  * page was boilerplate that does not change from day to day. The verdict is what
+					  * changes, so the verdict goes first and the provenance follows it.
+					  */}
+					{state.revalidationError && (
+						<Card padding={3} radius={2} tone="caution" border>
+							<Text size={1}>
+								These figures are the last ones that loaded. Refreshing them failed: {state.revalidationError}
+							</Text>
+						</Card>
+					)}
+					<SourceStatusRow sources={state.envelope.sources} />
+					<NoticeList notices={state.envelope.notices} />
+
+					{/* Shown only on the panels that actually draw a delta. It used to render whenever
+					    `comparison` merely existed, which told the reader they were looking at
+					    period-over-period changes on two panels showing bare levels. */}
+					{/* Gated on the TAB. It was gated on the report, and the tab/report decoupling made those
+					    different things — Data health's report is measurement-health, so it printed
+					    "Changes are against…" above a panel that draws not one delta, which is
+					    verbatim the bug the comment here says was fixed. */}
+				{state.envelope.comparison && COMPARED_TABS.includes(tabId) && (
+						<Text size={0} muted>
+							Changes are against {state.envelope.comparison.range.start} to {state.envelope.comparison.range.end},
+							the equivalent window immediately before this one.
+							{state.envelope.comparison.provisional && (
+								<> This window&rsquo;s last days are still being processed by GA4, so changes read low.</>
+							)}
+						</Text>
+					)}
 					<Text size={0} muted>
 						Figures cover {state.envelope.range.start} to {state.envelope.range.end}, in {state.envelope.range.timezone}
 					</Text>

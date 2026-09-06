@@ -54,6 +54,16 @@ export interface Series {
 	/** Whether the line's source sees everything. Drives the stroke and the wording. */
 	complete: boolean
 	unit: SeriesUnit
+	/**
+	 * How the row is drawn. Defaults to `line`.
+	 *
+	 * `events` is for a quantity that only exists on the days it happened — orders, revenue. Darden
+	 * does seven orders a quarter, and a monotone curve through those seven points drew a smooth
+	 * rise and fall across eighty-three days on which nothing occurred, with the curve's overshoot
+	 * putting non-zero revenue on days that had none. A stem per day says what a sale is: a discrete
+	 * event, on a date, of a size. Days with nothing draw nothing, which is the truth.
+	 */
+	mark?: 'line' | 'events'
 	points: SeriesPoint[]
 	/**
 	 * What a lossier source saw of the same thing.
@@ -159,6 +169,19 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 	const [brushAnchor, setBrushAnchor] = useState<number | null>(null)
 	/** The committed span, kept so the selection stays drawn after the pointer is released. */
 	const [brushed, setBrushed] = useState<[number, number] | null>(null)
+	/**
+	 * The chart's rendered width in CSS pixels, so the viewBox can track it.
+	 *
+	 * With a FIXED 760-unit viewBox and height:auto, the uniform scale is paneWidth/760 — so
+	 * `fontSize={11}` rendered at 5.8px in a 400px Studio pane and ~22px at full width, where the
+	 * row labels came out larger than the section heading above them. The chart's height swung the
+	 * same way, which made row height a function of how wide the pane happened to be.
+	 *
+	 * Making the viewBox equal the measured width pins the scale at exactly 1: type is 11px
+	 * everywhere, stroke weights are what they say, and only the x range responds to the pane.
+	 * WIDTH is the server-render default, and the first client measurement replaces it.
+	 */
+	const [measured, setMeasured] = useState(WIDTH)
 	const frameRef = useRef<SVGSVGElement | null>(null)
 
 	// Every date any series reported, ascending. Built from the union so a series with a gap does
@@ -169,7 +192,19 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 		return [...all].sort()
 	}, [series])
 
-	const plotWidth = WIDTH - GUTTER - RIGHT_PAD
+	const plotWidth = Math.max(120, measured - GUTTER - RIGHT_PAD)
+
+	React.useEffect(() => {
+		const frame = frameRef.current
+		if (!frame || typeof ResizeObserver === 'undefined') return
+		const observer = new ResizeObserver((entries) => {
+			const width = entries[0]?.contentRect.width
+			// Rounded, so a sub-pixel resize does not churn the whole path set.
+			if (width && Math.abs(width - measured) > 1) setMeasured(Math.round(width))
+		})
+		observer.observe(frame)
+		return () => observer.disconnect()
+	}, [measured])
 	const height = TOP_PAD + series.length * ROW_HEIGHT + AXIS_HEIGHT
 
 	const x = useMemo(() => {
@@ -267,10 +302,10 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 			<div style={frameStyle}>
 				<svg
 					ref={frameRef}
-					viewBox={`0 0 ${WIDTH} ${height}`}
-					// Default preserveAspectRatio, so the scale is uniform and nothing is stretched.
-					// height:auto lets the intrinsic aspect ratio drive it, which also means the
-					// rendered box matches the viewBox exactly and the pointer maths is exact.
+					viewBox={`0 0 ${measured} ${height}`}
+					// The viewBox tracks the measured width, so the scale is exactly 1 and every size
+					// here is a real CSS pixel. Height is fixed rather than derived from the aspect
+					// ratio, so rows keep their height whatever the pane does.
 					onMouseMove={onMove}
 					// A selection in flight is abandoned when the pointer leaves, but nothing is left
 					// drawn: a selection still on screen that never applied is a silent no-op that
@@ -301,7 +336,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						setBrushed(null)
 						commit(from, to)
 					}}
-					style={{ width: '100%', height: 'auto', display: 'block', cursor: onBrush ? 'col-resize' : 'default' }}
+					style={{ width: '100%', height, display: 'block', cursor: onBrush ? 'col-resize' : 'default' }}
 					tabIndex={0}
 					role="img"
 					// The label carries the SHAPE, not just the subject. It previously said only which
@@ -369,7 +404,16 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 							.y1((p) => y(p.value as number))
 							.curve(curveMonotoneX)
 
-						const path = lineGen(row.points) ?? ''
+						const path = row.mark === 'events' ? '' : lineGen(row.points) ?? ''
+
+						// One stem per day that had one. Width tracks the day slot so a year of data
+						// stays a texture rather than a picket fence, with a floor so a single order
+						// in a quarter is still findable.
+						const slot = plotWidth / Math.max(1, dates.length)
+						const stemWidth = Math.max(1.5, Math.min(9, slot - 1))
+						const stems = row.mark === 'events'
+							? row.points.filter((p) => p.value !== null && (p.value as number) > 0)
+							: []
 						const gap = row.shortfall ? gapGen(row.points) ?? '' : ''
 						// The lossier source's own line, revealed only while reading a day.
 						const shortfallLine = row.shortfall && revealed
@@ -418,7 +462,27 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 									<path d={shortfallLine} fill="none" stroke="currentColor" strokeWidth={1.5} strokeDasharray="6 4" opacity={0.8} />
 								)}
 
-								<path
+								{stems.map((p) => {
+									const cx = at(p)
+									const top = y(p.value as number)
+									if (!Number.isFinite(cx) || !Number.isFinite(top)) return null
+									return (
+										<rect
+											key={p.date}
+											x={cx - stemWidth / 2}
+											y={top}
+											width={stemWidth}
+											// Floored at 1.5px: a day whose value rounds to nothing on this
+											// scale still happened, and drawing it as zero height would say
+											// it did not.
+											height={Math.max(1.5, bottom - top)}
+											fill="currentColor"
+											opacity={0.75}
+										/>
+									)
+								})}
+
+								{path && <path
 									d={path}
 									fill="none"
 									stroke="currentColor"
@@ -427,7 +491,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 									// line is complete stays solid even when it carries a blind-spot fill.
 									strokeDasharray={row.complete ? undefined : '6 4'}
 									opacity={row.complete ? 0.95 : 0.7}
-								/>
+								/>}
 							</g>
 						)
 					})}

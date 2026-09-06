@@ -13,6 +13,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { readFileSync } from 'node:fs'
 import React from 'react'
 import {
 	AcquisitionPanel,
@@ -1336,5 +1337,109 @@ describe('Overview survives an older API route', () => {
 			timelineEvents: [],
 		} as never} />)
 		expect(html).toContain('weekly buckets')
+	})
+})
+
+describe('the chart draws at a 1:1 scale', () => {
+	const days = ['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-05']
+	const data = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.2,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		revenue: ok(910), currency: 'USD', orderStatuses: {},
+		audience: ok(1), audienceGrowth: ok(0), campaigns: [],
+		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
+		estimatedSessions: unavailable('not_applicable'),
+		interpretation: 'x', daily: [],
+		crossSource: days.map((date, i) => ({
+			date, vercelPageviews: 300 + i * 10, ga4Pageviews: 70 + i * 3, ga4Sessions: 60 + i, orders: i, revenue: i * 120,
+		})),
+		timelineEvents: [],
+	}
+
+	it('sets an explicit pixel height rather than deriving it from the aspect ratio', () => {
+		// With height:auto the chart's physical height was paneWidth/760 — two rows came out 89px
+		// tall in a narrow pane and 344px at full width, so row height was decided by how wide the
+		// pane happened to be.
+		const html = render(<OverviewPanel data={data as never} />)
+		expect(html).toMatch(/style="width:100%;height:\d+(px)?;/)
+		expect(html).not.toContain('height:auto')
+	})
+
+	it('renders type at a real pixel size, because the viewBox tracks the width', () => {
+		// A fixed 760-unit viewBox meant font-size 11 rendered at 5.8px in a 400px pane and ~22px
+		// at full width, where the row labels came out larger than the heading above them.
+		const html = render(<OverviewPanel data={data as never} />)
+		const viewBox = html.match(/viewBox="0 0 (\d+) (\d+)"/)
+		const height = html.match(/width:100%;height:(\d+)/)
+		expect(viewBox).not.toBeNull()
+		// Server-rendered at the default width; the client's first measurement replaces it. What
+		// matters is that the viewBox height and the CSS height agree, so the scale is 1.
+		expect(viewBox?.[2]).toBe(height?.[1])
+		expect(html).toContain('font-size="11"')
+	})
+})
+
+describe('the answer comes before the provenance', () => {
+	/**
+	 * A SOURCE test, deliberately.
+	 *
+	 * `ReportPanel` only reaches its ready branch after a fetch resolves, and these tests render to
+	 * static markup, where effects never run — so there is no rendered output to assert against
+	 * without building a fetch harness for one ordering question. Reading the source is the honest
+	 * way to check it, as long as it says so.
+	 */
+	const source = readFileSync(new URL('./VisitorInsightsTool.tsx', import.meta.url), 'utf8')
+	const ready = source.slice(source.indexOf("{state.status === 'ready' && ("))
+
+	it('renders the panel above the source row, the caution cards and the revalidation notice', () => {
+		// The reader used to meet a source-status row, up to two amber caution cards and a
+		// comparison sentence before the first figure. None of that changes day to day; the verdict
+		// does.
+		const panel = ready.indexOf("tabId === 'overview'")
+		expect(panel).toBeGreaterThan(-1)
+		for (const chrome of ['<SourceStatusRow', '<NoticeList', 'state.revalidationError', 'Changes are against']) {
+			expect(ready.indexOf(chrome), `${chrome} should follow the panel`).toBeGreaterThan(panel)
+		}
+	})
+
+	it('still renders all of it', () => {
+		// The reorder is a move, not a delete: every block that was above the panel is below it.
+		for (const chrome of ['<SourceStatusRow', '<NoticeList', 'state.revalidationError', 'Figures cover']) {
+			expect(ready).toContain(chrome)
+		}
+	})
+})
+
+describe('discrete events are not drawn as a continuous line', () => {
+	const days = Array.from({ length: 30 }, (_, i) => `2026-09-${String(i + 1).padStart(2, '0')}`)
+	const data = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.2,
+		ga4Sessions: ok(357), orders: ok(2), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		revenue: ok(0), currency: 'USD', orderStatuses: {},
+		audience: ok(1), audienceGrowth: ok(0), campaigns: [],
+		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
+		estimatedSessions: unavailable('not_applicable'),
+		interpretation: 'x', daily: [],
+		// Two orders in thirty days — the shape Darden actually has.
+		crossSource: days.map((date, i) => ({
+			date, vercelPageviews: 300, ga4Pageviews: 70, ga4Sessions: 60,
+			orders: i === 4 || i === 19 ? 1 : 0, revenue: null,
+		})),
+		timelineEvents: [],
+	}
+
+	it('draws one mark per day that had an order, and none for the days that did not', () => {
+		// A monotone curve through two points spread over a month drew a smooth rise and fall
+		// across twenty-eight days on which nothing happened.
+		const html = render(<OverviewPanel data={data as never} />)
+		expect((html.match(/<rect/g) ?? []).length).toBe(2)
+	})
+
+	it('still draws the traffic row as a line', () => {
+		// The change is scoped to event rows; a continuous quantity stays continuous.
+		const html = render(<OverviewPanel data={data as never} />)
+		expect(html).toContain('stroke-width="2"')
 	})
 })

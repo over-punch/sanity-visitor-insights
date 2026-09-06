@@ -266,6 +266,8 @@ export function OverviewPanel({ data, previous, onBrush }: {
 									source: 'Sanity' as const,
 									complete: true,
 									unit: 'money' as const,
+									// A sale is an event on a date, not a level that varies day to day.
+									mark: 'events' as const,
 									points: (data.crossSource ?? []).map((d) => ({ date: d.date, value: d.revenue })),
 								}]
 								: [{
@@ -274,6 +276,7 @@ export function OverviewPanel({ data, previous, onBrush }: {
 									source: 'Sanity' as const,
 									complete: true,
 									unit: 'count' as const,
+									mark: 'events' as const,
 									points: (data.crossSource ?? []).map((d) => ({ date: d.date, value: d.orders })),
 								}]),
 						]}
