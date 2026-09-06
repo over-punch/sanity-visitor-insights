@@ -69,13 +69,29 @@ describe('MetricFigure', () => {
 		expect(html).not.toMatch(/>0</)
 	})
 
-	it('states the reason for every unavailable variant', () => {
+	it('states the reason for every unavailable variant, as real text', () => {
+		// This asserted the presence of an `aria-label` — which was the BROKEN mechanism. Text puts
+		// it on a <div>, whose role is generic, where aria-label is prohibited and ignored; the only
+		// other content was an aria-hidden dash. So an unavailable metric announced as an empty
+		// node, and this test passed the whole time because the attribute was in the markup.
+		//
+		// The assertion is now on announceable text, which is the thing that was missing.
 		const reasons = ['not_instrumented', 'before_cutover', 'suppressed', 'outage', 'source_error', 'not_applicable'] as const
 		for (const reason of reasons) {
 			const html = render(<MetricFigure metric={unavailable(reason)} label="Views" />)
-			// Rendered somewhere as an accessible label, so a screen reader gets more than a dash.
-			expect(html, reason).toMatch(/aria-label="[^"]+"/)
+			expect(html, reason).toContain('Views: unavailable.')
+			// And the text is present but not visible, rather than being an attribute.
+			expect(html, reason).toContain('position:absolute')
 		}
+	})
+
+	it('announces an estimate as an estimate rather than as a figure', () => {
+		const html = render(
+			<MetricFigure metric={{ status: 'estimated', value: 714, low: 595, high: 892, basis: 'GA4 sees about half.' }} label="Sessions" />,
+		)
+		expect(html).toContain('estimated, between')
+		// The tilde is decoration and must not be read out as part of the number.
+		expect(html).toContain('aria-hidden="true">~')
 	})
 
 	it('marks a partial value as partial while still showing the number', () => {
@@ -221,7 +237,9 @@ describe('JourneyPanel', () => {
 
 		const html = render(<JourneyPanel data={inflated} />)
 		// Both bars are drawn at full width — the second is clamped, not rescaled.
-		expect(html.match(/width:100%;height:100%/g)).toHaveLength(2)
+		// Both bars full width — the second is clamped, not rescaled. Matched on the fill's own
+		// declaration now that bars are explicit styles rather than Card tones.
+		expect(html.match(/opacity:0\.55;width:100%/g)).toHaveLength(2)
 		// But the printed share is NOT clamped. Showing "100.0%" here would hide the anomaly.
 		expect(html).toContain('500.0% of landed')
 		// And a step larger than the one above it is named as such, not as "no difference".
@@ -949,7 +967,9 @@ describe('CrossSourceTimeline', () => {
 		estimatedSessions: unavailable('not_applicable'),
 		interpretation: 'Sources differ.', daily: [],
 		crossSource: days.map((date, i) => ({
-			date, vercelPageviews: 300 + i * 10, ga4Sessions: 60 + i, orders: i, revenue: i * 120,
+			// ga4Pageviews, not sessions — the shaded region differences these against vercelPageviews
+			// and both sides must be the same unit.
+			date, vercelPageviews: 300 + i * 10, ga4Pageviews: 70 + i * 3, ga4Sessions: 60 + i, orders: i, revenue: i * 120,
 		})),
 		timelineEvents: [{ date: '2026-09-03', label: 'September release', detail: '1,200 sent, 84 clicked' }],
 	}
@@ -977,7 +997,7 @@ describe('CrossSourceTimeline', () => {
 		// constituent LINES are revealed on demand.
 		const html = render(<MeasurementHealthPanel data={base as never} />)
 		expect(html).toContain('what your analytics did not see')
-		expect(html).toContain('It is a quantity, not a margin of error')
+		expect(html).toContain('a quantity, not a margin of error')
 		// A filled region, not an outline.
 		expect(html).toMatch(/<path d="M[^"]*" fill="currentColor"/)
 	})
@@ -1036,5 +1056,44 @@ describe('ProportionChart', () => {
 		expect(renderToStaticMarkup(
 			<ProportionChart bars={[{ key: 'a', label: 'x', value: 0 }]} format={String} totalLabel="Total" />,
 		)).toBe('')
+	})
+})
+
+describe('the chart says in words what it draws', () => {
+	const days = ['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-05']
+	const data = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		revenue: ok(910), currency: 'USD', orderStatuses: {},
+		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
+		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
+		estimatedSessions: unavailable('not_applicable'),
+		interpretation: 'x', daily: [],
+		crossSource: days.map((date, i) => ({
+			date, vercelPageviews: 300 + i * 10, ga4Pageviews: 70 + i * 3, ga4Sessions: 60 + i, orders: i, revenue: i * 120,
+		})),
+		timelineEvents: [],
+	}
+
+	it('states how much was missed and when the gap was worst', () => {
+		// The region was drawn to scale and described only in the abstract, so the two facts it
+		// exists to convey were available solely by squinting at a pale fill.
+		const html = render(<MeasurementHealthPanel data={data as never} />)
+		expect(html).toMatch(/GA4 missed [\d,]+ pageviews over this period/)
+		expect(html).toContain('the gap was widest on')
+	})
+
+	it('carries the shape of the data in the accessible name, not just its subject', () => {
+		// role="img" prunes every descendant, so this label IS the chart for a blind reader. It
+		// previously named only which rows existed — the title, not the content.
+		const html = render(<MeasurementHealthPanel data={data as never} />)
+		expect(html).toMatch(/aria-label="5 days from [^"]*peaking at[^"]*"/)
+	})
+
+	it('is focusable, so a day can be read without a mouse', () => {
+		// The older chart this supersedes had arrow-key stepping; this one shipped without any.
+		const html = render(<MeasurementHealthPanel data={data as never} />)
+		expect(html).toContain('tabindex="0"')
 	})
 })

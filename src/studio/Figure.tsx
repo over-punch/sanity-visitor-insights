@@ -167,13 +167,28 @@ export interface MetricFigureProps {
  */
 export function MetricFigure({ metric, label, size = 4, unit = 'count' }: MetricFigureProps): React.ReactElement {
 	if (metric.status === 'unavailable') {
-		const reason = REASON_TEXT[metric.reason]
+		// Guarded: the route can be newer than the Studio and send a reason this build has never
+		// heard of, which rendered the word "undefined" to the reader.
+		const reason = REASON_TEXT[metric.reason] ?? 'No figure available'
 		const detail = metric.detail ? `${reason}. ${metric.detail}` : reason
 
 		return (
+			// The reason travels as REAL TEXT in a visually-hidden span, not as an aria-label and not
+			// only in a tooltip.
+			//
+			// `aria-label` on a <Text> is silently dropped: it renders a bare <div>, whose role is
+			// `generic`, on which aria-label is prohibited by ARIA and ignored by every major
+			// browser. The em dash beside it is aria-hidden. So an unavailable metric announced as
+			// an EMPTY NODE — a blank cell — which is exactly the "absent must never look like a
+			// measured zero" invariant this whole type exists to enforce, inverted for anyone not
+			// looking at the screen. The tooltip was the only other route and it hangs off a
+			// non-focusable element, so it was pointer-only too.
+			//
+			// Delta already does this correctly; this is that pattern applied.
 			<Tooltip content={<Box padding={2}><Text size={1}>{detail}</Text></Box>} portal>
-				<Text size={size} muted aria-label={`${label}: unavailable. ${detail}`}>
+				<Text size={size} muted>
 					<span aria-hidden="true">—</span>
+					<span style={visuallyHidden}>{label}: unavailable. {detail}</span>
 				</Text>
 			</Tooltip>
 		)
@@ -186,8 +201,9 @@ export function MetricFigure({ metric, label, size = 4, unit = 'count' }: Metric
 	if (metric.status === 'partial') {
 		return (
 			<Stack space={2}>
-				<Text size={size} aria-label={`${label}: ${formatted}, partial. ${metric.note}`}>
+				<Text size={size}>
 					{formatted}
+					<span style={visuallyHidden}>, partial. {metric.note}</span>
 				</Text>
 				<Badge tone="caution" fontSize={0}>Partial</Badge>
 			</Stack>
@@ -206,8 +222,9 @@ export function MetricFigure({ metric, label, size = 4, unit = 'count' }: Metric
 
 		return (
 			<Stack space={2}>
-				<Text size={size} aria-label={`${label}: estimated ${formatted}, between ${range}. ${metric.basis}`}>
+				<Text size={size}>
 					<span aria-hidden="true">~</span>{formatted}
+					<span style={visuallyHidden}>estimated, between {range}. {metric.basis}</span>
 				</Text>
 				<Text size={0} muted>{range}</Text>
 				<Badge tone="primary" fontSize={0}>Estimated</Badge>
@@ -222,11 +239,7 @@ export function MetricFigure({ metric, label, size = 4, unit = 'count' }: Metric
 		void unhandled
 	}
 
-	return (
-		<Text size={size} aria-label={`${label}: ${formatted}`}>
-			{formatted}
-		</Text>
-	)
+	return <Text size={size}>{formatted}</Text>
 }
 
 /** Props for ComparisonBar. */
@@ -269,9 +282,9 @@ export function ComparisonBar({ label, metric, max, tone = 'default' }: Comparis
 			) : (
 				// Track and fill are both Cards so the palette comes from the Studio theme tokens
 				// rather than hand-picked CSS variables, and follows light/dark without extra work.
-				<Card aria-hidden="true" radius={2} tone="transparent" border style={{ height: 8, overflow: 'hidden' }}>
-					<Card tone={tone === 'default' ? 'default' : tone} radius={2} style={{ width: `${width}%`, height: '100%' }} />
-				</Card>
+				<div aria-hidden="true" style={barTrack}>
+					<div style={{ ...barFill, width: `${width}%` }} />
+				</div>
 			)}
 		</Stack>
 	)
@@ -329,9 +342,9 @@ export function ProportionChart({ bars, format, totalLabel }: ProportionChartPro
 								<Text size={0} muted as="span">{' '}({formatPercent(share, 0)})</Text>
 							</Text>
 						</div>
-						<Card aria-hidden="true" radius={2} tone="transparent" border style={{ height: 8, overflow: 'hidden' }}>
-							<Card tone="primary" radius={2} style={{ width: `${Math.max(1, share * 100)}%`, height: '100%' }} />
-						</Card>
+						<div aria-hidden="true" style={barTrack}>
+							<div style={{ ...barFill, width: `${Math.max(1, share * 100)}%` }} />
+						</div>
 					</Stack>
 				)
 			})}
@@ -429,9 +442,9 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
 								<Text size={1} weight="semibold">{formatCount(stage.value)}</Text>
 							</div>
 
-							<Card aria-hidden="true" radius={2} tone="transparent" border style={funnelTrack}>
-								<Card tone="primary" radius={2} style={{ width: `${width}%`, height: '100%' }} />
-							</Card>
+							<div aria-hidden="true" style={{ ...barTrack, height: 10 }}>
+								<div style={{ ...barFill, width: `${width}%` }} />
+							</div>
 
 							{/* Both ratios where they differ — the panel used to print only the
 							    step-to-step one, and a reader comparing two adjacent small
@@ -500,6 +513,37 @@ function funnelStage(active: boolean): React.CSSProperties {
 
 /** The rung's track. */
 const funnelTrack: React.CSSProperties = { height: 10, overflow: 'hidden' }
+
+/**
+ * The fill for a bar's measured portion.
+ *
+ * An explicit background, NOT `<Card tone="primary">`. Sanity's card tones are page backgrounds
+ * meant to sit behind text, never accents: measured against the surrounding track they come out at
+ * 1.03:1 in light and 1.12:1 in dark, where WCAG's floor for a meaningful graphical object is 3:1.
+ * Three of the four bar idioms were rendering as empty rails with numbers beside them, and
+ * `tone="default"` was worse still — a bar lighter than its own track.
+ *
+ * It also survives the compat shim, whose DOM fallback drops `tone`, `padding`, `radius` and
+ * `border` entirely but passes `style` through. A bar whose existence depends on a resolved
+ * design token is a bar that vanishes on the Studio versions the shim exists for.
+ */
+const barFill: React.CSSProperties = {
+	height: '100%',
+	borderRadius: 2,
+	// currentColor at an alpha that clears 3:1 against the card in both themes, so the mark works
+	// from one declaration rather than needing a palette.
+	background: 'currentColor',
+	opacity: 0.55,
+}
+
+/** The track a bar sits in. Visible on its own, so an empty bar still reads as a bar. */
+const barTrack: React.CSSProperties = {
+	height: 8,
+	borderRadius: 2,
+	overflow: 'hidden',
+	background: 'currentColor',
+	opacity: 0.12,
+}
 
 /** Chart frame, so the hover readout can sit over the plot. */
 const chartFrame: React.CSSProperties = { position: 'relative', width: '100%' }
@@ -1086,7 +1130,10 @@ export function SortableTable<Row>({
 										<th key={column.key} scope="row" style={bodyCell}>
 											<span style={firstCell}>
 												{content}
-												{filterOn && (
+												{/* Not gated on `filterOn`. Filtering and excluding are
+												    independent affordances, and coupling them meant a table
+												    without a filter silently lost per-row exclusion too. */}
+												{exportName || filterOn ? (
 													// Per-row exclusion, because the fix for a contaminated
 													// table is to take the bad row out and see what the
 													// rest looks like. Rendered on every row rather than
@@ -1100,7 +1147,7 @@ export function SortableTable<Row>({
 													>
 														×
 													</button>
-												)}
+												) : null}
 											</span>
 										</th>
 									) : (

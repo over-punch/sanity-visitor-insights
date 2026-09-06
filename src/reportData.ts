@@ -159,7 +159,16 @@ export interface CrossSourceDay {
 	date: string
 	/** Vercel pageviews. Complete: server-side, so neither consent nor ad-blocking reduces it. */
 	vercelPageviews: number | null
-	/** GA4 sessions. Lossy by the capture rate. */
+	/**
+	 * GA4 PAGEVIEWS — the like-for-like counterpart to `vercelPageviews`.
+	 *
+	 * The timeline's shaded region encodes the difference between these two as an area, so both
+	 * sides must be the same unit. It previously shaded `ga4Sessions` beneath a pageview line,
+	 * which overstated the loss by the pageviews-per-session ratio — the exact mistake
+	 * `measurementHealth`'s own test forbids for the scalar figure.
+	 */
+	ga4Pageviews: number | null
+	/** GA4 sessions. A different unit from pageviews, and never differenced against them. */
 	ga4Sessions: number | null
 	/** Orders placed. Exact. */
 	orders: number | null

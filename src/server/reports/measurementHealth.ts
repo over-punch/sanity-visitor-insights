@@ -428,6 +428,7 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	// span; a row that silently ended earlier than its neighbours would read as a fall rather than
 	// as an absence.
 	const crossDates = [...new Set([
+		...ga4ByDate.keys(),
 		...ga4SessionsByDate.keys(),
 		...(vercelIsDaily ? Object.keys(vercelByDate) : []),
 		...Object.keys(ordersByDate),
@@ -437,6 +438,8 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	const crossSource: CrossSourceDay[] = crossDates.map((date) => ({
 		date,
 		vercelPageviews: vercelIsDaily && typeof vercelByDate[date] === 'number' ? vercelByDate[date] : null,
+		// Pageviews, for the like-for-like comparison the chart draws as an area.
+		ga4Pageviews: ga4ByDate.has(date) ? (ga4ByDate.get(date) as number) : null,
 		ga4Sessions: ga4SessionsByDate.has(date) ? (ga4SessionsByDate.get(date) as number) : null,
 		// Zero rather than null: Sanity is exact, so a day with no order really did have none.
 		// Null here would draw a gap and read as "not measured", which is the opposite of the truth.

@@ -219,7 +219,11 @@ export function MeasurementHealthPanel({ data, previous }: { data: MeasurementHe
 								shortfall: {
 									label: 'Seen by GA4',
 									source: 'GA4',
-									points: (data.crossSource ?? []).map((d) => ({ date: d.date, value: d.ga4Sessions })),
+									// PAGEVIEWS, not sessions. The region encodes the difference between
+									// these two as an area, so both sides must be the same unit — this
+									// previously shaded sessions under a pageview line, overstating the
+									// loss by the pageviews-per-session ratio.
+									points: (data.crossSource ?? []).map((d) => ({ date: d.date, value: d.ga4Pageviews })),
 								},
 							},
 							...(data.crossSource?.some((d) => d.revenue !== null)
@@ -692,10 +696,11 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 								key: 'path',
 								label: 'Page',
 								sortValue: (page) => page.path,
-								// The foundry's own URLs were the one table that did not link, while
-								// referrer hosts did — so clicking took you to somebody else's site
-								// and the pages you might want to open would not open.
-								render: (page) => <Text size={1}>{page.path}</Text>,
+								// The comment here used to describe this fix without applying it: it said
+								// the foundry's own URLs were the one table that did not link while
+								// referrer hosts did, and then rendered plain text. A comment asserting
+								// something the code does not do is worse than no comment.
+								render: (page) => <a href={page.path} target="_blank" rel="noopener noreferrer" style={sourceLink}>{page.path}</a>,
 							},
 							{
 								key: 'sessions',

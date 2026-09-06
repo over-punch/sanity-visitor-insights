@@ -68,14 +68,6 @@ export interface Series {
 		source: Series['source']
 		points: SeriesPoint[]
 	}
-	/**
-	 * Multiplier from observed to estimated-true, where the line itself is the lossy source.
-	 *
-	 * This one IS a symmetric band, because it is genuine uncertainty rather than a known blind
-	 * spot. The two must not look alike: one says "we do not know exactly", the other says "we know
-	 * exactly, and this much was invisible".
-	 */
-	grossUpFactor?: number
 }
 
 /** A dated event drawn through every row, e.g. a campaign send. */
@@ -93,14 +85,33 @@ export interface CrossSourceTimelineProps {
 	currency?: string | null
 }
 
-/** Height of one series row, in px. Enough for a readable shape without dominating the panel. */
+/**
+ * Design width, in the same units as every other constant here.
+ *
+ * The chart previously used a `0 0 100 H` viewBox with `preserveAspectRatio="none"` and a CSS
+ * height equal to H — so the vertical scale was exactly 1 while the horizontal scale was
+ * paneWidth/100, i.e. 4x to 12x. Under a non-uniform transform SVG scales the stroked OUTLINE, not
+ * the stroke width, so line weight tracked slope, dash rhythm changed with both slope and pane
+ * width, marker dots rendered as horizontal dashes, and `fontSize={AXIS_TYPE}` came out 3px tall and
+ * stretched four- to twelve-fold sideways. Anamorphic letterforms, shipped to type designers.
+ *
+ * Worse, GUTTER was a pixel value pasted into a percentage space, so 52% of the chart was empty
+ * margin and the data occupied 36% of the width.
+ *
+ * 760 matches TrendChart, which had this right all along. Uniform scaling, default
+ * preserveAspectRatio, every constant in one space.
+ */
+const WIDTH = 760
+/** Height of one series row. */
 const ROW_HEIGHT = 74
 /** Space under the last row for the shared date axis. */
 const AXIS_HEIGHT = 26
-/** Left gutter for each row's own y-axis labels. */
+/** Left gutter for each row's own y-axis labels — 7% of the width, not 52%. */
 const GUTTER = 52
 const RIGHT_PAD = 12
-const TOP_PAD = 16
+const TOP_PAD = 22
+/** Type size inside the plot. A real value now that the scale is uniform. */
+const AXIS_TYPE = 11
 
 /** Format a value in its series' unit. */
 function formatValue(value: number, unit: SeriesUnit, currency: string | null | undefined): string {
@@ -136,8 +147,7 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 		return [...all].sort()
 	}, [series])
 
-	const width = 100 // percentage-based viewBox; the SVG scales to its container
-	const plotWidth = width - GUTTER - RIGHT_PAD
+	const plotWidth = WIDTH - GUTTER - RIGHT_PAD
 	const height = TOP_PAD + series.length * ROW_HEIGHT + AXIS_HEIGHT
 
 	const x = useMemo(() => {
@@ -153,7 +163,7 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 			if (!frame || dates.length === 0) return
 			const box = frame.getBoundingClientRect()
 			// Position within the plot, in the same 0–100 space as the viewBox.
-			const ratio = ((event.clientX - box.left) / box.width) * width
+			const ratio = ((event.clientX - box.left) / box.width) * WIDTH
 			const clamped = Math.max(GUTTER, Math.min(GUTTER + plotWidth, ratio))
 			const index = Math.round(((clamped - GUTTER) / plotWidth) * (dates.length - 1))
 			setHoverIndex(Math.max(0, Math.min(dates.length - 1, index)))
@@ -166,18 +176,76 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 	const hoveredDate = hoverIndex !== null ? dates[hoverIndex] : null
 	const revealed = pinned || hoverIndex !== null
 
+	// What the drawing says, in words. Serves a screen reader, anyone who cannot resolve the axis
+	// type, and anyone reading a screenshot — the shaded region's whole argument was previously
+	// available only as pixels.
+	const shapeOf = (row: Series) => {
+		const real = row.points.filter((p) => p.value !== null) as Array<{ date: string; value: number }>
+		if (real.length === 0) return `${row.label}: no data`
+		const top = real.reduce((best, p) => (p.value > best.value ? p : best), real[0]!)
+		const total = real.reduce((sum, p) => sum + p.value, 0)
+		return `${row.label} (${row.source}): ${formatValue(total, row.unit, currency)} in total, `
+			+ `peaking at ${formatValue(top.value, row.unit, currency)} on ${tickLabel(new Date(`${top.date}T00:00:00Z`))}`
+	}
+
+	const missed = series.flatMap((row) => {
+		if (!row.shortfall) return []
+		const seen = new Map(row.shortfall.points.map((p) => [p.date, p.value]))
+		let gap = 0
+		let worst: { date: string; ratio: number } | null = null
+		for (const point of row.points) {
+			if (point.value === null) continue
+			const saw = seen.get(point.date)
+			if (saw == null) continue
+			gap += point.value - saw
+			const ratio = point.value > 0 ? 1 - saw / point.value : 0
+			if (!worst || ratio > worst.ratio) worst = { date: point.date, ratio }
+		}
+		if (gap <= 0 || !worst) return []
+		return [`${row.shortfall.source} missed ${formatCount(Math.round(gap))} ${row.label.toLowerCase()} over this period; `
+			+ `the gap was widest on ${tickLabel(new Date(`${worst.date}T00:00:00Z`))} at ${formatPercent(worst.ratio, 0)}.`]
+	})
+
+	const summary = `${dates.length} days from ${tickLabel(new Date(`${dates[0]}T00:00:00Z`))} to `
+		+ `${tickLabel(new Date(`${dates[dates.length - 1]}T00:00:00Z`))}. `
+		+ series.map(shapeOf).join('. ') + '. ' + missed.join(' ')
+		+ (markers.length > 0 ? ` ${markers.length} campaign send${markers.length === 1 ? '' : 's'} marked.` : '')
+
 	return (
 		<Stack space={3}>
 			<div style={frameStyle}>
 				<svg
 					ref={frameRef}
-					viewBox={`0 0 ${width} ${height}`}
-					preserveAspectRatio="none"
-					style={{ width: '100%', height: series.length * ROW_HEIGHT + AXIS_HEIGHT + TOP_PAD, display: 'block' }}
+					viewBox={`0 0 ${WIDTH} ${height}`}
+					// Default preserveAspectRatio, so the scale is uniform and nothing is stretched.
+					// height:auto lets the intrinsic aspect ratio drive it, which also means the
+					// rendered box matches the viewBox exactly and the pointer maths below is exact.
+					style={{ width: '100%', height: 'auto', display: 'block' }}
 					onMouseMove={onMove}
 					onMouseLeave={() => setHoverIndex(null)}
+					tabIndex={0}
 					role="img"
-					aria-label={`${series.map((s) => s.label).join(', ')} over ${dates.length} days, on one shared time axis`}
+					// The label carries the SHAPE, not just the subject. It previously said only which
+					// rows existed, which is the chart's title rather than its content — and since
+					// role="img" prunes every descendant, that was the entire chart for a blind
+					// reader. Peaks, dates and the size of the gap are the facts the drawing conveys.
+					aria-label={summary}
+					onFocus={() => setHoverIndex((current) => current ?? dates.length - 1)}
+					onBlur={() => setHoverIndex(null)}
+					onKeyDown={(event) => {
+						// The chart this replaced had arrow-key day stepping and this one did not, so
+						// the newer, more prominent chart regressed against the older one.
+						let next: number | null = null
+						const current = hoverIndex ?? dates.length - 1
+						if (event.key === 'ArrowRight') next = Math.min(current + 1, dates.length - 1)
+						if (event.key === 'ArrowLeft') next = Math.max(current - 1, 0)
+						if (event.key === 'Home') next = 0
+						if (event.key === 'End') next = dates.length - 1
+						if (event.key === 'Escape') { setHoverIndex(null); return }
+						if (next === null) return
+						event.preventDefault()
+						setHoverIndex(next)
+					}}
 				>
 					{series.map((row, rowIndex) => {
 						const top = TOP_PAD + rowIndex * ROW_HEIGHT
@@ -187,8 +255,7 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 						// Each row scales to ITSELF. That is the whole point of small multiples: no
 						// shared scale means no invented correlation between rows.
 						const peak = d3Max(values) ?? 0
-						const grossed = row.grossUpFactor && row.grossUpFactor > 1 ? peak * row.grossUpFactor : peak
-						const y = scaleLinear().domain([0, grossed || 1]).nice().range([bottom, top])
+						const y = scaleLinear().domain([0, peak || 1]).nice().range([bottom, top])
 
 						const at = (p: SeriesPoint) => x(new Date(`${p.date}T00:00:00Z`))
 						const defined = (p: SeriesPoint) => p.value !== null
@@ -210,19 +277,8 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 							.y1((p) => y(p.value as number))
 							.curve(curveMonotoneX)
 
-						// Genuine uncertainty, where the LINE itself is the lossy source. A symmetric
-						// band, deliberately unlike the blind-spot fill: one says "we do not know
-						// exactly", the other says "we know exactly, and this much was invisible".
-						const bandGen = d3Area<SeriesPoint>()
-							.defined(defined)
-							.x(at)
-							.y0((p) => y(p.value as number))
-							.y1((p) => y((p.value as number) * (row.grossUpFactor as number)))
-							.curve(curveMonotoneX)
-
 						const path = lineGen(row.points) ?? ''
 						const gap = row.shortfall ? gapGen(row.points) ?? '' : ''
-						const band = row.grossUpFactor && row.grossUpFactor > 1 ? bandGen(row.points) ?? '' : ''
 						// The lossier source's own line, revealed only while reading a day.
 						const shortfallLine = row.shortfall && revealed
 							? lineGen(shortfallPoints.filter((p) => p.value !== null)) ?? ''
@@ -230,27 +286,47 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 
 						return (
 							<g key={row.key}>
-								<line x1={GUTTER} x2={GUTTER + plotWidth} y1={bottom} y2={bottom} stroke="currentColor" strokeWidth={0.15} opacity={0.25} />
-								<text x={GUTTER - 4} y={top + 5} textAnchor="end" fontSize={3} fill="currentColor" opacity={0.55}>
-									{formatValue(grossed, row.unit, currency)}
-								</text>
-								<text x={GUTTER - 4} y={bottom} textAnchor="end" fontSize={3} fill="currentColor" opacity={0.55}>0</text>
+								<line x1={GUTTER} x2={GUTTER + plotWidth} y1={bottom} y2={bottom} stroke="currentColor" strokeWidth={1} opacity={0.45} />
 
-								{gap && <path d={gap} fill="currentColor" opacity={revealed ? 0.16 : 0.09} />}
-								{band && <path d={band} fill="currentColor" opacity={0.1} />}
+								{/* The row names itself, in the dead strip above its own band. Small
+								    multiples without in-place labels forfeit the thing they are for:
+								    scanning down the stack and knowing what each band is. The label
+								    used to live only in a wrapping legend whose order was not tied to
+								    vertical position. */}
+								<text x={GUTTER} y={top - 6} fontSize={AXIS_TYPE} fill="currentColor" opacity={0.75} fontWeight={500}>
+									{row.label}
+								</text>
+								<text x={GUTTER + plotWidth} y={top - 6} textAnchor="end" fontSize={AXIS_TYPE} fill="currentColor" opacity={0.55}>
+									{row.source}{row.complete ? '' : ' · partial'}
+								</text>
+
+								{/* The axis top is what the scale REACHES, read back off the domain.
+								    Printing the raw peak beside a .nice()d scale gave three different
+								    numbers: a band topping out at 2,500, a label reading 2,356, and a
+								    position corresponding to neither. */}
+								<text x={GUTTER - 6} y={y(y.domain()[1] as number) + 4} textAnchor="end" fontSize={AXIS_TYPE} fill="currentColor" opacity={0.7}>
+									{formatValue(y.domain()[1] as number, row.unit, currency)}
+								</text>
+								<text x={GUTTER - 6} y={bottom + 4} textAnchor="end" fontSize={AXIS_TYPE} fill="currentColor" opacity={0.7}>0</text>
+
+								{/* Raised from 0.09/0.16, which measured 1.2:1 and 1.4:1 against the card in both
+								    themes where 3:1 is the floor — the mark this file calls the point of the
+								    chart was, on half the installs, not perceptible. Its upper edge is
+								    stroked too, so the boundary survives even where the fill does not. */}
+								{gap && <path d={gap} fill="currentColor" opacity={revealed ? 0.34 : 0.26} />}
 
 								{shortfallLine && (
-									<path d={shortfallLine} fill="none" stroke="currentColor" strokeWidth={0.35} strokeDasharray="1.5 1" opacity={0.75} />
+									<path d={shortfallLine} fill="none" stroke="currentColor" strokeWidth={1.5} strokeDasharray="6 4" opacity={0.8} />
 								)}
 
 								<path
 									d={path}
 									fill="none"
 									stroke="currentColor"
-									strokeWidth={0.5}
+									strokeWidth={2}
 									// Dashed only where the LINE's own source misses things. A row whose
 									// line is complete stays solid even when it carries a blind-spot fill.
-									strokeDasharray={row.complete ? undefined : '1.5 1'}
+									strokeDasharray={row.complete ? undefined : '6 4'}
 									opacity={row.complete ? 0.95 : 0.7}
 								/>
 							</g>
@@ -270,11 +346,11 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 									y1={TOP_PAD - 6}
 									y2={TOP_PAD + series.length * ROW_HEIGHT - 18}
 									stroke="currentColor"
-									strokeWidth={0.3}
-									strokeDasharray="0.8 0.8"
+									strokeWidth={1.25}
+									strokeDasharray="4 3"
 									opacity={0.5}
 								/>
-								<circle cx={at} cy={TOP_PAD - 8} r={0.9} fill="currentColor" opacity={0.7} />
+								<circle cx={at} cy={TOP_PAD - 8} r={3} fill="currentColor" opacity={0.7} />
 							</g>
 						)
 					})}
@@ -286,7 +362,7 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 							y1={TOP_PAD - 6}
 							y2={TOP_PAD + series.length * ROW_HEIGHT - 18}
 							stroke="currentColor"
-							strokeWidth={0.25}
+							strokeWidth={1}
 							opacity={0.8}
 						/>
 					)}
@@ -302,7 +378,7 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 								x={x(new Date(`${date}T00:00:00Z`))}
 								y={height - 6}
 								textAnchor={position === 0 ? 'start' : position === 2 ? 'end' : 'middle'}
-								fontSize={3}
+								fontSize={AXIS_TYPE}
 								fill="currentColor"
 								opacity={0.55}
 							>
@@ -359,15 +435,15 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 						<span aria-hidden="true">{row.complete ? '───' : '╌╌╌'}</span> {row.label} ({row.source})
 					</Text>
 				))}
+				{missed.map((sentence) => (
+					// The region's argument, stated as a number. It was drawn to scale and described
+					// in the abstract, so the two facts it exists to convey — how much was missed and
+					// when it was worst — were available only by looking hard at a pale fill.
+					<Text key={sentence} size={0} muted>{sentence}</Text>
+				))}
 				{series.some((row) => row.shortfall) && (
 					<Text size={0} muted>
-						The shaded area is what your analytics did not see. It is a quantity, not a margin of
-						error — the traffic happened, GA4 just missed it.
-					</Text>
-				)}
-				{series.some((row) => !row.complete && row.grossUpFactor) && (
-					<Text size={0} muted>
-						A dashed line is a lossy source; the band above it is where the true figure probably sits.
+						The shaded area is what your analytics did not see — a quantity, not a margin of error.
 					</Text>
 				)}
 				{markers.length > 0 && <Text size={0} muted>Vertical rules mark campaign sends.</Text>}

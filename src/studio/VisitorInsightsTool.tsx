@@ -433,7 +433,12 @@ function ReportPanel({
 						<Text size={1} muted={state.disabled}>{state.message}</Text>
 						{!state.disabled && (
 							<Box>
-								<Button text="Try again" mode="ghost" fontSize={1} onClick={reload} />
+								{/* A plain button. The shim's DOM fallback drops `text`, `mode` and `fontSize`, so
+								    this rendered as an unlabelled zero-size control — on the one screen
+								    where the reader most needs a working one. Every other control in this
+								    file already avoids Button for that reason; the error state did not
+								    get the lesson. */}
+								<button type="button" style={rangeButton(false)} onClick={reload}>Try again</button>
 							</Box>
 						)}
 					</Stack>
@@ -490,6 +495,56 @@ function isoDaysAgo(days: number): string {
  */
 const COMPARED_REPORTS: ReportName[] = ['acquisition', 'measurement-health']
 
+/**
+ * Catches a render error in one panel so it does not blank the whole tool.
+ *
+ * There was no boundary anywhere. An uncaught throw unmounts the entire React tree, so a single bad
+ * field reference took out the tabs and the range selector along with the panel — which is what
+ * happened twice, and both times the reader lost four working panels to fix one.
+ */
+class PanelBoundary extends React.Component<
+	{ children: React.ReactNode; onRetry: () => void },
+	{ error: Error | null }
+> {
+	constructor(props: { children: React.ReactNode; onRetry: () => void }) {
+		super(props)
+		this.state = { error: null }
+	}
+
+	static getDerivedStateFromError(error: Error) {
+		return { error }
+	}
+
+	componentDidCatch(error: Error) {
+		console.error('Visitor insights: panel render failed:', error.message)
+	}
+
+	render() {
+		if (!this.state.error) return this.props.children
+		return (
+			<Card padding={4} radius={2} tone="critical" border>
+				<Stack space={3}>
+					<Text size={1} weight="medium">This panel could not be drawn</Text>
+					<Text size={1}>
+						The other panels are unaffected. This usually means the site&rsquo;s API route is a
+						different version from this Studio — redeploying the site normally clears it.
+					</Text>
+					<Text size={0} muted>{this.state.error.message}</Text>
+					<Box>
+						<button
+							type="button"
+							style={rangeButton(false)}
+							onClick={() => { this.setState({ error: null }); this.props.onRetry() }}
+						>
+							Try again
+						</button>
+					</Box>
+				</Stack>
+			</Card>
+		)
+	}
+}
+
 /** The tool itself. */
 export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): React.ReactElement {
 	// Nested options win, since that is the shape the Studio supplies; the flat props are the
@@ -533,7 +588,9 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 				>
 					<Stack space={4}>
 						{active && <Text size={1} muted>{active.blurb}</Text>}
-						<ReportPanel report={activePanel} apiBaseUrl={apiBaseUrl} range={range} custom={custom} />
+						<PanelBoundary onRetry={() => setActivePanel(activePanel)}>
+							<ReportPanel report={activePanel} apiBaseUrl={apiBaseUrl} range={range} custom={custom} />
+						</PanelBoundary>
 					</Stack>
 				</Box>
 			</Stack>
