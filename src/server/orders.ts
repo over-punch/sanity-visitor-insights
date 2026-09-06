@@ -265,6 +265,31 @@ function money(value: unknown, minorUnits?: boolean): number | null {
 }
 
 /**
+ * The calendar date an instant falls on, in a given IANA timezone.
+ *
+ * `en-CA` because it formats as YYYY-MM-DD, which is the shape every other date in this package
+ * uses. Falls back to the UTC date if the zone is not one the runtime knows, so a bad config
+ * misplaces a day rather than throwing.
+ *
+ * @param iso - an ISO 8601 instant
+ * @param timezone - IANA zone name
+ */
+export function zonedDay(iso: string, timezone: string): string {
+	const parsed = new Date(iso)
+	if (Number.isNaN(parsed.getTime())) return iso.slice(0, 10)
+	try {
+		return new Intl.DateTimeFormat('en-CA', {
+			timeZone: timezone,
+			year: 'numeric',
+			month: '2-digit',
+			day: '2-digit',
+		}).format(parsed)
+	} catch {
+		return parsed.toISOString().slice(0, 10)
+	}
+}
+
+/**
  * Count orders and revenue per day across a range.
  *
  * @param client - a Sanity client
@@ -294,9 +319,16 @@ export async function countOrders(
 			continue
 		}
 
-		// Bucketed by the date the order carries in UTC. The range bounds already align to the
-		// property timezone, so this only affects which day inside the range an order lands on.
-		const date = order._createdAt.slice(0, 10)
+		/*
+		 * Bucketed in the PROPERTY's timezone, like every other row on the chart.
+		 *
+		 * This took the UTC date off the timestamp, and the old comment dismissed it as affecting
+		 * "only which day inside the range an order lands on" — which is the one thing the timeline
+		 * exists to show. Its whole cross-source question is whether a campaign send moved revenue,
+		 * and a marker and an order stem one day apart is the entire answer. For a US-Pacific
+		 * property every order placed after 5pm local was drawn on the following day.
+		 */
+		const date = zonedDay(order._createdAt, options.timezone)
 		byDate[date] = (byDate[date] ?? 0) + 1
 		total += 1
 

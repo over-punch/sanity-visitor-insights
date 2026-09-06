@@ -15,9 +15,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { readFileSync } from 'node:fs'
 import { calendarDays } from '../server/reports/measurementHealth'
+import { dailyWindows } from '../server/vercel'
+import { zonedDay } from '../server/orders'
 import { formatCount, formatMoney } from './Figure'
 import { decodeView, encodeView, mergeIntoHash } from './urlState'
-import { captureModel, fromOrders, fromPageviews } from '../core/capture'
+import { captureModel, fromOrders, fromPageviews, grossUp } from '../core/capture'
 import { forgetShortfalls, knownShortfall, rememberShortfall } from './useReport'
 import { CrossSourceTimeline, dayIndexAt, findCoverageIncident } from './CrossSourceTimeline'
 import React from 'react'
@@ -2292,5 +2294,95 @@ describe('a lone capture estimate carries its own uncertainty', () => {
 		const model = captureModel([fromOrders(2, 7), fromPageviews(475, 2356)])
 		expect(model.low).toBeCloseTo(Math.min(2 / 7, 475 / 2356), 6)
 		expect(model.high).toBeCloseTo(Math.max(2 / 7, 475 / 2356), 6)
+	})
+})
+
+describe('a long range still comes back day by day', () => {
+	it('splits a quarter into windows the endpoint will serve by day', () => {
+		// Past 62 days the granularity used to step up to weeks, and every vercelPageviews became
+		// null — so the coverage row, the incident detector, the missed total and both disagreement
+		// columns went blank on exactly the ranges a reader opens to find when a gap opened.
+		const windows = dailyWindows('2026-06-08', '2026-09-05')
+		expect(windows.length).toBe(2)
+		expect(windows[0]?.start).toBe('2026-06-08')
+		expect(windows[windows.length - 1]?.end).toBe('2026-09-05')
+	})
+
+	it('covers every day exactly once, with no gap and no overlap', () => {
+		const windows = dailyWindows('2026-01-01', '2026-06-30')
+		for (let i = 1; i < windows.length; i++) {
+			const previousEnd = Date.parse(`${windows[i - 1]!.end}T00:00:00Z`)
+			const thisStart = Date.parse(`${windows[i]!.start}T00:00:00Z`)
+			expect(thisStart - previousEnd).toBe(86_400_000)
+		}
+	})
+
+	it('keeps every window inside the endpoint cap', () => {
+		for (const w of dailyWindows('2026-01-01', '2026-12-31')) {
+			const days = Math.round((Date.parse(`${w.end}T00:00:00Z`) - Date.parse(`${w.start}T00:00:00Z`)) / 86_400_000) + 1
+			expect(days).toBeLessThanOrEqual(62)
+		}
+	})
+
+	it('gives up rather than firing an unbounded number of requests', () => {
+		// Beyond six windows the request count stops being worth the resolution, and the caller
+		// falls back to one coarser call.
+		expect(dailyWindows('2020-01-01', '2026-12-31')).toEqual([])
+	})
+
+	it('returns nothing for an inverted range', () => {
+		expect(dailyWindows('2026-09-05', '2026-06-08')).toEqual([])
+	})
+
+	it('needs one window for a short range, which is the old behaviour', () => {
+		expect(dailyWindows('2026-09-01', '2026-09-07').length).toBe(1)
+	})
+})
+
+describe('a correction uses an estimate that measures the same kind of loss', () => {
+	it('will not gross traffic up by a purchase-capture rate', () => {
+		// Sessions were corrected by model.rate — the ORDERS estimate whenever it exists, i.e.
+		// purchase-event capture. capture.ts argues at length that purchase capture and traffic
+		// capture fail independently, then used one to correct the other: a broken checkout tag
+		// became a multiplier on the visitor count.
+		// A denominator big enough that the sampling interval does not itself refuse the correction —
+		// at seven orders it reaches zero and grossUp declines to bound anything, which is separately
+		// correct and would mask what this test is about.
+		const ordersOnly = captureModel([fromOrders(40, 200)])
+		expect(grossUp(357, ordersOnly, ['pageviews', 'email'])).toBeNull()
+		// Unrestricted it happily corrects traffic by a purchase rate, which is what the caller must
+		// not do for sessions.
+		expect(grossUp(357, ordersOnly)).not.toBeNull()
+	})
+
+	it('uses the traffic estimate when one exists, ignoring the orders one', () => {
+		const both = captureModel([fromOrders(40, 200), fromPageviews(475, 2356)])
+		// The orders estimate is the most trusted overall and would be picked by default.
+		expect(both.rate).toBeCloseTo(40 / 200, 6)
+		const grossed = grossUp(475, both, ['pageviews', 'email'])
+		// Corrected on the pageview rate instead: 475 / (475/2356).
+		expect(grossed?.value).toBeCloseTo(2356, 0)
+	})
+})
+
+describe('an order lands on the day it happened, where the reader lives', () => {
+	it('buckets by the property timezone, not UTC', () => {
+		// A US-Pacific foundry: 01:30 UTC on the 6th is 18:30 on the 5th locally. Every order placed
+		// after 5pm was drawn on the following day, and the chart's whole cross-source question is
+		// whether a campaign send moved revenue — a marker and a stem one day apart is the answer.
+		expect(zonedDay('2026-09-06T01:30:00Z', 'America/Los_Angeles')).toBe('2026-09-05')
+		expect(zonedDay('2026-09-06T01:30:00Z', 'UTC')).toBe('2026-09-06')
+	})
+
+	it('handles a zone ahead of UTC too', () => {
+		expect(zonedDay('2026-09-05T22:30:00Z', 'Asia/Tokyo')).toBe('2026-09-06')
+	})
+
+	it('falls back rather than throwing on a zone the runtime does not know', () => {
+		expect(zonedDay('2026-09-05T12:00:00Z', 'Not/AZone')).toBe('2026-09-05')
+	})
+
+	it('survives a malformed timestamp', () => {
+		expect(zonedDay('not-a-date', 'UTC')).toBe('not-a-date')
 	})
 })

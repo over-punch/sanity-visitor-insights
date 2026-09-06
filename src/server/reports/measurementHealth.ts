@@ -487,7 +487,12 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 
 	// Sessions grossed up to what they probably were. Reported as `estimated`, never as `ok` — the
 	// tagged union makes it impossible to render this as a measurement by accident.
-	const grossed = ga4Sessions.status !== 'unavailable' ? grossUp(ga4Sessions.value, capture) : null
+	// Traffic-shaped estimates only. Grossing sessions up by the ORDERS estimate corrects a traffic
+	// figure with a purchase-tag failure rate, which are independent — so a checkout problem became
+	// a multiplier on the visitor count.
+	const grossed = ga4Sessions.status !== 'unavailable'
+		? grossUp(ga4Sessions.value, capture, ['pageviews', 'email'])
+		: null
 	const estimatedSessions: MetricValue = grossed
 		? estimated(
 			Math.round(grossed.value),

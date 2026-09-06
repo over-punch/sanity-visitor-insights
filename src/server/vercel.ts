@@ -44,6 +44,43 @@ export function granularityFor(start: string, end: string): 'day' | 'week' | 'mo
 	return 'month'
 }
 
+/**
+ * Split a range into windows the aggregate endpoint will serve by DAY.
+ *
+ * The 62-bucket cap is per request, not per range — so a quarter fetched in two calls comes back
+ * daily, and a year in six. Stepping the granularity up instead was the cheap answer, and it cost
+ * the tool its subject: past 62 days every `vercelPageviews` became null, so the coverage row, the
+ * incident detector, the missed-pageviews total and both disagreement columns all went blank on
+ * Quarter and Year — the ranges a reader opens precisely to find when a gap opened.
+ *
+ * Capped at six windows. Beyond that the request count stops being worth the daily resolution, and
+ * the caller falls back to a single coarser call.
+ *
+ * @param start - ISO first day
+ * @param end - ISO last day, inclusive
+ */
+export function dailyWindows(start: string, end: string): Array<{ start: string; end: string }> {
+	const MAX_DAYS = 62
+	const MAX_WINDOWS = 6
+	const first = Date.parse(`${start}T00:00:00Z`)
+	const last = Date.parse(`${end}T00:00:00Z`)
+	if (!Number.isFinite(first) || !Number.isFinite(last) || last < first) return []
+
+	const days = Math.round((last - first) / 86_400_000) + 1
+	if (days > MAX_DAYS * MAX_WINDOWS) return []
+
+	const windows: Array<{ start: string; end: string }> = []
+	for (let offset = 0; offset < days; offset += MAX_DAYS) {
+		const chunkStart = first + offset * 86_400_000
+		const chunkEnd = Math.min(last, chunkStart + (MAX_DAYS - 1) * 86_400_000)
+		windows.push({
+			start: new Date(chunkStart).toISOString().slice(0, 10),
+			end: new Date(chunkEnd).toISOString().slice(0, 10),
+		})
+	}
+	return windows
+}
+
 /** Shape of the aggregate response rows. */
 interface AggregateRow {
 	timestamp?: string
@@ -87,17 +124,26 @@ export function createVercelClient(projectId: string, token: string, teamId?: st
 					since: start,
 					until: end,
 				}),
-				query<{ data?: AggregateRow[] }>('visits/aggregate', {
-					since: start,
-					until: end,
-					by: granularityFor(start, end),
-					limit: '100',
-				}).catch((e: Error) => {
-					// The series is supplementary — it feeds sparklines, not the headline figure.
-					// Losing it must not cost the totals, which is what the panel actually compares.
-					console.error('Visitor insights: Vercel series unavailable:', e.message)
-					return { data: [] as AggregateRow[] }
-				}),
+				// One call per window, so a long range still comes back by day. A single window is the
+				// short-range case and behaves exactly as before.
+				(async () => {
+					const windows = dailyWindows(start, end)
+					const requests = windows.length > 0
+						? windows.map((w) => ({ since: w.start, until: w.end, by: 'day' as const }))
+						: [{ since: start, until: end, by: granularityFor(start, end) }]
+
+					const parts = await Promise.all(requests.map((params) =>
+						query<{ data?: AggregateRow[] }>('visits/aggregate', { ...params, limit: '100' })
+							.catch((e: Error) => {
+								// The series is supplementary — it feeds the chart, not the headline
+								// figure. Losing it must not cost the totals, which is what the panel
+								// actually compares. One failed window costs only its own days.
+								console.error('Visitor insights: Vercel series window unavailable:', e.message)
+								return { data: [] as AggregateRow[] }
+							}),
+					))
+					return { data: parts.flatMap((part) => part.data ?? []) }
+				})(),
 			])
 
 			const byDate: Record<string, number> = {}

@@ -773,16 +773,31 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 						<Stack space={3}>
 							<Label size={1} muted>From design-industry referrers</Label>
 							<div style={figureRow}>
-								<Text size={4}>{formatPercent(designShare, 1)}</Text>
-								<Delta
-									current={designShare * 100}
-									previous={finiteOrNull(previous?.designIndustryShare) !== null ? (previous!.designIndustryShare as number) * 100 : null}
-									unit="percent"
-								/>
+								{/* "At least", when the row list is truncated. The numerator counts only the
+								    rows GA4 returned while the denominator spans every row it held, and
+								    design-press referrers are low-volume by nature — the population most
+								    likely to sit outside the cap. The figure is a genuine floor, so it is
+								    worth showing; printing it as a measurement was not. */}
+								<Text size={4}>
+									{data.rowsTruncated ? 'at least ' : ''}{formatPercent(designShare, 1)}
+								</Text>
+								{/* No delta on a floor. Two floors computed from differently truncated lists
+								    are not comparable, and a percentage-point arrow between them moves when
+								    a referrer crosses the row cap rather than when anything happened. */}
+								{!data.rowsTruncated && (
+									<Delta
+										current={designShare * 100}
+										previous={finiteOrNull(previous?.designIndustryShare) !== null ? (previous!.designIndustryShare as number) * 100 : null}
+										unit="percent"
+									/>
+								)}
 							</div>
 							{/* Named as list-dependent. Printed bare, this figure was read as a verdict
 							    on the design press when it reports the coverage of a short list. */}
-							<Text size={0} muted>Share of sessions from a known design-press referrer.</Text>
+							<Text size={0} muted>
+								Share of sessions from a known design-press referrer.
+								{data.rowsTruncated && ' GA4 held more sources than are listed here, so the real share is higher.'}
+							</Text>
 						</Stack>
 					</Card>
 				)}

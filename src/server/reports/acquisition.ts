@@ -162,6 +162,17 @@ export async function acquisition(input: AcquisitionInput): Promise<AcquisitionD
 	// GA4's own total across all rows. Falls back to the row sum only if the totals block is
 	// missing, in which case the shares below are withheld rather than computed against a subtotal.
 	const totalSessions = report.metricTotal ?? sumFirstMetric(report)
+	/*
+	 * The denominator spans every row; the numerator spans only the rows returned.
+	 *
+	 * `metricTotal` covers everything GA4 held, while the sums below cover the top 25 by sessions.
+	 * Design-press referrers are low-volume by nature — the population most likely to sit outside
+	 * that cap — so when the list is truncated the share is biased DOWN, exactly where it matters.
+	 *
+	 * Withholding it would be worse than reporting it: a share computed this way is a genuine floor,
+	 * and "at least 12% came from the design press" is a usable fact. The panel says "at least" when
+	 * `rowsTruncated` is set, rather than printing a floor as though it were a measurement.
+	 */
 	const totalIsComplete = report.metricTotal !== undefined || report.rowCount <= report.rows.length
 	const sumWhere = (predicate: (row: SourceRow) => boolean) =>
 		rows.filter(predicate).reduce((total, row) => total + row.sessions, 0)

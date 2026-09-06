@@ -249,7 +249,36 @@ function describeDisagreement(estimates: CaptureEstimate[]): string | null {
  * @param observed - what GA4 counted
  * @param model - the capture model for the same range
  */
-export function grossUp(observed: number, model: CaptureModel): { value: number; low: number; high: number } | null {
+export function grossUp(
+	observed: number,
+	model: CaptureModel,
+	/**
+	 * Which bases may be used. Defaults to every one, which is right only when the quantity being
+	 * grossed up is the same kind of thing the estimate measured.
+	 */
+	admissible: CaptureBasis[] = ['orders', 'email', 'pageviews'],
+): { value: number; low: number; high: number } | null {
+	/*
+	 * The estimate has to measure the same kind of loss as the quantity being corrected.
+	 *
+	 * Sessions were grossed up by `model.rate`, which is the most trusted estimate — the ORDERS one
+	 * whenever it exists. That is purchase-event capture, and this file argues at length that
+	 * purchase capture and traffic capture fail independently: a checkout on a third-party domain, a
+	 * purchase event without a value, a consent banner that gates one and not the other. So a broken
+	 * purchase tag was laundered into a multiplier on the traffic figure, under a heading reading
+	 * "Sessions, corrected for what GA4 misses".
+	 */
+	const usable = model.estimates.filter((e) => admissible.includes(e.basis))
+	if (usable.length === 0) return null
+	const rate = usable[0]!.rate
+	const rates = usable.map((e) => e.rate)
+	model = {
+		...model,
+		rate,
+		low: usable.length > 1 ? Math.min(...rates) : model.low,
+		high: usable.length > 1 ? Math.max(...rates) : model.high,
+	}
+
 	if (model.rate === null || model.rate <= 0 || model.low === null || model.high === null) return null
 	if (model.low <= 0 || model.high <= 0) return null
 
