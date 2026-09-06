@@ -442,9 +442,7 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 					<Text key={sentence} size={0} muted>{sentence}</Text>
 				))}
 				{series.some((row) => row.shortfall) && (
-					<Text size={0} muted>
-						The shaded area is what your analytics did not see — a quantity, not a margin of error.
-					</Text>
+					<Text size={0} muted>Shaded: what your analytics did not see.</Text>
 				)}
 				{markers.length > 0 && <Text size={0} muted>Vertical rules mark campaign sends.</Text>}
 			</div>

@@ -109,13 +109,14 @@ export function Delta({ current, previous, riseIsGood = true, unit = 'count' }: 
 			: `${rising ? '+' : ''}${formatPercent(change, 0)}`
 
 	return (
-		<span style={deltaStyle(tone)} title={`Previous period: ${baseline}`}>
+		// The baseline is printed, not hidden in a `title`. At seven orders a quarter an 18% move
+		// might be one order, so "from 6" is the fact and the percentage is the decoration — and a
+		// title attribute is invisible on touch, in a screenshot, and to anyone who does not hover.
+		<span style={deltaStyle(tone)}>
 			<span aria-hidden="true">{arrow}</span>
 			{' '}
 			{magnitude}
-			<span style={visuallyHidden}>
-				{' '}compared with {baseline} in the previous period
-			</span>
+			<span style={baselineStyle}> from {baseline}</span>
 		</span>
 	)
 }
@@ -130,17 +131,23 @@ function deltaStyle(tone: 'good' | 'bad' | 'flat'): React.CSSProperties {
 	// Unattributed figure looked identical to a rising Sessions figure — the one distinction the
 	// prop exists to draw. Weight and opacity rather than hue, so it survives a monochrome reading
 	// and does not collide with the Studio's own semantic colours.
+	// Both directions read at the same strength. A good move used to be set at 70% opacity while a
+	// bad one was full weight with a rule under it — so a foundry's best month visually receded,
+	// which is backwards for the question the figure exists to answer. Direction is carried by the
+	// arrow and the words; the rule now marks a bad move without demoting a good one.
 	return {
 		fontFamily: 'inherit',
 		fontSize: '0.8em',
-		fontWeight: tone === 'bad' ? 600 : 500,
-		opacity: tone === 'flat' ? 0.55 : tone === 'bad' ? 1 : 0.7,
+		fontWeight: 500,
+		opacity: tone === 'flat' ? 0.55 : 0.9,
 		color: 'currentColor',
 		whiteSpace: 'nowrap',
-		// A bad move gets a rule under it, so direction is not carried by weight alone.
 		borderBottom: tone === 'bad' ? '1px solid currentColor' : 'none',
 	}
 }
+
+/** The previous-period figure, quieter than the change but present. */
+const baselineStyle: React.CSSProperties = { opacity: 0.7, fontWeight: 400 }
 
 export interface MetricFigureProps {
 	metric: MetricValue

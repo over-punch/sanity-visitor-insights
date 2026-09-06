@@ -12,7 +12,7 @@ import type { RangeKey, ReportName, SourceName, SourceStatus } from '../types'
 import { useReport } from './useReport'
 import { NoticeList } from './Figure'
 import { Badge } from '@liiift-studio/sanity-ui-compat'
-import { AcquisitionPanel, DiagnosticsPanel, JourneyPanel, MeasurementHealthPanel, TypefaceInterestPanel } from './panels'
+import { AcquisitionPanel, DataHealthPanel, JourneyPanel, OverviewPanel, TypefaceInterestPanel } from './panels'
 
 /**
  * Control rows — range buttons, panel tabs, source status.
@@ -128,12 +128,24 @@ const RANGES: Array<{ key: Exclude<RangeKey, 'custom'>; label: string; span: str
  * audience, and leading with it made an operational caveat the first thing anyone read. Diagnostics
  * stays last, since it is about configuration rather than visitors at all.
  */
-const PANELS: Array<{ report: ReportName; label: string; blurb: string }> = [
-	{ report: 'acquisition', label: 'Acquisition', blurb: 'Where visitors come from' },
-	{ report: 'journey', label: 'Journey', blurb: 'How far visitors get' },
-	{ report: 'typeface-interest', label: 'Typeface interest', blurb: 'Viewed, tested and bought, by family' },
-	{ report: 'measurement-health', label: 'Measurement health', blurb: 'How much of reality each source actually sees' },
-	{ report: 'diagnostics', label: 'Diagnostics', blurb: 'What to fix before trusting the numbers above' },
+/**
+ * The tabs, in the order a reader meets them.
+ *
+ * `id` is the tab; `report` is the primary envelope it needs. They are no longer the same thing,
+ * because Overview and Data health are two halves of one report — the business half and the
+ * instrument half — which used to be a single tab named for the instrument. Revenue, orders, the
+ * mailing list and the cross-source timeline were all behind it, on tab four, under a blurb saying
+ * it was about how much of reality each source sees.
+ *
+ * Still five tabs. Overview takes the slot freed by folding Diagnostics into Data health, which
+ * answers the same question it did — can I trust this — and did not need a tab of its own.
+ */
+const PANELS: Array<{ id: string; report: ReportName; label: string; blurb: string }> = [
+	{ id: 'overview', report: 'measurement-health', label: 'Overview', blurb: 'Money, traffic and what moved this period' },
+	{ id: 'acquisition', report: 'acquisition', label: 'Acquisition', blurb: 'Where visitors come from' },
+	{ id: 'journey', report: 'journey', label: 'Journey', blurb: 'How far visitors get' },
+	{ id: 'typeface-interest', report: 'typeface-interest', label: 'Typeface interest', blurb: 'Viewed, tested and bought, by family' },
+	{ id: 'data-health', report: 'measurement-health', label: 'Data health', blurb: 'Whether the numbers above can be trusted' },
 ]
 
 /** Options supplied by the plugin config, carried on the Sanity tool definition. */
@@ -201,6 +213,7 @@ function RangeSelector({
 
 	return (
 		<Stack space={2}>
+			<div style={controlRow}>
 			<div role="radiogroup" aria-label="Date range" style={controlRow} onKeyDown={onKeyDown}>
 				{RANGES.map((range, index) => {
 					const selected = range.key === value
@@ -230,8 +243,11 @@ function RangeSelector({
 					)
 				})}
 
-				{/* Custom sits outside the radiogroup deliberately: it opens a form rather than
-				    selecting a value, so arrowing onto it would open and close the picker. */}
+			</div>
+
+			{/* OUTSIDE the radiogroup element, not merely outside its arrow cycle. It was a tabbable
+			    non-radio child of role="radiogroup" — an ARIA violation, and a second tab stop inside
+			    a group documented as being one. */}
 				<button
 					type="button"
 					style={rangeButton(value === 'custom')}
@@ -328,12 +344,12 @@ function SourceStatusRow({ sources }: { sources: Partial<Record<SourceName, Sour
  * across the Studio versions this package supports: arrow keys move and select, Tab is a single
  * stop into the group, and each tab is wired to its panel by id.
  */
-function PanelTabs({ value, onChange }: { value: ReportName; onChange: (next: ReportName) => void }): React.ReactElement {
+function PanelTabs({ value, onChange }: { value: string; onChange: (next: string) => void }): React.ReactElement {
 	const refs = useRef<Array<HTMLButtonElement | null>>([])
 
 	const onKeyDown = useCallback(
 		(event: React.KeyboardEvent) => {
-			const currentIndex = PANELS.findIndex((p) => p.report === value)
+			const currentIndex = PANELS.findIndex((p) => p.id === value)
 			let nextIndex: number | null = null
 
 			if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % PANELS.length
@@ -347,7 +363,7 @@ function PanelTabs({ value, onChange }: { value: ReportName; onChange: (next: Re
 			const next = PANELS[nextIndex]
 			if (!next) return
 
-			onChange(next.report)
+			onChange(next.id)
 			refs.current[nextIndex]?.focus()
 		},
 		[value, onChange],
@@ -356,24 +372,24 @@ function PanelTabs({ value, onChange }: { value: ReportName; onChange: (next: Re
 	return (
 		<div role="tablist" aria-label="Report" style={tabStrip} onKeyDown={onKeyDown}>
 			{PANELS.map((panel, index) => {
-				const selected = panel.report === value
+				const selected = panel.id === value
 				return (
 					// A plain button rather than the UI kit's, so the label is real children and
 					// cannot vanish: the compat shim's DOM fallback does not forward `text`, which
 					// would leave five blank tabs on any Studio version where it falls back.
 					<button
-						key={panel.report}
+						key={panel.id}
 						type="button"
 						ref={(el: HTMLButtonElement | null) => {
 							refs.current[index] = el
 						}}
-						id={`tab-${panel.report}`}
+						id={`tab-${panel.id}`}
 						role="tab"
 						aria-selected={selected}
-						aria-controls={`panel-${panel.report}`}
+						aria-controls={`panel-${panel.id}`}
 						tabIndex={selected ? 0 : -1}
 						style={tabStyle(selected)}
-						onClick={() => onChange(panel.report)}
+						onClick={() => onChange(panel.id)}
 					>
 						{panel.label}
 					</button>
@@ -385,17 +401,29 @@ function PanelTabs({ value, onChange }: { value: ReportName; onChange: (next: Re
 
 /** Renders one report panel, including its loading, error and empty states. */
 function ReportPanel({
+	tabId,
 	report,
 	apiBaseUrl,
 	range,
 	custom,
 }: {
+	/** The tab being drawn. No longer the same as `report`: two tabs share one envelope. */
+	tabId: string
 	report: ReportName
 	apiBaseUrl: string
 	range: RangeKey
 	custom: { start: string; end: string }
 }): React.ReactElement {
 	const { state, reload } = useReport<unknown>({ apiBaseUrl, report, range, custom })
+	// Data health additionally shows the configuration checks. Fetched only on that tab, so the
+	// four tabs that do not show them do not pay for them.
+	const diagnostics = useReport<unknown>({
+		apiBaseUrl,
+		report: 'diagnostics',
+		range,
+		custom,
+		enabled: tabId === 'data-health',
+	}).state
 
 	// Announced to screen readers when figures change, so a range switch is perceivable without
 	// re-navigating the whole panel.
@@ -403,7 +431,7 @@ function ReportPanel({
 		state.status === 'loading'
 			? 'Loading report'
 			: state.status === 'ready'
-				? `${report} updated for ${range === 'custom' ? `${custom.start} to ${custom.end}` : `the selected ${range}`}`
+				? `${tabId} updated for ${range === 'custom' ? `${custom.start} to ${custom.end}` : `the selected ${range}`}`
 				: state.status === 'error'
 					? state.disabled
 						? 'Visitor insights is switched off for this site'
@@ -415,6 +443,12 @@ function ReportPanel({
 			<Box aria-live="polite" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
 				{liveMessage}
 			</Box>
+
+			{state.status === 'ready' && state.stale && (
+				// A quiet marker rather than a spinner over a blank panel: the figures below are the
+				// previous window's until the new ones land, and saying so beats hiding them.
+				<Text size={0} muted>Updating…</Text>
+			)}
 
 			{state.status === 'loading' && (
 				<Flex align="center" gap={3} padding={4}>
@@ -446,7 +480,7 @@ function ReportPanel({
 			)}
 
 			{state.status === 'ready' && (
-				<Stack space={4}>
+				<Stack space={4} style={state.stale ? { opacity: 0.55, transition: 'opacity 120ms' } : undefined}>
 					<SourceStatusRow sources={state.envelope.sources} />
 					<NoticeList notices={state.envelope.notices} />
 
@@ -463,11 +497,11 @@ function ReportPanel({
 						</Text>
 					)}
 
-					{report === 'measurement-health' && <MeasurementHealthPanel data={state.envelope.data as never} previous={state.envelope.comparison?.data as never} />}
-					{report === 'acquisition' && <AcquisitionPanel data={state.envelope.data as never} previous={state.envelope.comparison?.data as never} />}
-					{report === 'journey' && <JourneyPanel data={state.envelope.data as never} />}
-					{report === 'typeface-interest' && <TypefaceInterestPanel data={state.envelope.data as never} />}
-					{report === 'diagnostics' && <DiagnosticsPanel data={state.envelope.data as never} />}
+					{tabId === 'overview' && <OverviewPanel data={state.envelope.data as never} previous={state.envelope.comparison?.data as never} />}
+					{tabId === 'data-health' && <DataHealthPanel data={state.envelope.data as never} diagnostics={diagnostics.status === 'ready' ? (diagnostics.envelope.data as never) : undefined} />}
+					{tabId === 'acquisition' && <AcquisitionPanel data={state.envelope.data as never} previous={state.envelope.comparison?.data as never} />}
+					{tabId === 'journey' && <JourneyPanel data={state.envelope.data as never} />}
+					{tabId === 'typeface-interest' && <TypefaceInterestPanel data={state.envelope.data as never} />}
 
 					<Text size={0} muted>
 						Figures cover {state.envelope.range.start} to {state.envelope.range.end}, in {state.envelope.range.timezone}
@@ -484,9 +518,11 @@ function ReportPanel({
  * @param days - how many days back; 0 is today
  */
 function isoDaysAgo(days: number): string {
-	const date = new Date()
-	date.setDate(date.getDate() - days)
-	return date.toISOString().slice(0, 10)
+	// Stepped in UTC throughout. It previously shifted the date in LOCAL time and then serialised
+	// with toISOString(), which is UTC — so anyone east of UTC got a default range one day short.
+	const now = new Date()
+	const utcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+	return new Date(utcMidnight - days * 86_400_000).toISOString().slice(0, 10)
 }
 
 /**
@@ -558,9 +594,9 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 	// fields. Local dates, not the property's: this is only the form's starting value, and the
 	// server re-resolves whatever is submitted against the property timezone.
 	const [custom, setCustom] = useState(() => ({ start: isoDaysAgo(30), end: isoDaysAgo(0) }))
-	const [activePanel, setActivePanel] = useState<ReportName>('acquisition')
+	const [activePanel, setActivePanel] = useState<string>('overview')
 
-	const active = PANELS.find((p) => p.report === activePanel) ?? PANELS[0]
+	const active = PANELS.find((p) => p.id === activePanel) ?? PANELS[0]
 
 	return (
 		// Named for assistive technology even though the name is not printed: a Studio user with
@@ -589,7 +625,7 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 					<Stack space={4}>
 						{active && <Text size={1} muted>{active.blurb}</Text>}
 						<PanelBoundary onRetry={() => setActivePanel(activePanel)}>
-							<ReportPanel report={activePanel} apiBaseUrl={apiBaseUrl} range={range} custom={custom} />
+							<ReportPanel tabId={active?.id ?? 'overview'} report={active?.report ?? 'measurement-health'} apiBaseUrl={apiBaseUrl} range={range} custom={custom} />
 						</PanelBoundary>
 					</Stack>
 				</Box>

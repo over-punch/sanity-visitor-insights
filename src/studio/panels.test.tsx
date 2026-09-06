@@ -18,7 +18,8 @@ import {
 	AcquisitionPanel,
 	DiagnosticsPanel,
 	JourneyPanel,
-	MeasurementHealthPanel,
+	OverviewPanel,
+	DataHealthPanel,
 	TypefaceInterestPanel,
 } from './panels'
 import { VisitorInsightsTool } from './VisitorInsightsTool'
@@ -117,7 +118,7 @@ describe('NoticeList', () => {
 describe('MeasurementHealthPanel', () => {
 	it('renders when every source answered', () => {
 		const html = render(
-			<MeasurementHealthPanel
+			<DataHealthPanel
 				data={{
 					ga4Pageviews: ok(33486), vercelPageviews: ok(33597), shortfallRatio: 0.0033,
 					ga4Sessions: ok(22781), orders: ok(64), consentRate: ok(78.4),
@@ -135,7 +136,7 @@ describe('MeasurementHealthPanel', () => {
 
 	it('renders when GA4 is dead without inventing a shortfall', () => {
 		const html = render(
-			<MeasurementHealthPanel
+			<DataHealthPanel
 				data={{
 					ga4Pageviews: unavailable('source_error'), vercelPageviews: ok(2620), shortfallRatio: null,
 					ga4Sessions: unavailable('source_error'), orders: ok(12), consentRate: unavailable('source_error'),
@@ -579,8 +580,8 @@ describe('panels tolerate an older route response', () => {
 			interpretation: 'Sources differ.',
 		} as never
 
-		expect(() => render(<MeasurementHealthPanel data={legacy} />)).not.toThrow()
-		expect(render(<MeasurementHealthPanel data={legacy} />)).toContain('475')
+		expect(() => render(<DataHealthPanel data={legacy} />)).not.toThrow()
+		expect(render(<DataHealthPanel data={legacy} />)).toContain('475')
 	})
 
 	it('journey renders without landing pages', () => {
@@ -629,7 +630,7 @@ describe('layout does not depend on design tokens resolving', () => {
 
 	it('lays the context cards out by available width, not by viewport breakpoints', () => {
 		const html = render(
-			<MeasurementHealthPanel
+			<DataHealthPanel
 				data={{
 					ga4Pageviews: ok(543), vercelPageviews: ok(2392), shortfallRatio: 0.773,
 					ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
@@ -729,10 +730,23 @@ describe('Delta', () => {
 		expect(renderToStaticMarkup(<Delta current={null} previous={100} />)).toBe('')
 	})
 
-	it('states a rise and names the baseline it is measured against', () => {
+	it('prints the baseline on screen rather than hiding it in a tooltip', () => {
+		// At seven orders a quarter an 18% move might be one order, so "from 100" is the fact and
+		// the percentage is the decoration. A title attribute is invisible on touch, in a
+		// screenshot, and to anyone who does not hover.
 		const html = render(<Delta current={120} previous={100} />)
 		expect(html).toContain('+20%')
-		expect(html).toContain('Previous period: 100')
+		expect(html).toContain('from 100')
+		expect(html).not.toContain('title=')
+	})
+
+	it('does not make a good move quieter than a bad one', () => {
+		// A foundry's best month used to visually recede: good was 70% opacity, bad was full weight
+		// with a rule under it. Backwards for the question the figure answers.
+		const up = render(<Delta current={120} previous={100} />)
+		const down = render(<Delta current={80} previous={100} />)
+		const opacity = (html: string) => html.match(/opacity:([0-9.]+)/)?.[1]
+		expect(opacity(up)).toBe(opacity(down))
 	})
 
 	it('says "no change" only when the values genuinely match', () => {
@@ -839,9 +853,9 @@ describe('panels survive an older API route', () => {
 		expect(html).not.toContain('NaN')
 	})
 
-	it('renders MeasurementHealthPanel when the new Vercel and revenue fields are absent', () => {
+	it('renders DataHealthPanel when the new Vercel and revenue fields are absent', () => {
 		const html = render(
-			<MeasurementHealthPanel
+			<DataHealthPanel
 				data={{
 					ga4Pageviews: ok(543), vercelPageviews: ok(2392), shortfallRatio: 0.773,
 					ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
@@ -904,7 +918,7 @@ describe('capture model rendering', () => {
 		// MetricFigure had no branch for it at first, so it fell through and rendered as a plain
 		// number, which is exactly the claim the variant exists to prevent.
 		const html = render(
-			<MeasurementHealthPanel
+			<DataHealthPanel
 				data={{
 					...base,
 					capture: {
@@ -922,7 +936,7 @@ describe('capture model rendering', () => {
 
 	it('surfaces a disagreement between sources as a finding, not as context', () => {
 		const html = render(
-			<MeasurementHealthPanel
+			<DataHealthPanel
 				data={{
 					...base,
 					capture: {
@@ -947,7 +961,7 @@ describe('capture model rendering', () => {
 
 	it('renders nothing for the section when no overlap was measurable', () => {
 		const html = render(
-			<MeasurementHealthPanel
+			<DataHealthPanel
 				data={{ ...base, capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable') } as never}
 			/>,
 		)
@@ -977,27 +991,29 @@ describe('CrossSourceTimeline', () => {
 	it('draws one line per row rather than competing sources', () => {
 		// Two peer lines made the reader reconcile before getting an answer, and GA4 is not a
 		// competing estimate of pageviews — it is a lossy subset of them.
-		const html = render(<MeasurementHealthPanel data={base as never} />)
+		const html = render(<OverviewPanel data={base as never} />)
 		expect(html).toContain('Everything, on one time axis')
 		expect(html).toContain('Pageviews')
 		expect(html).toContain('Revenue')
-		expect(html).toContain('One line per row is the truest figure available')
+		expect(html).toContain('Each row has its own scale')
 	})
 
-	it('states that the rows are not co-scaled', () => {
-		// The reason small multiples were chosen over a dual axis. A reader who assumes a shared
-		// scale would read a crossing as a fact rather than as an artefact of the ratio picked.
-		const html = render(<MeasurementHealthPanel data={base as never} />)
-		expect(html).toContain('not co-scaled')
+	it('says each row has its own scale, without arguing the case for it', () => {
+		// Small multiples are still the right choice over a dual axis, but forty words defending
+		// that to a reader who never proposed the alternative was a code comment that escaped into
+		// the UI. What a reader needs is how to read the chart.
+		const html = render(<OverviewPanel data={base as never} />)
+		expect(html).toContain('Each row has its own scale')
+		expect(html).not.toContain('would invent a correlation')
 	})
 
 	it('draws the blind spot as a quantity, always visible, not behind a hover', () => {
 		// The 24 August collapse announced itself as this region widening. Putting it behind an
 		// interaction would switch the alarm off — so the fill is always drawn, and only the
 		// constituent LINES are revealed on demand.
-		const html = render(<MeasurementHealthPanel data={base as never} />)
+		const html = render(<OverviewPanel data={base as never} />)
 		expect(html).toContain('what your analytics did not see')
-		expect(html).toContain('a quantity, not a margin of error')
+		expect(html).toContain('what your analytics did not see')
 		// A filled region, not an outline.
 		expect(html).toMatch(/<path d="M[^"]*" fill="currentColor"/)
 	})
@@ -1005,7 +1021,7 @@ describe('CrossSourceTimeline', () => {
 	it('offers a non-pointer route to the per-source detail', () => {
 		// Hover is unavailable on touch and unreachable by keyboard, so detail that exists only
 		// under a pointer exists only for some people.
-		const html = render(<MeasurementHealthPanel data={base as never} />)
+		const html = render(<OverviewPanel data={base as never} />)
 		expect(html).toContain('Show what each source saw')
 		expect(html).toContain('aria-pressed="false"')
 	})
@@ -1013,12 +1029,12 @@ describe('CrossSourceTimeline', () => {
 	it('rules a campaign send through the chart', () => {
 		// Three sources and a fourth as a marker — the only view that can answer whether the send
 		// moved traffic and money.
-		const html = render(<MeasurementHealthPanel data={base as never} />)
+		const html = render(<OverviewPanel data={base as never} />)
 		expect(html).toContain('Vertical rules mark campaign sends')
 	})
 
 	it('renders nothing rather than an empty frame below three days', () => {
-		const html = render(<MeasurementHealthPanel data={{ ...base, crossSource: base.crossSource.slice(0, 2) } as never} />)
+		const html = render(<DataHealthPanel data={{ ...base, crossSource: base.crossSource.slice(0, 2) } as never} />)
 		expect(html).not.toContain('Everything, on one time axis')
 	})
 })
@@ -1079,7 +1095,7 @@ describe('the chart says in words what it draws', () => {
 	it('states how much was missed and when the gap was worst', () => {
 		// The region was drawn to scale and described only in the abstract, so the two facts it
 		// exists to convey were available solely by squinting at a pale fill.
-		const html = render(<MeasurementHealthPanel data={data as never} />)
+		const html = render(<OverviewPanel data={data as never} />)
 		expect(html).toMatch(/GA4 missed [\d,]+ pageviews over this period/)
 		expect(html).toContain('the gap was widest on')
 	})
@@ -1087,13 +1103,81 @@ describe('the chart says in words what it draws', () => {
 	it('carries the shape of the data in the accessible name, not just its subject', () => {
 		// role="img" prunes every descendant, so this label IS the chart for a blind reader. It
 		// previously named only which rows existed — the title, not the content.
-		const html = render(<MeasurementHealthPanel data={data as never} />)
+		const html = render(<OverviewPanel data={data as never} />)
 		expect(html).toMatch(/aria-label="5 days from [^"]*peaking at[^"]*"/)
 	})
 
 	it('is focusable, so a day can be read without a mouse', () => {
 		// The older chart this supersedes had arrow-key stepping; this one shipped without any.
-		const html = render(<MeasurementHealthPanel data={data as never} />)
+		const html = render(<OverviewPanel data={data as never} />)
 		expect(html).toContain('tabindex="0"')
+	})
+})
+
+describe('panel structure', () => {
+	const base = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		revenue: ok(4820), currency: 'USD', orderStatuses: { verified: 12 },
+		audience: ok(4210), audienceGrowth: ok(108),
+		campaigns: [{ title: 'September release', subject: 's', sentAt: '2026-09-03T10:00:00Z', sent: 1200, opens: 400, clicks: 84, unsubscribed: 2 }],
+		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
+		estimatedSessions: unavailable('not_applicable'),
+		interpretation: 'Sources differ.', daily: [],
+		crossSource: [], timelineEvents: [],
+	}
+
+	it('puts money, orders and the list on the Overview, not behind a plumbing tab', () => {
+		// These were all on a tab whose own blurb said it was about how much of reality each source
+		// sees — four of the owner's five questions filed under the instrument, on tab four.
+		const html = render(<OverviewPanel data={base as never} />)
+		expect(html).toContain('Revenue')
+		expect(html).toContain('US$4,820')
+		expect(html).toContain('Mailing list')
+		expect(html).toContain('Email campaigns')
+	})
+
+	it('leads with a one-line verdict rather than making the reader derive one', () => {
+		// Every input was already computed; the conclusion was left to be assembled by hand across
+		// four tabs by comparing arrows.
+		const previous = { ...base, revenue: ok(3800), vercelPageviews: ok(2300) }
+		const html = render(<OverviewPanel data={base as never} previous={previous as never} />)
+		expect(html).toMatch(/Revenue up \d+%/)
+		expect(html).toContain('traffic flat')
+		expect(html).toContain('1 campaign sent')
+		expect(html).toContain('nothing broken')
+	})
+
+	it('says the measurement disagrees rather than claiming nothing is broken', () => {
+		// A healthy-looking week measured badly is not a healthy week, and that caveat used to live
+		// two tabs from the figures it qualifies.
+		const html = render(
+			<OverviewPanel
+				data={{ ...base, capture: { ...base.capture, discrepancy: 'GA4 is capturing purchases far better than pageviews.' } } as never}
+				previous={base as never}
+			/>,
+		)
+		expect(html).toContain('measurement disagrees between sources')
+		expect(html).not.toContain('nothing broken')
+	})
+
+	it('keeps the instrument on Data health, away from the business figures', () => {
+		const html = render(<DataHealthPanel data={base as never} />)
+		expect(html).toContain('Pageviews, source against source')
+		expect(html).toContain('Order statuses in this range')
+		// And the money is not repeated here.
+		expect(html).not.toContain('US$4,820')
+	})
+
+	it('folds the configuration checks into Data health rather than a tab of their own', () => {
+		const html = render(
+			<DataHealthPanel
+				data={base as never}
+				diagnostics={{ verdict: 'pass', checks: [{ id: 'a', label: 'GA4 reachable', status: 'pass', detail: 'ok' }] } as never}
+			/>,
+		)
+		expect(html).toContain('Configuration')
+		expect(html).toContain('GA4 reachable')
 	})
 })

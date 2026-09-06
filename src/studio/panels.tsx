@@ -151,55 +151,61 @@ const numericCell: React.CSSProperties = { ...cell, textAlign: 'right' }
  * Compares pageviews to pageviews. Sessions and orders sit alongside as context and are never
  * subtracted from a pageview count.
  */
-export function MeasurementHealthPanel({ data, previous }: { data: MeasurementHealthData; previous?: MeasurementHealthData }): React.ReactElement {
-	const pageviewMax = maxOf([data.ga4Pageviews, data.vercelPageviews])
-
+/**
+ * Overview — the five-minute read.
+ *
+ * Revenue, orders, the mailing list, the cross-source timeline and the campaign table all used to
+ * live on a tab called "Measurement health", whose own blurb announced it was about how much of
+ * reality each source sees. Four of the five questions a foundry owner opens this for were filed
+ * under plumbing, on tab four, behind a door labelled for the instrument. This is the same data,
+ * first, under a heading that says what it is.
+ */
+export function OverviewPanel({ data, previous }: { data: MeasurementHealthData; previous?: MeasurementHealthData }): React.ReactElement {
 	return (
 		<Stack space={4}>
-			<Stack space={3}>
-				<Heading size={1} style={sectionHeading}>Pageviews, source against source</Heading>
-				<Text size={1} muted>
-					The same unit on both sides. Vercel is cookieless and ungated; GA4 is consent-gated and
-					blockable, so GA4 seeing fewer is expected.
-				</Text>
-				<ComparisonBar label="Vercel pageviews" metric={data.vercelPageviews} max={pageviewMax} tone="primary" />
-				<ComparisonBar label="GA4 pageviews" metric={data.ga4Pageviews} max={pageviewMax} tone="default" />
-			</Stack>
+			<Verdict data={data} previous={previous} />
 
-			{/* The reading is always shown. It used to be nested inside the shortfall block, so a
-			    range where only one source answered rendered bare numbers and no explanation of why
-			    there was nothing to compare — the state where the explanation matters most. */}
-			<Card padding={3} radius={2} tone="transparent" border>
-				<Stack space={2}>
-					{data.shortfallRatio !== null && (
-						<Text size={1} weight="semibold">
-							{/* Named by direction rather than always as a GA4 shortfall. The ratio goes
-							    negative whenever GA4 sees more than Vercel — routine where Vercel's
-							    collection started later than the range, as on MCKL — and the label used
-							    to read "GA4 shortfall" over an absolute value, stating the opposite of
-							    the truth while the sentence below it said "more". */}
-							{data.shortfallRatio >= 0
-								? `GA4 saw ${formatPercent(data.shortfallRatio, 1)} fewer pageviews than Vercel`
-								: `GA4 saw ${formatPercent(-data.shortfallRatio, 1)} more pageviews than Vercel`}
-						</Text>
-					)}
-					<Text size={1} muted>{data.interpretation}</Text>
-				</Stack>
-			</Card>
+			<div style={cardGrid}>
+				<Card padding={3} radius={2} tone="transparent" border>
+					<Stack space={3}>
+						<Label size={1} muted>Revenue</Label>
+						<div style={figureRow}>
+							{metricOr(data.revenue, OLDER_ROUTE).status === 'ok'
+								? <Text size={4}>{formatMoney((data.revenue as { value: number }).value, data.currency ?? null)}</Text>
+								: <MetricFigure metric={metricOr(data.revenue, OLDER_ROUTE)} label="Revenue" />}
+							<Delta current={metricSortValue(data.revenue)} previous={metricSortValue(previous?.revenue)} />
+						</div>
+					</Stack>
+				</Card>
+				<Card padding={3} radius={2} tone="transparent" border>
+					<Stack space={3}>
+						<Label size={1} muted>Orders</Label>
+						<div style={figureRow}>
+							<MetricFigure metric={data.orders} label="Orders" />
+							<Delta current={metricSortValue(data.orders)} previous={metricSortValue(previous?.orders)} />
+						</div>
+					</Stack>
+				</Card>
+				<Card padding={3} radius={2} tone="transparent" border>
+					<Stack space={3}>
+						<Label size={1} muted>Mailing list</Label>
+						<div style={figureRow}>
+							<MetricFigure metric={metricOr(data.audience, OLDER_ROUTE)} label="Mailing list members" />
+							<Delta current={metricSortValue(data.audience)} previous={metricSortValue(previous?.audience)} />
+						</div>
+					</Stack>
+				</Card>
+			</div>
 
-			{/* The cross-source view, first on the panel because it is the only one that answers a
-			    question no single source can: did the thing we did move the thing we care about. */}
 			{(data.crossSource?.length ?? 0) >= 3 && (
 				<Stack space={3}>
 					<Heading size={1} style={sectionHeading}>Everything, on one time axis</Heading>
+					{/* Forty words defending a design decision to a reader who never proposed the
+					    alternative had escaped from a code comment into the UI. What the reader needs
+					    is how to read the chart, not why it was drawn this way. */}
 					<Text size={1} muted>
-						Each row keeps its own scale — traffic and revenue are not co-scaled, because whatever
-						factor made them share an axis would invent a correlation the data never claimed.
-						Aligned rows show the same co-movement and assert nothing about relative size.
-					</Text>
-					<Text size={1} muted>
-						One line per row is the truest figure available. Hover a day, or use the control below,
-						to see what each source saw of it.
+						Each row has its own scale. Hover a day, or use the control below, to see what each
+						source saw of it.
 					</Text>
 					<CrossSourceTimeline
 						currency={data.currency ?? null}
@@ -251,6 +257,140 @@ export function MeasurementHealthPanel({ data, previous }: { data: MeasurementHe
 			{/* What GA4 is actually seeing, measured against the sources that are not lossy.
 			    Three ratios of the same quantity: agreement makes it a measurement, and
 			    disagreement says where the fault is rather than merely that there is one. */}
+
+			{(data.campaigns?.length ?? 0) > 0 && (
+				<Stack space={3}>
+					<Heading size={1} style={sectionHeading}>Email campaigns</Heading>
+					<Text size={1} muted>
+						Clicks are distinct subscribers. Opens are inflated by Apple Mail Privacy Protection,
+						which fetches images on the recipient&rsquo;s behalf — so sort on clicks, not opens.
+					</Text>
+					<SortableTable<EmailCampaign>
+						caption="Email campaigns by clicks"
+						initialSort="clicks"
+						rows={data.campaigns ?? []}
+						rowKey={(c) => `${c.sentAt}-${c.title}`}
+						filterOn={(c) => `${c.title} ${c.subject}`}
+						filterPlaceholder="Filter campaigns"
+						exportName="email-campaigns"
+						columns={[
+							{
+								key: 'title',
+								label: 'Campaign',
+								sortValue: (c) => c.title,
+								render: (c) => (
+									<Stack space={1}>
+										<Text size={1}>{c.title}</Text>
+										<Text size={0} muted>{c.sentAt.slice(0, 10)}</Text>
+									</Stack>
+								),
+							},
+							{ key: 'sent', label: 'Sent', numeric: true, sortValue: (c) => c.sent, render: (c) => <Text size={1}>{formatCount(c.sent)}</Text> },
+							{ key: 'opens', label: 'Opens', numeric: true, sortValue: (c) => c.opens, render: (c) => <Text size={1} muted>{formatCount(c.opens)}</Text> },
+							{ key: 'clicks', label: 'Clicks', numeric: true, sortValue: (c) => c.clicks, render: (c) => <Text size={1}>{formatCount(c.clicks)}</Text> },
+							{
+								key: 'unsub',
+								label: 'Unsubscribed',
+								numeric: true,
+								sortValue: (c) => c.unsubscribed,
+								render: (c) => <Text size={1} muted>{formatCount(c.unsubscribed)}</Text>,
+							},
+						]}
+					/>
+				</Stack>
+			)}
+
+		</Stack>
+	)
+}
+
+/**
+ * One line saying whether this week was normal.
+ *
+ * Every input was already computed and the reader was left to derive the conclusion themselves,
+ * from levels, across four tabs, by comparing arrows. For someone with five minutes on a Monday
+ * that derivation IS the work, and the tool was making them do all of it.
+ */
+function Verdict({ data, previous }: { data: MeasurementHealthData; previous?: MeasurementHealthData }): React.ReactElement | null {
+	const parts: string[] = []
+
+	const say = (label: string, now: MetricValue | undefined, before: MetricValue | undefined, unit: 'money' | 'count') => {
+		const a = metricSortValue(now)
+		const b = metricSortValue(before)
+		if (a === null) return
+		if (b === null || b === 0) {
+			parts.push(`${label} ${unit === 'money' ? formatMoney(a, data.currency ?? null) : formatCount(a)}`)
+			return
+		}
+		const change = (a - b) / Math.abs(b)
+		// "Flat" rather than a decimal nobody acts on: at seven orders a quarter a 3% move is noise
+		// wearing a percent sign.
+		if (Math.abs(change) < 0.05) parts.push(`${label} flat`)
+		else parts.push(`${label} ${change > 0 ? 'up' : 'down'} ${formatPercent(Math.abs(change), 0)}`)
+	}
+
+	say('Revenue', data.revenue, previous?.revenue, 'money')
+	say('traffic', data.vercelPageviews, previous?.vercelPageviews, 'count')
+
+	const sends = data.campaigns?.length ?? 0
+	if (sends > 0) parts.push(`${sends} campaign${sends === 1 ? '' : 's'} sent`)
+
+	// The measurement caveat belongs in the verdict, not two tabs away: a healthy-looking week
+	// measured badly is not a healthy week.
+	const broken = data.capture?.discrepancy ? 'measurement disagrees between sources' : null
+	if (broken) parts.push(broken)
+
+	if (parts.length === 0) return null
+
+	return (
+		<Card padding={3} radius={2} tone={broken ? 'caution' : 'transparent'} border>
+			<Text size={2}>{parts.join(' · ')}{broken ? '' : ' · nothing broken'}</Text>
+		</Card>
+	)
+}
+
+/**
+ * Data health — the instrument, deliberately last.
+ *
+ * Everything here answers one question: can I trust the numbers on the other tabs. It was two
+ * separate tabs answering that question, which is one more than it deserves out of five.
+ */
+export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealthData; diagnostics?: DiagnosticReport }): React.ReactElement {
+	const pageviewMax = maxOf([data.ga4Pageviews, data.vercelPageviews])
+
+	return (
+		<Stack space={4}>
+			<Stack space={3}>
+				<Heading size={1} style={sectionHeading}>Pageviews, source against source</Heading>
+				<Text size={1} muted>
+					The same unit on both sides. Vercel is cookieless and ungated; GA4 is consent-gated and
+					blockable, so GA4 seeing fewer is expected.
+				</Text>
+				<ComparisonBar label="Vercel pageviews" metric={data.vercelPageviews} max={pageviewMax} tone="primary" />
+				<ComparisonBar label="GA4 pageviews" metric={data.ga4Pageviews} max={pageviewMax} tone="default" />
+			</Stack>
+
+			{/* The reading is always shown. It used to be nested inside the shortfall block, so a
+			    range where only one source answered rendered bare numbers and no explanation of why
+			    there was nothing to compare — the state where the explanation matters most. */}
+			<Card padding={3} radius={2} tone="transparent" border>
+				<Stack space={2}>
+					{data.shortfallRatio !== null && (
+						<Text size={1} weight="semibold">
+							{/* Named by direction rather than always as a GA4 shortfall. The ratio goes
+							    negative whenever GA4 sees more than Vercel — routine where Vercel's
+							    collection started later than the range, as on MCKL — and the label used
+							    to read "GA4 shortfall" over an absolute value, stating the opposite of
+							    the truth while the sentence below it said "more". */}
+							{data.shortfallRatio >= 0
+								? `GA4 saw ${formatPercent(data.shortfallRatio, 1)} fewer pageviews than Vercel`
+								: `GA4 saw ${formatPercent(-data.shortfallRatio, 1)} more pageviews than Vercel`}
+						</Text>
+					)}
+					<Text size={1} muted>{data.interpretation}</Text>
+				</Stack>
+			</Card>
+
 			{((data.capture?.estimates?.length ?? 0) > 0 || data.estimatedSessions?.status === 'estimated') && (
 				<Stack space={3}>
 					<Heading size={1} style={sectionHeading}>How much GA4 is seeing</Heading>
@@ -297,67 +437,6 @@ export function MeasurementHealthPanel({ data, previous }: { data: MeasurementHe
 			{/* The daily series. A scalar gap cannot tell a stable difference from one that opened
 			    overnight, and those need opposite responses. Rendered only when there are enough
 			    points to show a shape, and only when both sources reported by day. */}
-			{(data.daily?.length ?? 0) >= 3 && (
-				<Stack space={3}>
-					<Heading size={1} style={sectionHeading}>Day by day</Heading>
-					<Text size={1} muted>
-						A gap that has always been there is consent and blocking. A gap that opens on one
-						day is an incident.
-					</Text>
-					<TrendChart points={data.daily ?? []} />
-					{/* The whole chart used to disappear here rather than lose one line — at exactly
-					    the 90-day range where someone would look for when a gap opened, which is the
-					    reason this chart exists. GA4's series is daily at every range, so it stays. */}
-					{data.vercelDailyUnavailable && (
-						<Text size={0} muted>
-							Vercel reports this range in weekly buckets, so only the GA4 line is plotted.
-							Choose Week or Month to see both.
-						</Text>
-					)}
-				</Stack>
-			)}
-
-			{(data.campaigns?.length ?? 0) > 0 && (
-				<Stack space={3}>
-					<Heading size={1} style={sectionHeading}>Email campaigns</Heading>
-					<Text size={1} muted>
-						Clicks are distinct subscribers. Opens are inflated by Apple Mail Privacy Protection,
-						which fetches images on the recipient&rsquo;s behalf — so sort on clicks, not opens.
-					</Text>
-					<SortableTable<EmailCampaign>
-						caption="Email campaigns by clicks"
-						initialSort="clicks"
-						rows={data.campaigns ?? []}
-						rowKey={(c) => `${c.sentAt}-${c.title}`}
-						filterOn={(c) => `${c.title} ${c.subject}`}
-						filterPlaceholder="Filter campaigns"
-						exportName="email-campaigns"
-						columns={[
-							{
-								key: 'title',
-								label: 'Campaign',
-								sortValue: (c) => c.title,
-								render: (c) => (
-									<Stack space={1}>
-										<Text size={1}>{c.title}</Text>
-										<Text size={0} muted>{c.sentAt.slice(0, 10)}</Text>
-									</Stack>
-								),
-							},
-							{ key: 'sent', label: 'Sent', numeric: true, sortValue: (c) => c.sent, render: (c) => <Text size={1}>{formatCount(c.sent)}</Text> },
-							{ key: 'opens', label: 'Opens', numeric: true, sortValue: (c) => c.opens, render: (c) => <Text size={1} muted>{formatCount(c.opens)}</Text> },
-							{ key: 'clicks', label: 'Clicks', numeric: true, sortValue: (c) => c.clicks, render: (c) => <Text size={1}>{formatCount(c.clicks)}</Text> },
-							{
-								key: 'unsub',
-								label: 'Unsubscribed',
-								numeric: true,
-								sortValue: (c) => c.unsubscribed,
-								render: (c) => <Text size={1} muted>{formatCount(c.unsubscribed)}</Text>,
-							},
-						]}
-					/>
-				</Stack>
-			)}
 
 			{Object.keys(data.orderStatuses ?? {}).length > 0 && (
 				<Stack space={3}>
@@ -386,50 +465,11 @@ export function MeasurementHealthPanel({ data, previous }: { data: MeasurementHe
 
 			<Stack space={3}>
 				<Heading size={1} style={sectionHeading}>Context</Heading>
-				<Text size={1} muted>
-					Different units to the figures above, and to each other. Shown for scale, never differenced.
-				</Text>
+				<Text size={1} muted>Different units to the figures above, and to each other.</Text>
 				<div style={cardGrid}>
-					{/* The audience a foundry owns. Placed in Context beside orders rather than in a
-					    Mailchimp tab of its own: panels here are organised by the question they
-					    answer, not by which API the number came from. */}
-					<Card padding={3} radius={2} tone="transparent" border>
-						<Stack space={3}>
-							<Label size={1} muted>Mailing list</Label>
-							<div style={figureRow}>
-								<MetricFigure metric={metricOr(data.audience, OLDER_ROUTE)} label="Mailing list members" />
-								<Delta
-									current={metricSortValue(data.audience)}
-									previous={metricSortValue(previous?.audience)}
-								/>
-							</div>
-							<Text size={0} muted>
-								Mailchimp&rsquo;s own count. Not consent-gated or blockable, so it replaces the
-								site&rsquo;s subscribe event rather than sitting beside it.
-							</Text>
-						</Stack>
-					</Card>
-					<Card padding={3} radius={2} tone="transparent" border>
-						<Stack space={3}>
-							<Label size={1} muted>Revenue</Label>
-							{/* The figure the owner opens the tool for, and the only one here that
-							    survived the GA4 collapse untouched — orders are server-side. */}
-							<div style={figureRow}>
-								{metricOr(data.revenue, OLDER_ROUTE).status === 'ok'
-									? <Text size={4}>{formatMoney((data.revenue as { value: number }).value, data.currency ?? null)}</Text>
-									: <MetricFigure metric={metricOr(data.revenue, OLDER_ROUTE)} label="Revenue" />}
-								<Delta
-									current={metricSortValue(data.revenue)}
-									previous={metricSortValue(previous?.revenue)}
-								/>
-							</div>
-						</Stack>
-					</Card>
 					<Card padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
 							<Label size={1} muted>Vercel visitors</Label>
-							{/* Fetched on every call and previously discarded, though it is the only
-							    visitor figure here that consent refusal and ad-blocking cannot reduce. */}
 							<MetricFigure metric={metricOr(data.vercelVisitors, OLDER_ROUTE)} label="Vercel visitors" />
 							<Text size={0} muted>Counted server-side, so neither consent nor ad-blocking reduces it.</Text>
 						</Stack>
@@ -442,21 +482,19 @@ export function MeasurementHealthPanel({ data, previous }: { data: MeasurementHe
 					</Card>
 					<Card padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
-							<Label size={1} muted>Orders</Label>
-							<div style={figureRow}>
-								<MetricFigure metric={data.orders} label="Orders" />
-								<Delta current={metricSortValue(data.orders)} previous={metricSortValue(previous?.orders)} />
-							</div>
-						</Stack>
-					</Card>
-					<Card padding={3} radius={2} tone="transparent" border>
-						<Stack space={3}>
 							<Label size={1} muted>Consent granted</Label>
 							<MetricFigure metric={data.consentRate} label="Consent granted, percent of sessions" unit="percent" />
 						</Stack>
 					</Card>
 				</div>
 			</Stack>
+
+			{diagnostics && (
+				<Stack space={3}>
+					<Heading size={1} style={sectionHeading}>Configuration</Heading>
+					<DiagnosticsPanel data={diagnostics} />
+				</Stack>
+			)}
 		</Stack>
 	)
 }
@@ -853,10 +891,7 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 							: `${formatCount(value)} orders`}
 						totalLabel={(data.licences ?? []).some((r) => r.revenue !== null) ? 'Total across licences' : 'Total licence lines'}
 					/>
-					<Text size={0} muted>
-						An order covering several licences is split evenly between them: the documents carry
-						no per-licence line value, so this is an apportionment rather than a measurement.
-					</Text>
+
 				</Stack>
 			)}
 
@@ -866,10 +901,13 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 				<NoticeList notices={['GA4 withheld some low-count rows for privacy. A family missing from this table has not necessarily gone quiet.']} />
 			)}
 
+			{/* One apportionment note for the panel, not one per section. The licence table and the
+			    family table were each printing a near-identical sentence about even splitting,
+			    ~28 words apart, which read as a stutter and made the other notes look cheaper. */}
 			{data.revenueIsApportioned && (
 				<Text size={0} muted>
-					Revenue is apportioned: an order covering several families is split evenly between them,
-					because the order documents carry no per-family line value.
+					Revenue is apportioned: an order covering several families or licences is split evenly
+					between them, because the order documents carry no per-line value.
 				</Text>
 			)}
 		</Stack>

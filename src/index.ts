@@ -86,7 +86,7 @@ export {
 	AcquisitionPanel,
 	DiagnosticsPanel,
 	JourneyPanel,
-	MeasurementHealthPanel,
+	OverviewPanel, DataHealthPanel,
 	TypefaceInterestPanel,
 } from './studio/panels'
 

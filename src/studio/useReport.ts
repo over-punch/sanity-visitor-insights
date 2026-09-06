@@ -17,7 +17,7 @@ const API_VERSION = '2024-03-01'
 export type ReportState<T> =
 	| { status: 'idle' }
 	| { status: 'loading' }
-	| { status: 'ready'; envelope: ReportEnvelope<T> }
+	| { status: 'ready'; envelope: ReportEnvelope<T>; stale?: boolean }
 	// `disabled` separates "this site has visitor insights switched off" from "something broke".
 	// They are both non-200s, but only one of them is worth a retry button.
 	| { status: 'error'; message: string; disabled?: boolean }
@@ -30,6 +30,13 @@ export interface UseReportOptions {
 	apiBaseUrl: string
 	report: ReportName
 	range: RangeKey
+	/**
+	 * Whether to fetch at all. Defaults to true.
+	 *
+	 * Lets a panel declare a secondary report it only needs on one tab, without the other four
+	 * paying a request for data they will not draw.
+	 */
+	enabled?: boolean
 }
 
 /**
@@ -37,7 +44,7 @@ export interface UseReportOptions {
  *
  * @returns the current state plus a `reload` for manual refresh
  */
-export function useReport<T>({ apiBaseUrl, report, range, custom }: UseReportOptions): {
+export function useReport<T>({ apiBaseUrl, report, range, custom, enabled = true }: UseReportOptions): {
 	state: ReportState<T>
 	reload: () => void
 } {
@@ -51,11 +58,19 @@ export function useReport<T>({ apiBaseUrl, report, range, custom }: UseReportOpt
 	const reload = useCallback(() => setNonce((n) => n + 1), [])
 
 	useEffect(() => {
+		if (!enabled) return
 		const requestId = requestIdRef.current + 1
 		requestIdRef.current = requestId
 
 		const controller = new AbortController()
-		setState({ status: 'loading' })
+		// Keep showing the last answer while fetching the next one, marked stale.
+		//
+		// This used to clear to `loading` unconditionally, which unmounted the ready subtree and
+		// took every table's sort, filter and exclusions with it. Widen Week to Month to check
+		// whether a ranking holds and the ranking is gone, after the screen went blank — so a reader
+		// could never hold a question steady while changing one variable, which is the whole of
+		// what "explorable" means. It also dumped keyboard focus to the body on every range change.
+		setState((current) => (current.status === 'ready' ? { ...current, stale: true } : { status: 'loading' }))
 
 		async function run() {
 			// The Studio client carries the session token under token-based auth. Under cookie-based
@@ -125,7 +140,7 @@ export function useReport<T>({ apiBaseUrl, report, range, custom }: UseReportOpt
 		return () => controller.abort()
 	// custom.start/end by value rather than the object: the caller builds a fresh object on every
 	// render, and depending on its identity would refetch on each keystroke in the date fields.
-	}, [client, apiBaseUrl, report, range, custom?.start, custom?.end, nonce])
+	}, [client, apiBaseUrl, report, range, custom?.start, custom?.end, nonce, enabled])
 
 	return { state, reload }
 }
