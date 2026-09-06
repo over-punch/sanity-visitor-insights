@@ -116,7 +116,7 @@ describe('measurementHealth', () => {
 		expect(data.interpretation).not.toMatch(/ad-?block/i)
 	})
 
-	it('attributes part of the gap to consent once that event exists', async () => {
+	it('reports the consent rate without crediting it for the gap', async () => {
 		const data = await measurementHealth({
 			config: siteConfig(),
 			range,
@@ -135,7 +135,15 @@ describe('measurementHealth', () => {
 
 		// 240 consenting users over 320 users = 75%. Users on both sides, not events over sessions.
 		expect(data.consentRate).toEqual({ status: 'ok', value: 75 })
-		expect(data.interpretation).toContain('did not grant analytics consent')
+		// The rate is measured INSIDE GA4's sample — conditioned on having been seen at all — so
+		// anyone who refused before being counted is in neither the numerator nor the denominator.
+		// It used to be offered as accounting for "part of" the GA4-versus-Vercel residual, which is
+		// a population it cannot describe.
+		expect(data.interpretation).toContain('declined analytics consent')
+		expect(data.interpretation).toContain('does not explain the visitors missing from it')
+		expect(data.interpretation).not.toContain('accounts for part of it')
+		// And it is a lower bound, because grants is a maximum across event rows.
+		expect(data.interpretation).toContain('at least')
 	})
 
 	it('lets one dead source degrade only its own figure', async () => {

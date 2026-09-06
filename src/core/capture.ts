@@ -65,6 +65,16 @@ export function fromOrders(ga4Purchases: number, sanityOrders: number): CaptureE
 	// about the rate, which at seven orders moves fourteen points if one order lands either side of
 	// midnight. This is the most trusted estimate, so it is the one that grosses up every corrected
 	// figure in the tool; the reader is entitled to know how thin it is.
+	/*
+	 * The NUMERATOR's sensitivity, which is the fragile side.
+	 *
+	 * This printed `1 / sanityOrders` and described it as the effect of "one more or fewer order" —
+	 * quoting the denominator's sensitivity and stating it wrongly. For a rate of k/n, one more
+	 * ORDER moves it by rate/n, which at a 20% capture and seven orders is about three points, not
+	 * fourteen. One more GA4 PURCHASE moves it by 1/n, which is the fourteen — and that is the side
+	 * that actually wobbles, because the numerator is the lossy one. The single caveat the reader
+	 * is given about the tool's most load-bearing ratio pointed at the steady half.
+	 */
 	const swing = Math.round((1 / sanityOrders) * 100)
 	return {
 		basis: 'orders',
@@ -72,7 +82,7 @@ export function fromOrders(ga4Purchases: number, sanityOrders: number): CaptureE
 		observed: ga4Purchases,
 		actual: sanityOrders,
 		note: `GA4 purchases against the ${sanityOrders} orders that exist — the same event on both sides. `
-			+ `Small numbers move it a long way: one more or fewer order shifts this rate by about ${swing} points.`,
+			+ `Small numbers move it a long way: one more or fewer purchase seen by GA4 shifts this rate by about ${swing} points.`,
 	}
 }
 
@@ -122,6 +132,25 @@ export function fromEmail(ga4Sessions: number, mailchimpClicks: number): Capture
 	}
 }
 
+/**
+ * A rough interval for a single rate, from how few events it was measured on.
+ *
+ * Two standard errors of a binomial proportion, clamped to the unit interval. At one GA4 purchase
+ * against seven orders the honest range is enormous, and printing that is the point: the figure is
+ * doing real work — it grosses up every corrected number in the tool — on a handful of events.
+ *
+ * @param estimate - the single estimate the model has
+ */
+function samplingInterval(estimate: CaptureEstimate): { low: number; high: number } {
+	const n = estimate.actual
+	if (!Number.isFinite(n) || n <= 0) return { low: estimate.rate, high: estimate.rate }
+	// Bounded at the rate itself in the degenerate case, so a rate of exactly 0 or 1 — where the
+	// standard error is 0 — does not claim a certainty it has not earned either.
+	const p = Math.min(1, Math.max(0, estimate.rate))
+	const error = 2 * Math.sqrt(Math.max(p * (1 - p), 0.02) / n)
+	return { low: Math.max(0, p - error), high: Math.min(1, p + error) }
+}
+
 /** The combined view of GA4's capture rate. */
 export interface CaptureModel {
 	/** Every estimate that had a usable denominator, best first. */
@@ -160,10 +189,25 @@ export function captureModel(candidates: Array<CaptureEstimate | null>): Capture
 	// same-event ratio against a not-like-for-like one produces a number that is neither, and the
 	// pageview ratio would drag it down for reasons that are definitional rather than real.
 	const rate = estimates[0]!.rate
-	const low = Math.min(...rates)
-	const high = Math.max(...rates)
+	/*
+	 * A single estimate gets a SAMPLING interval, not a zero-width one.
+	 *
+	 * `low` and `high` were the min and max across estimates, so with one estimate they both equal
+	 * the point — and the panel rendered "~2,499" with the subtitle "2,499 to 2,499" and an
+	 * Estimated badge. A zero-width interval on the one quantity this package exists to call
+	 * uncertain. On a Week range only the pageview estimate clears its denominator, so that was the
+	 * ordinary case rather than an edge one.
+	 *
+	 * The interval here is the normal approximation to a binomial proportion — the observed count
+	 * out of the true one — which is the actual reason this number is uncertain at these volumes.
+	 * It is deliberately not exact: the point is to stop printing a false precision, not to claim a
+	 * different one.
+	 */
+	const spread = estimates.length > 1
+		? { low: Math.min(...rates), high: Math.max(...rates) }
+		: samplingInterval(estimates[0]!)
 
-	return { estimates, rate, low, high, discrepancy: describeDisagreement(estimates) }
+	return { estimates, rate, low: spread.low, high: spread.high, discrepancy: describeDisagreement(estimates) }
 }
 
 /**

@@ -1632,6 +1632,10 @@ describe('the capture cards do not flatter the instrument', () => {
 		expect(estimate?.note).toContain('7 orders')
 		expect(estimate?.note).toContain('14 points')
 		expect(estimate?.note).not.toContain('exact')
+		// The NUMERATOR is the fragile side. The note quoted the denominator's sensitivity — one more
+		// order, worth about three points at a 20% capture — and printed the numerator's number
+		// against it, so the one caveat given pointed at the steady half of the ratio.
+		expect(estimate?.note).toContain('purchase seen by GA4')
 	})
 })
 
@@ -2260,5 +2264,33 @@ describe('the pageview estimate is described in the direction it actually errs',
 		expect(note).toContain('ceiling')
 		expect(note).not.toContain('lower bound')
 		expect(note).not.toContain('crawlers')
+	})
+})
+
+describe('a lone capture estimate carries its own uncertainty', () => {
+	it('does not print a zero-width interval', () => {
+		// low and high were the min and max ACROSS estimates, so with one estimate both equalled the
+		// point and the panel rendered "2,499 to 2,499" under an Estimated badge. On a Week range
+		// only the pageview estimate clears its denominator, so that was the ordinary case.
+		const model = captureModel([fromPageviews(475, 2356)])
+		expect(model.estimates.length).toBe(1)
+		expect(model.low).toBeLessThan(model.rate as number)
+		expect(model.high).toBeGreaterThan(model.rate as number)
+	})
+
+	it('is wider when measured on fewer events', () => {
+		// The honest signal at these volumes: the same rate from a handful of events deserves a much
+		// wider range than one from thousands.
+		const thin = captureModel([fromOrders(1, 7)])
+		const thick = captureModel([fromOrders(140, 1000)])
+		const width = (m: typeof thin) => (m.high as number) - (m.low as number)
+		expect(width(thin)).toBeGreaterThan(width(thick) * 5)
+	})
+
+	it('still uses the spread between estimates when there is more than one', () => {
+		// Their disagreement carries more than any single one's sampling error.
+		const model = captureModel([fromOrders(2, 7), fromPageviews(475, 2356)])
+		expect(model.low).toBeCloseTo(Math.min(2 / 7, 475 / 2356), 6)
+		expect(model.high).toBeCloseTo(Math.max(2 / 7, 475 / 2356), 6)
 	})
 })

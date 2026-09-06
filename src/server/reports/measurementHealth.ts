@@ -19,6 +19,7 @@
  */
 
 import type { CrossSourceDay, EmailCampaign, MeasurementHealthData, DailyPoint, TimelineEvent } from '../../reportData'
+import { provisionalDates } from '../../core/ranges'
 import type { DateRange, MetricValue } from '../../types'
 import { estimated, ok, unavailable } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
@@ -103,8 +104,19 @@ function interpret(ga4Views: MetricValue, vercelViews: MetricValue, shortfall: n
 		return `${base} How much of that is consent refusal cannot be measured until the consent_granted event is instrumented, so the difference is currently unexplained rather than attributed.`
 	}
 
+	/*
+	 * The consent rate cannot explain the gap it was being used to explain.
+	 *
+	 * It is grants over GA4's own users — conditioned on having been SEEN by GA4. Anyone who
+	 * refused consent and was therefore never recorded is absent from the numerator and the
+	 * denominator alike, so this figure describes the people inside the sample and was being
+	 * credited with part of the residual between the sample and reality. It also said "of
+	 * sessions" while dividing users by users, which is the unit error this same file congratulates
+	 * itself for fixing elsewhere. And `grants` is deliberately a maximum across event rows, i.e. a
+	 * lower bound, which "Around" quietly promoted to a point estimate.
+	 */
 	const consentPercent = Math.round((1 - consent.value / 100) * 100)
-	return `${base} Around ${consentPercent}% of sessions did not grant analytics consent, which accounts for part of it. The remainder is unexplained — ad-blocking and bot filtering are plausible but are not separately measurable.`
+	return `${base} Of the visitors GA4 did record, at least ${consentPercent}% declined analytics consent. That is measured inside GA4's own sample, so it does not explain the visitors missing from it — anyone who refused before being counted is in neither figure. The gap itself stays unexplained; ad-blocking and bot filtering are plausible and are not separately measurable.`
 }
 
 /**
@@ -354,10 +366,7 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	}
 
 	// Computed only when both operands are real numbers, and only between matching units.
-	const shortfallRatio =
-		ga4Pageviews.status !== 'unavailable' && vercelPageviews.status !== 'unavailable' && vercelPageviews.value > 0
-			? (vercelPageviews.value - ga4Pageviews.value) / vercelPageviews.value
-			: null
+
 
 	// Vercel's byDate is only daily on short ranges — granularityFor drops to week or month beyond
 	// 62 days. A weekly bucket plotted against a daily one would draw a 7x cliff that is purely an
@@ -369,7 +378,46 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	// opened. GA4 alone still dates the cliff; the second line is what is missing, and the panel is
 	// told so rather than left to render nothing.
 	const vercelDates = Object.keys(vercelByDate)
-	const vercelIsDaily = vercelDates.length === 0 || vercelDates.length > (daysInRange(range) * 0.7)
+	// An EMPTY series is not daily. `vercelDates.length === 0 || …` returned true on the empty case,
+	// so a Vercel failure — which is caught and returns `{ data: [] }` — set vercelDailyUnavailable
+	// to false, said nothing, and left the row legended "complete" with a solid rule and no data.
+	// The panel whose entire purpose is telling "measured nothing" from "did not measure" could not
+	// tell them apart about itself.
+	const vercelIsDaily = vercelDates.length > 0 && vercelDates.length > (daysInRange(range) * 0.7)
+
+	/*
+	 * Computed over SETTLED days only, when the daily figures exist to do it.
+	 *
+	 * Every range ends today, and GA4 does not finish processing for about two days — the package
+	 * knows this, exports `provisionalDates`, and used the fact only to print a notice. Meanwhile
+	 * this ratio differenced GA4's two unsettled days against Vercel's two complete ones, so on a
+	 * seven-day range it inflated the shortfall by roughly ten points — a third of the distance to
+	 * the verdict's own "treat its figures as broken" threshold, from processing lag alone.
+	 *
+	 * The alarm this tool exists to raise was the one most easily manufactured by a delay it had
+	 * already documented.
+	 */
+	const unsettled = new Set(provisionalDates(range))
+	const settledGa4 = [...ga4ByDate.entries()].filter(([date]) => !unsettled.has(date))
+	const settledVercel = vercelIsDaily
+		? Object.entries(vercelByDate).filter(([date]) => !unsettled.has(date))
+		: []
+
+	const settledShortfall = (() => {
+		if (settledGa4.length === 0 || settledVercel.length === 0) return null
+		const ga4Total = settledGa4.reduce((sum, [, value]) => sum + value, 0)
+		const vercelTotal = settledVercel.reduce((sum, [, value]) => sum + (value ?? 0), 0)
+		return vercelTotal > 0 ? (vercelTotal - ga4Total) / vercelTotal : null
+	})()
+
+	const shortfallRatio = settledShortfall !== null
+		? settledShortfall
+		// Falls back to whole-range totals only where daily figures are unavailable — a quarter or a
+		// year, where Vercel reports weekly buckets. Two unsettled days out of ninety move that
+		// ratio by well under a point, so the fallback is not carrying the bias the short ranges did.
+		: ga4Pageviews.status !== 'unavailable' && vercelPageviews.status !== 'unavailable' && vercelPageviews.value > 0
+			? (vercelPageviews.value - ga4Pageviews.value) / vercelPageviews.value
+			: null
 	const seriesDates = vercelIsDaily
 		? Array.from(new Set([...ga4ByDate.keys(), ...vercelDates]))
 		: Array.from(ga4ByDate.keys())
