@@ -1,5 +1,4 @@
 import { fetchWithTimeout } from './fetchWithTimeout'
-import { formatInTimeZone } from '../core/ranges'
 /**
  * Vercel Web Analytics client.
  *
@@ -23,6 +22,8 @@ export interface VercelPageviews {
 	total: number | null
 	/** Distinct visitors over the whole range. Not a sum of the daily figures — visitors dedupe. */
 	visitors: number | null
+	/** True when the series is day-bucketed. False for the coarse monthly fallback. */
+	daily?: boolean
 	/**
 	 * How many windows of the daily series failed to fetch.
 	 *
@@ -35,11 +36,15 @@ export interface VercelPageviews {
 /** A Vercel client bound to one project. */
 export interface VercelClient {
 	/**
-	 * @param start - first day, ISO, in `timezone`
-	 * @param end - last day, ISO, inclusive, in `timezone`
-	 * @param timezone - the property timezone every source is anchored to
+	 * Vercel buckets and filters by UTC day. The other sources are anchored to the property
+	 * timezone, so a bucket can straddle two of its days — bounded at one day, and not fixable
+	 * without hourly granularity from the API. Stated in `byDate`'s own docs rather than hidden
+	 * behind a conversion that relabels the error instead of removing it.
+	 *
+	 * @param start - first day, ISO
+	 * @param end - last day, ISO, inclusive
 	 */
-	pageviews(start: string, end: string, timezone: string): Promise<VercelPageviews>
+	pageviews(start: string, end: string): Promise<VercelPageviews>
 }
 
 /**
@@ -134,24 +139,8 @@ export function createVercelClient(projectId: string, token: string, teamId?: st
 	}
 
 	return {
-		async pageviews(start, end, timezone) {
-			/*
-			 * Bucketed in the PROPERTY timezone, like GA4 and the orders.
-			 *
-			 * `ranges.ts` opens by stating that all three sources must be anchored to one zone
-			 * precisely because Vercel buckets by UTC. Orders were converted; this was not. The bare
-			 * dates went to the API as UTC and `row.timestamp.slice(0, 10)` took the UTC date back
-			 * off, so for a US-Pacific property a third of every evening's traffic was filed under
-			 * the next day — on the one row of the one chart whose entire purpose is showing WHEN two
-			 * sources diverged, and in the per-day shortfall that differences them.
-			 *
-			 * A day of slack each side, then filtered back to the window we actually want. That costs
-			 * two days of buckets and needs no assumption about how the API reads a bare date.
-			 */
-			const pad = (iso: string, days: number) =>
-				new Date(Date.parse(`${iso}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10)
-			const fetchStart = pad(start, -1)
-			const fetchEnd = pad(end, 1)
+		async pageviews(start, end) {
+
 			// Two calls on purpose. The count endpoint gives range totals with visitors deduped
 			// across the whole window; summing the daily rows would overcount visitors, because a
 			// person returning on three days is three daily visitors but one range visitor.
@@ -164,10 +153,10 @@ export function createVercelClient(projectId: string, token: string, teamId?: st
 				// One call per window, so a long range still comes back by day. A single window is the
 				// short-range case and behaves exactly as before.
 				(async () => {
-					const windows = dailyWindows(fetchStart, fetchEnd)
+					const windows = dailyWindows(start, end)
 					const requests = windows.length > 0
 						? windows.map((w) => ({ since: w.start, until: w.end, by: 'day' as const }))
-						: [{ since: fetchStart, until: fetchEnd, by: granularityFor(fetchStart, fetchEnd) }]
+						: [{ since: start, until: end, by: granularityFor(start, end) }]
 
 					const parts = await Promise.all(requests.map((params) =>
 						query<{ data?: AggregateRow[] }>('visits/aggregate', { ...params, limit: '100' })
@@ -192,6 +181,8 @@ export function createVercelClient(projectId: string, token: string, teamId?: st
 					return {
 						data: parts.flatMap((part) => part.data ?? []),
 						incompleteWindows: parts.filter((part) => part.failed).length,
+						// Whether these buckets are days at all. The coarse fallback returns months.
+						daily: windows.length > 0,
 					}
 				})(),
 			])
@@ -199,8 +190,23 @@ export function createVercelClient(projectId: string, token: string, teamId?: st
 			const byDate: Record<string, number> = {}
 			for (const row of series.data ?? []) {
 				if (!row.timestamp) continue
-				// The bucket's instant, read as a day in the property's zone rather than in UTC.
-				const day = formatInTimeZone(new Date(row.timestamp), timezone)
+				/*
+				 * Labelled by the bucket's own UTC date, which is the closest available answer.
+				 *
+				 * A previous release converted this instant into the property's timezone, on the
+				 * reasoning that every other source is anchored there. That is wrong, and worse than
+				 * what it replaced. Vercel buckets by UTC DAY; converting the bucket's start instant
+				 * names the local day the bucket BEGAN on, and for any zone behind UTC that is the
+				 * minority of it — a Los Angeles bucket spans 7 hours of one local day and 17 of the
+				 * next, and the conversion picked the 7. The UTC date is the majority day for every
+				 * zone within 12 hours of UTC, which is all of them.
+				 *
+				 * Genuinely re-bucketing would need hourly granularity from the API, which is not
+				 * something to assume. Until then the seam is real, bounded at one day, and stated
+				 * rather than papered over with a conversion that moves the error rather than
+				 * removing it.
+				 */
+				const day = row.timestamp.slice(0, 10)
 				if (day < start || day > end) continue
 				byDate[day] = (byDate[day] ?? 0) + (row.pageviews ?? 0)
 			}
@@ -211,7 +217,18 @@ export function createVercelClient(projectId: string, token: string, teamId?: st
 			// returning on three days is three daily visitors and one range visitor — so those still
 			// come from the count endpoint, with the zone caveat that implies.
 			const daysTotal = Object.values(byDate).reduce((sum, value) => sum + value, 0)
-			const seriesIsComplete = (series.incompleteWindows ?? 0) === 0 && Object.keys(byDate).length > 0
+			/*
+			 * Complete means DAILY and whole, not merely non-empty.
+			 *
+			 * Above the window cap the client falls back to one coarse call, and `by: 'month'` returns
+			 * a handful of month-labelled buckets. Those were then summed and published as the range
+			 * total — a month bucket straddling the start is dropped whole by a day comparison, one
+			 * straddling the end is included whole, and `incompleteWindows` stays 0, so the very
+			 * mechanism built to say "do not trust this series" reported it as sound.
+			 */
+			const seriesIsComplete = (series.incompleteWindows ?? 0) === 0
+				&& series.daily
+				&& Object.keys(byDate).length > 0
 
 			return {
 				byDate,
@@ -220,6 +237,7 @@ export function createVercelClient(projectId: string, token: string, teamId?: st
 				// not, and the two feed different figures on one panel. Saying so is what lets the
 				// panel avoid comparing them.
 				incompleteWindows: series.incompleteWindows ?? 0,
+				daily: series.daily ?? false,
 				total: seriesIsComplete ? daysTotal : totals.data?.pageviews ?? null,
 				// Absent is not zero. A malformed or partial response used to become ok(0) and render
 				// as a measured figure — on the very panel whose job is to detect that.

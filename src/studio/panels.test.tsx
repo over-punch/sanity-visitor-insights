@@ -2375,7 +2375,8 @@ describe('a funnel rate needs a denominator that can carry one', () => {
 	}))
 
 	it('prints a rate where the population supports it', () => {
-		const html = render(<FunnelChart stages={stages([2000, 900, 400, 120, 60, 24])} measurement="sequence" />)
+		// Every rung clears the floor on both ends, so both rates print.
+		const html = render(<FunnelChart stages={stages([2000, 900, 400, 200, 120, 60])} measurement="sequence" />)
 		expect(html).toContain('of landed')
 		expect(html).toContain('of began checkout')
 	})
@@ -2398,5 +2399,79 @@ describe('a funnel rate needs a denominator that can carry one', () => {
 	it('says why a rate is missing rather than leaving a gap', () => {
 		const html = render(<FunnelChart stages={stages([8, 5, 3])} measurement="sequence" />)
 		expect(html).toContain('too few to give a rate')
+	})
+})
+
+describe('the chart anchors each row against the period before it', () => {
+	const days = ['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-05']
+	const shell = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.2,
+		ga4Sessions: ok(357), orders: ok(2), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		revenue: ok(0), currency: 'USD', orderStatuses: {},
+		audience: ok(1), audienceGrowth: ok(0), campaigns: [],
+		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
+		estimatedSessions: unavailable('not_applicable'), interpretation: 'x', daily: [],
+		timelineEvents: [],
+	}
+	const series = (ga4: number) => days.map((date) => ({
+		date, vercelPageviews: 300, ga4Pageviews: ga4, ga4Sessions: 60, orders: 0, revenue: null,
+	}))
+
+	it('draws a ghost line when a comparison window exists', () => {
+		// Every row was an unanchored silhouette — a flat line at 60 and one at 6,000 are the same
+		// picture. The comparison envelope was already fetched and spent only on the card deltas.
+		const html = render(
+			<OverviewPanel
+				data={{ ...shell, crossSource: series(60) } as never}
+				previous={{ ...shell, crossSource: series(285) } as never}
+			/>,
+		)
+		expect(html).toContain('stroke-dasharray="2 3"')
+	})
+
+	it('draws no ghost when there is nothing to compare against', () => {
+		const html = render(<OverviewPanel data={{ ...shell, crossSource: series(60) } as never} />)
+		expect(html).not.toContain('stroke-dasharray="2 3"')
+	})
+
+	it('positions the ghost by day offset, not by its own dates', () => {
+		// The previous window's dates are meaningless on this axis; point i belongs at day i of the
+		// window being shown. Aligning by date would drop it off the chart entirely.
+		const earlier = days.map((_, i) => ({
+			date: `2026-08-0${i + 1}`, vercelPageviews: 300, ga4Pageviews: 285,
+			ga4Sessions: 60, orders: 0, revenue: null,
+		}))
+		const html = render(
+			<OverviewPanel
+				data={{ ...shell, crossSource: series(60) } as never}
+				previous={{ ...shell, crossSource: earlier } as never}
+			/>,
+		)
+		expect(html).toContain('stroke-dasharray="2 3"')
+	})
+})
+
+describe('the funnel gate looks at the rung, not just the funnel', () => {
+	const stages = (values: number[]) => values.map((value, i) => ({
+		key: `s${i}`,
+		label: ['Landed', 'Viewed a typeface', 'Used the tester', 'Added to cart', 'Began checkout', 'Purchased'][i]!,
+		value,
+		conversionFromPrevious: i === 0 ? null : value / values[i - 1]!,
+	}))
+
+	it('withholds a share on a thin rung even when the funnel is large', () => {
+		// The share was gated on `entry` — stage zero, and therefore the funnel's LARGEST number — so
+		// it was withheld only when the whole funnel had under thirty entries, never when the rung
+		// itself was a handful. "0.1% of landed" off four purchases read as a measurement.
+		const html = render(<FunnelChart stages={stages([4000, 1800, 900, 300, 90, 4])} measurement="sequence" />)
+		expect(html).toContain('too few to give a rate')
+	})
+
+	it('explains a withheld step-to-step rate rather than leaving a gap', () => {
+		// The withheld half fell to an empty string, which is the unexplained gap the share half was
+		// changed to avoid.
+		const html = render(<FunnelChart stages={stages([4000, 1800, 900, 300, 20, 8])} measurement="sequence" />)
+		expect(html).toContain('too few from')
 	})
 })

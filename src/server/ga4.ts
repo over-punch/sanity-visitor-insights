@@ -80,15 +80,6 @@ export interface Ga4Report {
 	timeZone?: string
 }
 
-/**
- * A report GA4 did not return, used to keep a short batch aligned with its requests.
- *
- * Empty rows and no `metricTotal`, so every consumer's own absent-versus-zero handling takes over:
- * `sumFirstMetric` yields 0 rows to sum and the metric reads as unavailable rather than as a
- * measured zero. It must never look like data.
- */
-const EMPTY_REPORT: Ga4Report = { rows: [], thresholded: false, sampled: false, rowCount: 0 }
-
 
 /** Raw Data API response shape, narrowed to what is read here. */
 interface RawReport {
@@ -291,24 +282,38 @@ export function andFilters(...filters: Array<unknown | undefined>): unknown | un
 }
 
 /**
- * Flatten batch chunks while keeping each caller's index pointing at the request it made.
+ * Flatten batch chunks, refusing any chunk GA4 did not answer in full.
  *
- * Exported for its test: the fake GA4 client used throughout the suite returns whatever a fixture
- * hands it, so a test written against that client never reaches this code — which is how a first
- * attempt at guarding this defect ended up asserting the fixture's behaviour instead.
+ * The previous version padded a short chunk at its tail, and that was wrong twice over.
+ *
+ * Padding only prevents slippage BETWEEN chunks. A response missing a middle entry still shifts
+ * every later result within its own chunk — request five, receive four, and caller index 1 gets the
+ * report that answered request 2. GA4's batch response carries no per-request identifier, so there
+ * is no way to tell which request a returned report belongs to. Nothing can repair that mapping.
+ *
+ * And the placeholder was read as data. It is a truthy object with `rows: []`, so every
+ * `if (report)` guard downstream took the present branch and `sumFirstMetric` returned a real zero —
+ * which became a capture rate of 0%, carrying a note asserting "the same event on both sides", which
+ * then tripped the disagreement threshold and printed an instruction to go and investigate a
+ * perfectly healthy purchase tag. A fabricated diagnosis is worse than a missing figure.
+ *
+ * So a short chunk throws. The caller's own catch marks GA4 unavailable, which is true and is a
+ * state every panel already renders honestly.
  *
  * @param chunks - per chunk, the parsed reports it returned and how many were requested
  */
 export function alignBatch(chunks: Array<{ reports: Ga4Report[]; expected: number }>): Ga4Report[] {
 	return chunks.flatMap(({ reports, expected }) => {
-		if (reports.length !== expected) {
-			console.error(
-				`Visitor insights: GA4 returned ${reports.length} of ${expected} reports in a batch; padding to keep results aligned.`,
+		// SHORT is unmappable: without a per-request identifier there is no way to know which request
+		// each returned report answers, so the whole chunk is refused.
+		if (reports.length < expected) {
+			throw new Error(
+				`GA4 returned ${reports.length} of ${expected} reports in a batch. Results cannot be matched to requests, so none are used.`,
 			)
 		}
-		// Padded, never truncated: a short chunk yields empty reports at its tail rather than sliding
-		// every later caller's index onto someone else's data.
-		return Array.from({ length: expected }, (_, i) => reports[i] ?? EMPTY_REPORT)
+		// Long is merely surprising: the responses are in request order, so the first `expected` of
+		// them map correctly and anything beyond is spurious.
+		return reports.slice(0, expected)
 	})
 }
 

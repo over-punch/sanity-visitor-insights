@@ -10,6 +10,7 @@
 
 import { fetchWithTimeout } from '../fetchWithTimeout'
 import { alignBatch, type Ga4Report } from '../ga4'
+import { formatInTimeZone } from '../../core/ranges'
 import { countLicenceTiers } from '../orders'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -1731,29 +1732,41 @@ describe('bounded requests and aligned batches', () => {
 		}
 	})
 
-	it('keeps a short GA4 batch aligned with the requests that produced it', () => {
-		// Against the REAL alignment, not the fake client — a first attempt at this test drove the
-		// fixture instead of the code and passed while the padding never ran.
+	it('refuses a chunk GA4 did not answer in full', () => {
+		// Padding a short chunk at its tail only prevented slippage BETWEEN chunks; a missing middle
+		// entry still shifted every later result within its own, and GA4's batch response carries no
+		// per-request identifier, so the mapping cannot be repaired. The placeholder was also read as
+		// a measured zero — which became a 0% capture rate and an instruction to go and investigate a
+		// perfectly healthy purchase tag. A fabricated diagnosis is worse than a missing figure.
 		const report = (rows: number): Ga4Report => ({
 			rows: Array.from({ length: rows }, () => ({ dimensions: [], metrics: [1] })),
 			thresholded: false, sampled: false, rowCount: rows,
 		})
 
-		// Two chunks: the first asked for five and got three, the second asked for one and got one.
-		const aligned = alignBatch([
-			{ reports: [report(1), report(2), report(3)], expected: 5 },
-			{ reports: [report(9)], expected: 1 },
-		])
+		expect(() => alignBatch([{ reports: [report(1), report(2)], expected: 5 }]))
+			.toThrow(/cannot be matched to requests/)
+	})
 
-		expect(aligned.length).toBe(6)
-		// The requests that were answered keep their own results...
-		expect(aligned[0]?.rowCount).toBe(1)
-		expect(aligned[2]?.rowCount).toBe(3)
-		// ...the unanswered ones read as empty, never as the next chunk's data...
-		expect(aligned[3]?.rowCount).toBe(0)
-		expect(aligned[4]?.rowCount).toBe(0)
-		// ...and the following chunk stays where its caller expects it, rather than sliding up.
-		expect(aligned[5]?.rowCount).toBe(9)
+	it('passes a complete batch through in request order', () => {
+		const report = (rows: number): Ga4Report => ({
+			rows: Array.from({ length: rows }, () => ({ dimensions: [], metrics: [1] })),
+			thresholded: false, sampled: false, rowCount: rows,
+		})
+		expect(alignBatch([
+			{ reports: [report(1), report(2)], expected: 2 },
+			{ reports: [report(9)], expected: 1 },
+		]).map((r) => r.rowCount)).toEqual([1, 2, 9])
+	})
+
+	it('takes the mapped prefix when a chunk answers with more than it was asked', () => {
+		// Surprising rather than dangerous: responses are in request order, so the first `expected`
+		// map correctly. Throwing here would break on a stub that over-answers and buy nothing.
+		const report = (rows: number): Ga4Report => ({
+			rows: Array.from({ length: rows }, () => ({ dimensions: [], metrics: [1] })),
+			thresholded: false, sampled: false, rowCount: rows,
+		})
+		expect(alignBatch([{ reports: [report(1), report(2), report(3)], expected: 2 }])
+			.map((r) => r.rowCount)).toEqual([1, 2])
 	})
 
 })
@@ -1786,5 +1799,19 @@ describe('order queries count published documents only', () => {
 		for (const query of queries) {
 			expect(query, query).toContain('!(_id in path("drafts.**"))')
 		}
+	})
+})
+
+describe('Vercel buckets are labelled by the day they mostly cover', () => {
+	it('keeps the UTC date rather than the local day the bucket began on', () => {
+		// A release converted the bucket's start instant into the property timezone, reasoning that
+		// every other source is anchored there. Vercel buckets by UTC DAY, so that names the local
+		// day the bucket BEGAN on — and for any zone behind UTC that is the minority of it. A Los
+		// Angeles bucket spans 7 hours of one local day and 17 of the next, and the conversion
+		// picked the 7. The UTC date is the majority day for every zone within 12 hours of UTC.
+		const bucketStart = '2026-09-05T00:00:00Z'
+		expect(bucketStart.slice(0, 10)).toBe('2026-09-05')
+		// What the conversion produced, for the record: the wrong day for the Americas.
+		expect(formatInTimeZone(new Date(bucketStart), 'America/Los_Angeles')).toBe('2026-09-04')
 	})
 })

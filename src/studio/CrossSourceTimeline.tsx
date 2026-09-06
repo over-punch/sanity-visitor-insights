@@ -24,7 +24,7 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react'
 import { Card, Stack, Text } from '@liiift-studio/sanity-ui-compat'
 import { scaleUtc, scaleLinear } from 'd3-scale'
-import { line as d3Line, area as d3Area, curveMonotoneX } from 'd3-shape'
+import { line as d3Line, area as d3Area, curveLinear } from 'd3-shape'
 import { max as d3Max } from 'd3-array'
 import { formatCount, formatMoney, formatPercent } from './Figure'
 
@@ -73,6 +73,20 @@ export interface Series {
 	 * a site running at a flat 20% would show a full-height line and read as healthy.
 	 */
 	domain?: [number, number]
+	/**
+	 * The same series in the previous equivalent window, aligned by day OFFSET rather than by date.
+	 *
+	 * Drawn as a quiet ghost behind the row. Without it every row is an unanchored silhouette: a
+	 * flat line at 60 and a flat line at 6,000 are the same picture, and "traffic looks lumpy" is an
+	 * impression nobody can falsify. The comparison envelope is already fetched and already handed
+	 * to the metric cards, so this costs a prop and no network.
+	 *
+	 * What it buys is bigger than a reference line. It turns the tool's most fragile asset — a dated
+	 * alarm produced by a heuristic with a 21-day floor and a percentile threshold — from something
+	 * the reader has to trust into something they can check: the coverage row's step reads against
+	 * last period's flat line whether or not the detector fired.
+	 */
+	comparison?: SeriesPoint[]
 	points: SeriesPoint[]
 	/**
 	 * What a lossier source saw of the same thing.
@@ -133,7 +147,8 @@ export interface CrossSourceTimelineProps {
  */
 const WIDTH = 760
 /** Height of one series row. */
-const ROW_HEIGHT = 92
+/** Space below each baseline, so a row's marks do not touch the row beneath. */
+const BASELINE_GUTTER = 18
 /** Space under the last row for the shared date axis. */
 const AXIS_HEIGHT = 26
 /** Left gutter for each row's own y-axis labels — 7% of the width, not 52%. */
@@ -145,10 +160,9 @@ const AXIS_TYPE = 11
 /**
  * Height reserved above each row's plot for its label, in user units.
  *
- * ROW_HEIGHT was raised by this amount plus a little when the strip was introduced. Carving it out
- * of the existing 74 left a 40px plot inside a 74px row — 34px of gutter serving 40px of data,
- * where a doubling of daily pageviews moved the line about thirteen pixels. The overlap was real;
- * paying for the fix out of the data band was not.
+ * The row's total height is this strip plus the data band plus the baseline gutter, and the band
+ * now tracks the plot width — so reserving the strip costs the row's height rather than the data's.
+ * An earlier version carved it out of a fixed row and left a 40px plot inside a 74px one.
  *
  * Enough for AXIS_TYPE plus its descender and a little air. The plot starts below it, so a row's
  * peak can reach the top of its scale without meeting its own name.
@@ -394,6 +408,20 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 
 	const plotWidth = Math.max(120, measured - GUTTER - RIGHT_PAD)
 
+	/*
+	 * Row height tracks the plot width, instead of being a constant.
+	 *
+	 * The chart measures itself to hold type at 11px — a typographic concern — and then left the
+	 * geometric one alone: a fixed 58px data band is 336x58 at a narrow pane and 1336x58 at a wide
+	 * one. Twenty-three to one. Every series flattens into a horizontal smear exactly where the
+	 * reader has the most room to look, and slope is the whole reason a time series is a line.
+	 *
+	 * Banked loosely toward a readable aspect and clamped at both ends, so a narrow pane does not
+	 * get a squashed row and a wide one does not get a chart that will not fit on screen.
+	 */
+	const bandHeight = Math.round(Math.max(58, Math.min(150, plotWidth / 7)))
+	const rowHeight = bandHeight + LABEL_STRIP + BASELINE_GUTTER
+
 	// useLayoutEffect, and it measures once before the browser paints. With a plain effect the
 	// first frame drew a 760-unit viewBox inside a real-width box with a fixed CSS height, and the
 	// default preserveAspectRatio letterboxed it — a 400px pane rendered the whole chart at 52%
@@ -424,7 +452,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 		observer.observe(frame)
 		return () => observer.disconnect()
 	}, [frameNode])
-	const height = TOP_PAD + series.length * ROW_HEIGHT + AXIS_HEIGHT
+	const height = TOP_PAD + series.length * rowHeight + AXIS_HEIGHT
 
 	const x = useMemo(() => {
 		if (dates.length === 0) return null
@@ -762,17 +790,20 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 								x1={at}
 								x2={at}
 								y1={TOP_PAD}
-								y2={TOP_PAD + series.length * ROW_HEIGHT - 18}
+								// Down to the axis type, not to the last baseline: the rules existed to let a
+								// reader date a peak without hovering, and stopping 38px short of the labels
+								// they connect to left exactly the gap they were meant to close.
+								y2={height - AXIS_HEIGHT + 4}
 								stroke="currentColor"
 								strokeWidth={1}
-								opacity={0.08}
+								opacity={0.18}
 							/>
 						)
 					})}
 
 					{series.map((row, rowIndex) => {
-						const top = TOP_PAD + rowIndex * ROW_HEIGHT
-						const bottom = top + ROW_HEIGHT - 18
+						const top = TOP_PAD + rowIndex * rowHeight
+						const bottom = top + rowHeight - BASELINE_GUTTER
 						// The row label gets its own strip above the plot rather than sharing it. The
 						// label sat at `top + 12` with the scale's maximum AT `top`, so by construction
 						// the tallest point of every row — the peak day, the thing the row exists to
@@ -800,7 +831,12 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						const at = (p: SeriesPoint) => x(new Date(`${p.date}T00:00:00Z`))
 						const defined = (p: SeriesPoint) => p.value !== null
 
-						const lineGen = d3Line<SeriesPoint>().defined(defined).x(at).y((p) => y(p.value as number)).curve(curveMonotoneX)
+						// Linear, not monotone. The file's own header argues that a smooth curve through
+						// seven sales draws revenue on days that had none, and switches those rows to
+						// stems — then kept the curve on the count rows, where it invents values between
+						// measured days just the same. On a week across a wide pane that is a chart made
+						// almost entirely of interpolation.
+						const lineGen = d3Line<SeriesPoint>().defined(defined).x(at).y((p) => y(p.value as number)).curve(curveLinear)
 
 						// The blind spot: the area between what happened and what the lossier source
 						// saw of it. Filled, not outlined, because it is a QUANTITY — the traffic the
@@ -815,9 +851,19 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 							.x(at)
 							.y0((p) => y(byDate.get(p.date) as number))
 							.y1((p) => y(p.value as number))
-							.curve(curveMonotoneX)
+							.curve(curveLinear)
 
 						const path = row.mark === 'events' ? '' : lineGen(row.points) ?? ''
+
+						// The previous window, positioned by offset: its own dates are meaningless here,
+						// so point i is drawn at the x of day i of THIS window. That is what makes the
+						// two shapes comparable rather than merely adjacent.
+						const ghost = row.comparison && row.comparison.length > 1
+							? lineGen(row.comparison.slice(0, dates.length).map((point, i) => ({
+								date: dates[i] ?? point.date,
+								value: point.value,
+							}))) ?? ''
+							: ''
 
 						// One stem per day that had one. Width tracks the day slot so a year of data
 						// stays a texture rather than a picket fence, with a floor so a single order
@@ -921,6 +967,19 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 								    both themes. It is constant because a quantity that brightens when
 								    the pointer enters the chart is jitter, not information. */}
 								<g clipPath={`url(#${clipId})`}>
+								{/* Behind everything, and quiet enough to read as context rather than as a
+								    second answer. Dashed so it is distinguishable in a screenshot and to
+								    anyone who cannot separate two greys. */}
+								{ghost && (
+									<path
+										d={ghost}
+										fill="none"
+										stroke="currentColor"
+										strokeWidth={1}
+										strokeDasharray="2 3"
+										opacity={0.35}
+									/>
+								)}
 								{gap && <path d={gap} fill="currentColor" opacity={0.48} />}
 
 								{shortfallLine && (
@@ -996,7 +1055,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 									x1={at}
 									x2={at}
 									y1={TOP_PAD - 6}
-									y2={TOP_PAD + series.length * ROW_HEIGHT - 18}
+									y2={TOP_PAD + series.length * rowHeight - BASELINE_GUTTER}
 									stroke="currentColor"
 									strokeWidth={1.25}
 									strokeDasharray="4 3"
@@ -1024,7 +1083,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 								x={GUTTER}
 								y={TOP_PAD - 8}
 								width={Math.max(0, x(new Date(`${dates[brushed[0]]}T00:00:00Z`)) - GUTTER)}
-								height={series.length * ROW_HEIGHT - 10}
+								height={series.length * rowHeight - 10}
 								fill="var(--card-bg-color, #ffffff)"
 								opacity={0.72}
 							/>
@@ -1032,7 +1091,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 								x={x(new Date(`${dates[brushed[1]]}T00:00:00Z`))}
 								y={TOP_PAD - 8}
 								width={Math.max(0, GUTTER + plotWidth - x(new Date(`${dates[brushed[1]]}T00:00:00Z`)))}
-								height={series.length * ROW_HEIGHT - 10}
+								height={series.length * rowHeight - 10}
 								fill="var(--card-bg-color, #ffffff)"
 								opacity={0.72}
 							/>
@@ -1044,7 +1103,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 							x1={x(new Date(`${hoveredDate}T00:00:00Z`))}
 							x2={x(new Date(`${hoveredDate}T00:00:00Z`))}
 							y1={TOP_PAD - 6}
-							y2={TOP_PAD + series.length * ROW_HEIGHT - 18}
+							y2={TOP_PAD + series.length * rowHeight - 18}
 							stroke="currentColor"
 							strokeWidth={1}
 							opacity={0.8}
@@ -1152,13 +1211,21 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 /** Chart frame. */
 const frameStyle: React.CSSProperties = { width: '100%', overflow: 'hidden' }
 
-/** The hover readout: every series at one date, wrapping on a narrow pane. */
+/**
+ * The hover readout: every series at one date, wrapping on a narrow pane.
+ *
+ * The reserved height covers the wrapped case, not the empty one. At `minHeight: 18` the row grew
+ * from one line to four or five on pointer-enter and shrank back on leave, pushing the legend, the
+ * caveats and the disclosure sixty pixels down and up again — the page moving while the reader
+ * tracks a crosshair across it. Reserving the maximum costs a band of empty space and buys a chart
+ * that holds still.
+ */
 const readoutRow: React.CSSProperties = {
 	display: 'flex',
 	gap: 14,
 	flexWrap: 'wrap',
 	alignItems: 'baseline',
-	minHeight: 18,
+	minHeight: 54,
 }
 
 /** The explicit reveal control, so the detail is not pointer-only. */

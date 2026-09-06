@@ -296,8 +296,23 @@ export function createVisitorInsightsHandler(options: HandlerOptions) {
 				 * vary with the outcome. Twenty seconds is still enough to stop a reload storm while
 				 * letting the next look find the source recovered.
 				 */
-				const degraded = Object.values(envelope.sources).some((source) => source?.status !== 'ok')
-				return degraded ? Math.min(ttl, 20_000) : ttl
+				/*
+				 * The OUTCOME, not the configuration.
+				 *
+				 * `sources` is built once from config and env before any report runs, and no report
+				 * mutates it — so this was a constant per deployment, and wrong in both directions. A
+				 * GA4 429 is caught inside the report and returned as unavailable metrics while
+				 * `sources.ga4` still reads ok, so the failure this was written to catch was cached
+				 * for the full window exactly as before. And a site that simply has no Mailchimp
+				 * reports that source as unconfigured forever, so every healthy load on TDF was cached
+				 * for twenty seconds instead of five minutes — fifteen times the GA4 fan-out against a
+				 * property with a ten-concurrent ceiling, defeating the quota guard this cache exists
+				 * to provide.
+				 *
+				 * A source that failed says so in the metrics it could not produce, which is the only
+				 * signal that reflects what actually happened on this request.
+				 */
+				return sourceFailed(envelope) ? Math.min(ttl, 20_000) : ttl
 			})
 
 			res.status(200).json(envelope)
@@ -318,6 +333,30 @@ interface RunContext {
 	sanity: SanityQueryClient | null
 	mailchimp: MailchimpClient | null
 	notices: string[]
+}
+
+/**
+ * Whether a source actually failed while producing this envelope.
+ *
+ * Reads the metrics the report published: a caught upstream error surfaces as `unavailable` with
+ * reason `source_error`, which is the only signal in the response that reflects what happened on
+ * this request. `sources` cannot be used — it is built from configuration before any report runs
+ * and no report mutates it, so it says the same thing on a healthy load and a failing one.
+ *
+ * Shallow on purpose. Every metric a report publishes is a top-level field of its data object, and
+ * walking arbitrary depth would put an unbounded traversal on the response path of every request.
+ *
+ * @param envelope - the report envelope about to be cached
+ */
+function sourceFailed(envelope: ReportEnvelope<unknown>): boolean {
+	const data = envelope.data
+	if (!data || typeof data !== 'object') return false
+	return Object.values(data as Record<string, unknown>).some((value) => (
+		!!value
+		&& typeof value === 'object'
+		&& (value as { status?: string }).status === 'unavailable'
+		&& (value as { reason?: string }).reason === 'source_error'
+	))
 }
 
 /** Dispatch to a report by name. A plain switch, so the set of reachable code paths is closed. */

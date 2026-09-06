@@ -580,14 +580,20 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
 							  * the revenue split and the catalogue index already follow.
 							  */}
 							<Text size={0} muted>
+								{/* Gated on BOTH ends. The share was gated on `entry`, which is stage zero and
+								    therefore the funnel's largest number — so it was withheld only when the
+								    whole funnel had under thirty entries, never when the rung itself was
+								    thin. And a withheld step-to-step rate fell silently to an empty string,
+								    leaving exactly the unexplained gap the share half avoids. */}
 								{index === 0
 									? 'entry step'
-									: entry >= MIN_RATE_DENOMINATOR
+									: entry >= MIN_RATE_DENOMINATOR && stage.value >= MIN_RATE_DENOMINATOR
 										? `${formatPercent(share, 1)} of ${stages[0]?.label.toLowerCase()}`
 										: 'too few to give a rate'}
 								{index > 1 && stage.conversionFromPrevious !== null && previous
-									&& (previous.value ?? 0) >= MIN_RATE_DENOMINATOR
-									? ` · ${formatPercent(stage.conversionFromPrevious, 1)} of ${previous.label.toLowerCase()}`
+									? (previous.value ?? 0) >= MIN_RATE_DENOMINATOR && stage.value >= MIN_RATE_DENOMINATOR
+										? ` · ${formatPercent(stage.conversionFromPrevious, 1)} of ${previous.label.toLowerCase()}`
+										: ` · too few from ${previous.label.toLowerCase()} to give a rate`
 									: ''}
 							</Text>
 						</div>
@@ -642,8 +648,6 @@ function funnelStage(active: boolean): React.CSSProperties {
 	}
 }
 
-/** The rung's track. */
-const funnelTrack: React.CSSProperties = { height: 10, overflow: 'hidden' }
 
 /**
  * The fill for a bar's measured portion.
@@ -676,8 +680,6 @@ const barTrack: React.CSSProperties = {
 	opacity: 0.12,
 }
 
-/** Chart frame, so the hover readout can sit over the plot. */
-const chartFrame: React.CSSProperties = { position: 'relative', width: '100%' }
 
 /** Hover readout, pinned top-right of the plot and out of the lines' way. */
 const readout: React.CSSProperties = {
@@ -701,13 +703,6 @@ const barHeader: React.CSSProperties = {
 	flexWrap: 'wrap',
 }
 
-/** Chart legend, wrapping rather than overflowing. */
-const legendRow: React.CSSProperties = {
-	display: 'flex',
-	gap: 12,
-	alignItems: 'center',
-	flexWrap: 'wrap',
-}
 
 /** Disclosure control for the collapsed caveats. Underlined so it reads as actionable text. */
 const disclosure: React.CSSProperties = {

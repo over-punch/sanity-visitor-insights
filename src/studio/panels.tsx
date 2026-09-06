@@ -286,6 +286,8 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								complete: true,
 								unit: 'count',
 								points: (data.crossSource ?? []).map((d) => ({ date: d.date, value: d.vercelPageviews })),
+								// The same row last period, so the reader can see whether this shape is normal.
+								comparison: (previous?.crossSource ?? []).map((d) => ({ date: d.date, value: d.vercelPageviews })),
 								shortfall: {
 									label: 'Seen by GA4',
 									source: 'GA4',
@@ -324,6 +326,14 @@ export function OverviewPanel({ data, previous, onBrush }: {
 									// draws a full-height line and reads as healthy.
 									domain: [0, 1] as [number, number],
 									points: (data.crossSource ?? []).map((d) => ({
+										date: d.date,
+										value: d.vercelPageviews !== null && d.ga4Pageviews !== null && d.vercelPageviews > 0
+											? Math.min(1, d.ga4Pageviews / d.vercelPageviews)
+											: null,
+									})),
+									// The most valuable ghost in the chart: a collapse reads as a step away
+									// from last period's flat line, whether or not the detector fired.
+									comparison: (previous?.crossSource ?? []).map((d) => ({
 										date: d.date,
 										value: d.vercelPageviews !== null && d.ga4Pageviews !== null && d.vercelPageviews > 0
 											? Math.min(1, d.ga4Pageviews / d.vercelPageviews)

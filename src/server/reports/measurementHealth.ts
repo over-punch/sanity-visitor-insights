@@ -322,7 +322,7 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	let vercelIncompleteWindows = 0
 	if (vercel) {
 		try {
-			const result = await vercel.pageviews(range.start, range.end, range.timezone)
+			const result = await vercel.pageviews(range.start, range.end)
 			// Null rather than zero when Vercel's response did not carry the figure: this panel
 			// exists to distinguish "measured nothing" from "did not measure", and it must hold
 			// itself to that first.
