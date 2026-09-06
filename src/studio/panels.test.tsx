@@ -11,9 +11,12 @@
  * an unavailable metric rendering as "0" and being read as a real measurement.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { readFileSync } from 'node:fs'
+import { captureModel, fromOrders } from '../core/capture'
+import { forgetShortfalls, knownShortfall, rememberShortfall } from './useReport'
+import { dayIndexAt } from './CrossSourceTimeline'
 import React from 'react'
 import {
 	AcquisitionPanel,
@@ -1156,7 +1159,10 @@ describe('panel structure', () => {
 		expect(html).toMatch(/Revenue up \d+%/)
 		expect(html).toContain('Traffic flat')
 		expect(html).toContain('1 campaign sent')
-		expect(html).toContain('nothing broken')
+		// No all-clear is claimed at all: this line only ever knew one coverage ratio, and "nothing
+		// broken" spoke for the site, the checkout and four other tabs.
+		expect(html).not.toContain('nothing broken')
+		expect(html).toContain('Revenue up')
 	})
 
 	it('says the measurement disagrees rather than claiming nothing is broken', () => {
@@ -1366,47 +1372,62 @@ describe('the chart draws at a 1:1 scale', () => {
 		expect(html).not.toContain('height:auto')
 	})
 
-	it('renders type at a real pixel size, because the viewBox tracks the width', () => {
-		// A fixed 760-unit viewBox meant font-size 11 rendered at 5.8px in a 400px pane and ~22px
-		// at full width, where the row labels came out larger than the heading above them.
+	it('server-renders at the documented default width, which the client then replaces', () => {
+		// This is all static markup can prove. That the viewBox tracks the MEASURED width — the
+		// actual claim — needs a DOM, and is covered by the dayIndexAt tests, which fail if the two
+		// spaces disagree. Asserting viewBox height against CSS height would be a tautology: both
+		// come from the same `height` variable.
 		const html = render(<OverviewPanel data={data as never} />)
-		const viewBox = html.match(/viewBox="0 0 (\d+) (\d+)"/)
-		const height = html.match(/width:100%;height:(\d+)/)
-		expect(viewBox).not.toBeNull()
-		// Server-rendered at the default width; the client's first measurement replaces it. What
-		// matters is that the viewBox height and the CSS height agree, so the scale is 1.
-		expect(viewBox?.[2]).toBe(height?.[1])
-		expect(html).toContain('font-size="11"')
+		expect(html).toMatch(/viewBox="0 0 760 \d+"/)
 	})
 })
 
-describe('the answer comes before the provenance', () => {
+describe('chrome sits on the side of the figures that matches what it does', () => {
 	/**
 	 * A SOURCE test, deliberately.
 	 *
 	 * `ReportPanel` only reaches its ready branch after a fetch resolves, and these tests render to
 	 * static markup, where effects never run — so there is no rendered output to assert against
 	 * without building a fetch harness for one ordering question. Reading the source is the honest
-	 * way to check it, as long as it says so.
+	 * way to check it, as long as it says so. Its limit is real: a wrapper with CSS `order` or a
+	 * portal would keep this green while the visual order regressed.
 	 */
 	const source = readFileSync(new URL('./VisitorInsightsTool.tsx', import.meta.url), 'utf8')
 	const ready = source.slice(source.indexOf("{state.status === 'ready' && ("))
+	const panel = ready.indexOf("tabId === 'overview'")
 
-	it('renders the panel above the source row, the caution cards and the revalidation notice', () => {
-		// The reader used to meet a source-status row, up to two amber caution cards and a
-		// comparison sentence before the first figure. None of that changes day to day; the verdict
-		// does.
-		const panel = ready.indexOf("tabId === 'overview'")
+	it('finds the panel body', () => {
 		expect(panel).toBeGreaterThan(-1)
-		for (const chrome of ['<SourceStatusRow', '<NoticeList', 'state.revalidationError', 'Changes are against']) {
-			expect(ready.indexOf(chrome), `${chrome} should follow the panel`).toBeGreaterThan(panel)
-		}
 	})
 
-	it('still renders all of it', () => {
-		// The reorder is a move, not a delete: every block that was above the panel is below it.
-		for (const chrome of ['<SourceStatusRow', '<NoticeList', 'state.revalidationError', 'Figures cover']) {
-			expect(ready).toContain(chrome)
+	// The axis is whether the block changes how the figures below it are READ, not whether it is
+	// about the instrument. The source row renders only when a source failed, so when it renders at
+	// all it explains an empty panel; the revalidation card says the figures are stale; and the
+	// comparison sentence defines every delta beneath it.
+	for (const [chrome, why] of [
+		['<SourceStatusRow', 'explains why the panel below it is empty'],
+		['state.revalidationError && (', 'says the figures are stale before they are read'],
+		// The JSX, not the comment above it — matching on prose let this assert the wrong token.
+		['{state.envelope.comparison.range.start}', 'is the legend for every delta beneath it'],
+	] as const) {
+		it(`puts ${chrome} above the figures, because it ${why}`, () => {
+			expect(ready.indexOf(chrome)).toBeGreaterThan(-1)
+			expect(ready.indexOf(chrome)).toBeLessThan(panel)
+		})
+	}
+
+	// These read the same most days, so at the top they were amber wallpaper above every figure.
+	for (const chrome of ['<NoticeList', 'Figures cover']) {
+		it(`puts ${chrome} below the figures, because it does not change day to day`, () => {
+			expect(ready.indexOf(chrome)).toBeGreaterThan(panel)
+		})
+	}
+
+	it('renders each block exactly once, so a move cannot become a duplicate', () => {
+		// The weakest link in a source test: substring presence would also be satisfied by a block
+		// left behind under `{false && …}`. Counting at least rules out the copy-paste failure.
+		for (const chrome of ['<SourceStatusRow', '<NoticeList', 'state.revalidationError && (']) {
+			expect(ready.split(chrome).length - 1, chrome).toBe(1)
 		}
 	})
 })
@@ -1430,16 +1451,187 @@ describe('discrete events are not drawn as a continuous line', () => {
 		timelineEvents: [],
 	}
 
-	it('draws one mark per day that had an order, and none for the days that did not', () => {
+	it('draws a stem on each day that had an order', () => {
 		// A monotone curve through two points spread over a month drew a smooth rise and fall
 		// across twenty-eight days on which nothing happened.
 		const html = render(<OverviewPanel data={data as never} />)
-		expect((html.match(/<rect/g) ?? []).length).toBe(2)
+		const rects = html.match(/<rect[^>]*>/g) ?? []
+		const stems = rects.filter((r) => !/height="1"/.test(r))
+		expect(stems.length).toBe(2)
 	})
 
-	it('still draws the traffic row as a line', () => {
-		// The change is scoped to event rows; a continuous quantity stays continuous.
+	it('marks the days that were measured at zero, rather than leaving them blank', () => {
+		// Drawing nothing for a zero made "no sales that day" identical to "Sanity reported nothing
+		// for that day" — the distinction this package's figure primitives exist to keep.
+		const html = render(<OverviewPanel data={data as never} />)
+		const rects = html.match(/<rect[^>]*>/g) ?? []
+		expect(rects.filter((r) => /height="1"/.test(r)).length).toBe(28)
+	})
+
+	it('leaves a day with no measurement blank', () => {
+		// Null, not zero. Nothing is drawn, because nothing is known.
+		const gappy = {
+			...data,
+			crossSource: (data.crossSource as Array<Record<string, unknown>>).map((d, i) =>
+				i < 10 ? { ...d, orders: null } : d,
+			),
+		}
+		const html = render(<OverviewPanel data={gappy as never} />)
+		const rects = html.match(/<rect[^>]*>/g) ?? []
+		// 30 days; days 0-9 unmeasured, which swallows the order on day 4. That leaves 20 measured
+		// days carrying one order: 19 zero ticks and 1 stem.
+		expect(rects.filter((r) => /height="1"/.test(r)).length).toBe(19)
+		expect(rects.filter((r) => !/height="1"/.test(r)).length).toBe(1)
+	})
+
+	it('does not turn the traffic row into stems too', () => {
+		// This guards OVER-application, not the change itself: reverting `mark: 'events'` would make
+		// every row a line and leave this green. It is here because a continuous quantity drawn as
+		// discrete events would be the mirror-image lie.
 		const html = render(<OverviewPanel data={data as never} />)
 		expect(html).toContain('stroke-width="2"')
+	})
+})
+
+describe('the pointer lands on the day it is over', () => {
+	/**
+	 * `indexAt` needs a live getBoundingClientRect, which static markup does not have — which is
+	 * precisely why this shipped broken. `dayIndexAt` is the same maths, extracted so it can be
+	 * exercised without a DOM.
+	 */
+	const GUTTER = 52
+	const RIGHT_PAD = 12
+	const days = 90
+
+	// Two panes and the SSR default. `plotWidth` is derived the way the component derives it.
+	for (const boxWidth of [400, 760, 1400]) {
+		const plotWidth = Math.max(120, boxWidth - GUTTER - RIGHT_PAD)
+
+		it(`reaches the last day at the right edge of a ${boxWidth}px pane`, () => {
+			// The bug: the conversion divided through a hard-coded 760 while the viewBox tracked the
+			// measured width. At 400px the whole axis compressed into the left half; at 1400px the
+			// last third of the range could not be pointed at.
+			const last = dayIndexAt(boxWidth - RIGHT_PAD, 0, boxWidth, boxWidth, plotWidth, days)
+			expect(last).toBe(days - 1)
+		})
+
+		it(`puts the midpoint of a ${boxWidth}px pane near the middle day`, () => {
+			const mid = dayIndexAt(GUTTER + plotWidth / 2, 0, boxWidth, boxWidth, plotWidth, days)
+			expect(mid).toBeGreaterThan(days / 2 - 2)
+			expect(mid).toBeLessThan(days / 2 + 2)
+		})
+	}
+
+	it('returns null rather than NaN before the chart has been measured', () => {
+		// A collapsed or hidden pane reports zero width; dividing by it gave NaN, and NaN survived
+		// the clamps to become a rendered crosshair at no position.
+		expect(dayIndexAt(300, 0, 0, 760, 696, 90)).toBeNull()
+		expect(dayIndexAt(300, 0, 760, 760, 0, 90)).toBeNull()
+		expect(dayIndexAt(300, 0, 760, 760, 696, 0)).toBeNull()
+	})
+
+	it('clamps outside the plot to the first and last day', () => {
+		expect(dayIndexAt(-500, 0, 760, 760, 696, 90)).toBe(0)
+		expect(dayIndexAt(5000, 0, 760, 760, 696, 90)).toBe(89)
+	})
+})
+
+describe('the coverage ribbon carries the shortfall to the tabs that cannot compute it', () => {
+	beforeEach(() => { forgetShortfalls() })
+
+	it('says nothing when the shortfall has never been measured', () => {
+		// Silence is the honest answer. A panel that cannot say how lossy its source is must not
+		// imply the source is fine.
+		expect(knownShortfall('https://x.test', 'week')).toBeNull()
+	})
+
+	it('remembers a shortfall per site and per window', () => {
+		// Per window, because carrying last week's coverage onto a quarter view is a different lie.
+		rememberShortfall('https://x.test', 'week', undefined, { shortfallRatio: 0.8 })
+		expect(knownShortfall('https://x.test', 'week')).toBe(0.8)
+		expect(knownShortfall('https://x.test', 'quarter')).toBeNull()
+		expect(knownShortfall('https://other.test', 'week')).toBeNull()
+	})
+
+	it('keys custom ranges by their bounds', () => {
+		const a = { start: '2026-08-01', end: '2026-08-07' }
+		const b = { start: '2026-07-01', end: '2026-07-07' }
+		rememberShortfall('https://x.test', 'custom', a, { shortfallRatio: 0.5 })
+		expect(knownShortfall('https://x.test', 'custom', a)).toBe(0.5)
+		expect(knownShortfall('https://x.test', 'custom', b)).toBeNull()
+	})
+
+	it('refuses a ratio outside 0 to 1', () => {
+		// Out of bounds means a bug upstream, not a coverage figure — and a ribbon reading "seeing
+		// -40% of your traffic" would be worse than no ribbon.
+		for (const bad of [-0.2, 1.4, Number.NaN, Number.POSITIVE_INFINITY]) {
+			rememberShortfall('https://x.test', 'week', undefined, { shortfallRatio: bad })
+			expect(knownShortfall('https://x.test', 'week'), String(bad)).toBeNull()
+		}
+	})
+})
+
+describe('the capture cards do not flatter the instrument', () => {
+	it('shows a rate above 100% as what it is, and names the likely cause', () => {
+		// It was clamped with Math.min(1, rate), so a tag firing twice rendered as a flat 100% under
+		// the heading "How much GA4 is seeing" — the failure mode presented as perfection.
+		const model = captureModel([fromOrders(18, 8)])
+		expect(model.rate).toBeGreaterThan(2)
+		const html = render(<DataHealthPanel data={{
+			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.2,
+			ga4Sessions: ok(357), orders: ok(8), consentRate: unavailable('not_instrumented'),
+			vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+			revenue: ok(910), currency: 'USD', orderStatuses: {},
+			interpretation: 'x', daily: [], capture: model,
+			estimatedSessions: unavailable('not_applicable'),
+			audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
+			campaigns: [], crossSource: [], timelineEvents: [],
+		} as never} />)
+		expect(html).toContain('225%')
+		expect(html).toContain('usually a tag firing twice')
+	})
+
+	it('states how far one order moves the orders-based rate', () => {
+		// "The denominator is exact" was on screen; "one order either way moves it fourteen points"
+		// was in a comment. At these volumes the second is the one that decides how to read it.
+		const estimate = fromOrders(2, 7)
+		expect(estimate?.note).toContain('7 orders')
+		expect(estimate?.note).toContain('14 points')
+		expect(estimate?.note).not.toContain('exact')
+	})
+})
+
+describe('a table says accurately what it is showing', () => {
+	const rows = [
+		{ name: 'google', sessions: 300 },
+		{ name: 'direct', sessions: 200 },
+		{ name: 'bot.example', sessions: 100 },
+	]
+	const columns = [
+		{ key: 'name', label: 'Source', sortValue: (r: typeof rows[0]) => r.name, render: (r: typeof rows[0]) => <span>{r.name}</span> },
+		{ key: 'sessions', label: 'Sessions', numeric: true, sortValue: (r: typeof rows[0]) => r.sessions, render: (r: typeof rows[0]) => <span>{r.sessions}</span> },
+	]
+
+	it('does not blame a filter for a dataset that is simply empty', () => {
+		// It always said "No rows match this filter", so a site with no orders — or an unconfigured
+		// GA4 — was told it had filtered its own data away, and went hunting for a control it had
+		// never touched.
+		const html = render(
+			<SortableTable rows={[]} columns={columns as never} rowKey={(r: never) => String(r)} caption="Sources" initialSort="sessions" />,
+		)
+		expect(html).toContain('Nothing to show for this period')
+		expect(html).not.toContain('No rows match this filter')
+	})
+
+	it('counts filter-hidden rows separately from excluded ones', () => {
+		// With nothing typed and nothing excluded, neither count applies — and the old arithmetic
+		// double-counted, because `visible` filters on exclusion as well as on the query.
+		const html = render(
+			<SortableTable rows={rows} columns={columns as never} rowKey={(r: never) => (r as { name: string }).name} caption="Sources" initialSort="sessions" />,
+		)
+		// Matching the status line's own phrasing — the word "excluded" also appears in each row's
+		// exclude control, which is not what this is about.
+		expect(html).not.toMatch(/\d+ rows? hidden/)
+		expect(html).not.toMatch(/\d+ excluded/)
 	})
 })

@@ -154,6 +154,39 @@ function tickLabel(date: Date): string {
 }
 
 /**
+ * Map a pointer's page X to a day index.
+ *
+ * Extracted from the component so it can be tested: `indexAt` needs a live
+ * `getBoundingClientRect`, and these tests render to static markup with no DOM — which is exactly
+ * why the bug this guards against shipped. The chart's viewBox tracks the measured width, and this
+ * conversion was left dividing through the 760-unit SSR default, so on a 500px pane the right third
+ * of pointer travel clamped to the last day and on a 900px pane the last sixth of days could not be
+ * reached at all. The crosshair did not land under the cursor and a brush did not select the span
+ * that was dragged.
+ *
+ * @param clientX - the pointer's viewport X
+ * @param left - the chart box's viewport left edge
+ * @param boxWidth - the chart box's rendered CSS width; 0 or less yields null
+ * @param viewBoxWidth - the width the viewBox is currently set to, in user units
+ * @param plotWidth - the drawable width inside the gutters, in user units
+ * @param count - how many days are plotted
+ */
+export function dayIndexAt(
+	clientX: number,
+	left: number,
+	boxWidth: number,
+	viewBoxWidth: number,
+	plotWidth: number,
+	count: number,
+): number | null {
+	if (count === 0 || boxWidth <= 0 || plotWidth <= 0) return null
+	const ratio = ((clientX - left) / boxWidth) * viewBoxWidth
+	const clamped = Math.max(GUTTER, Math.min(GUTTER + plotWidth, ratio))
+	const index = Math.round(((clamped - GUTTER) / plotWidth) * (count - 1))
+	return Math.max(0, Math.min(count - 1, index))
+}
+
+/**
  * The cross-source timeline.
  *
  * Renders nothing rather than an empty frame when there is not enough to plot — two points cannot
@@ -183,6 +216,19 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 	 */
 	const [measured, setMeasured] = useState(WIDTH)
 	const frameRef = useRef<SVGSVGElement | null>(null)
+	/**
+	 * The chart element, as STATE as well as a ref.
+	 *
+	 * A ref alone cannot drive the measuring effect. The component returns null below three dates,
+	 * so on a mount with no data the ref is null when the effect runs — and with a stable dep array
+	 * the effect never runs again, leaving the chart pinned at the 760 default with no path out. A
+	 * callback ref makes attachment an observable event.
+	 */
+	const [frameNode, setFrameNode] = useState<SVGSVGElement | null>(null)
+	const attachFrame = useCallback((node: SVGSVGElement | null) => {
+		frameRef.current = node
+		setFrameNode(node)
+	}, [])
 
 	// Every date any series reported, ascending. Built from the union so a series with a gap does
 	// not shorten the axis for the others.
@@ -194,17 +240,36 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 
 	const plotWidth = Math.max(120, measured - GUTTER - RIGHT_PAD)
 
-	React.useEffect(() => {
-		const frame = frameRef.current
-		if (!frame || typeof ResizeObserver === 'undefined') return
+	// useLayoutEffect, and it measures once before the browser paints. With a plain effect the
+	// first frame drew a 760-unit viewBox inside a real-width box with a fixed CSS height, and the
+	// default preserveAspectRatio letterboxed it — a 400px pane rendered the whole chart at 52%
+	// scale, centred in dead space, then snapped. That happened on every mount, so every tab switch
+	// and every range change flashed it.
+	React.useLayoutEffect(() => {
+		const frame = frameNode
+		if (!frame) return
+
+		// Functional, so the effect does not depend on `measured`. Depending on it tore the
+		// observer down and rebuilt it on every width change — avoidable churn, and the shape that
+		// produces "ResizeObserver loop completed with undelivered notifications".
+		const apply = (width: number) => {
+			// Rounded, so a sub-pixel resize does not churn the whole path set. A zero width is a
+			// collapsed or hidden pane and carries no information, so the last good width stands.
+			if (width <= 0) return
+			const next = Math.round(width)
+			setMeasured((current) => (Math.abs(next - current) > 1 ? next : current))
+		}
+
+		apply(frame.getBoundingClientRect().width)
+		if (typeof ResizeObserver === 'undefined') return
+
 		const observer = new ResizeObserver((entries) => {
 			const width = entries[0]?.contentRect.width
-			// Rounded, so a sub-pixel resize does not churn the whole path set.
-			if (width && Math.abs(width - measured) > 1) setMeasured(Math.round(width))
+			if (width !== undefined) apply(width)
 		})
 		observer.observe(frame)
 		return () => observer.disconnect()
-	}, [measured])
+	}, [frameNode])
 	const height = TOP_PAD + series.length * ROW_HEIGHT + AXIS_HEIGHT
 
 	const x = useMemo(() => {
@@ -220,12 +285,9 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 			const frame = frameRef.current
 			if (!frame || dates.length === 0) return null
 			const box = frame.getBoundingClientRect()
-			const ratio = ((clientX - box.left) / box.width) * WIDTH
-			const clamped = Math.max(GUTTER, Math.min(GUTTER + plotWidth, ratio))
-			const index = Math.round(((clamped - GUTTER) / plotWidth) * (dates.length - 1))
-			return Math.max(0, Math.min(dates.length - 1, index))
+			return dayIndexAt(clientX, box.left, box.width, measured, plotWidth, dates.length)
 		},
-		[dates.length, plotWidth],
+		[dates.length, plotWidth, measured],
 	)
 
 	/**
@@ -270,6 +332,21 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 		if (real.length === 0) return `${row.label}: no data`
 		const top = real.reduce((best, p) => (p.value > best.value ? p : best), real[0]!)
 		const total = real.reduce((sum, p) => sum + p.value, 0)
+
+		// `role="img"` prunes the descendants, so this sentence IS the chart for a screen reader —
+		// it has to describe what is actually drawn. An event row draws stems on the days something
+		// happened, so describing it as a shape "peaking" somewhere asserted a curve that does not
+		// exist, and on an all-zero row it read "peaking at $0" beside a row drawing nothing.
+		if (row.mark === 'events') {
+			const active = real.filter((p) => p.value !== 0)
+			if (active.length === 0) {
+				return `${row.label} (${row.source}): nothing on any of the ${real.length} days measured`
+			}
+			return `${row.label} (${row.source}): ${formatValue(total, row.unit, currency)} across `
+				+ `${active.length} of ${real.length} days, the largest ${formatValue(top.value, row.unit, currency)} `
+				+ `on ${tickLabel(new Date(`${top.date}T00:00:00Z`))}`
+		}
+
 		return `${row.label} (${row.source}): ${formatValue(total, row.unit, currency)} in total, `
 			+ `peaking at ${formatValue(top.value, row.unit, currency)} on ${tickLabel(new Date(`${top.date}T00:00:00Z`))}`
 	}
@@ -301,7 +378,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 		<Stack space={3}>
 			<div style={frameStyle}>
 				<svg
-					ref={frameRef}
+					ref={attachFrame}
 					viewBox={`0 0 ${measured} ${height}`}
 					// The viewBox tracks the measured width, so the scale is exactly 1 and every size
 					// here is a real CSS pixel. Height is fixed rather than derived from the aspect
@@ -409,10 +486,26 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						// One stem per day that had one. Width tracks the day slot so a year of data
 						// stays a texture rather than a picket fence, with a floor so a single order
 						// in a quarter is still findable.
-						const slot = plotWidth / Math.max(1, dates.length)
-						const stemWidth = Math.max(1.5, Math.min(9, slot - 1))
+						// The pitch is between ENDPOINTS, so it divides by the number of gaps, not the
+						// number of days. The inter-stem gutter only exists when there is room for
+						// one: at 365 days in a narrow pane the pitch is under a pixel, `pitch - 1`
+						// goes negative, and the 1.5 floor then drew every stem wider than its own
+						// day — adjacent days merged into a solid slab that overstated each one.
+						const pitch = plotWidth / Math.max(1, dates.length - 1)
+						const stemWidth = Math.max(1, Math.min(9, pitch > 2 ? pitch - 1 : pitch))
+						// Non-zero, either sign. Filtering on `> 0` dropped refunds and chargebacks from
+						// the drawing while `shapeOf` still counted them in the total, so the picture
+						// and its own description disagreed.
 						const stems = row.mark === 'events'
-							? row.points.filter((p) => p.value !== null && (p.value as number) > 0)
+							? row.points.filter((p) => p.value !== null && (p.value as number) !== 0)
+							: []
+
+						// Days measured as zero, marked on the baseline. Drawing nothing for them made a
+						// day with no sales identical to a day Sanity never reported — the one
+						// distinction this package exists to keep (see the header of Figure.tsx). The
+						// tick is at the axis, so it reads as "measured, and it was nothing".
+						const zeroes = row.mark === 'events'
+							? row.points.filter((p) => p.value === 0)
 							: []
 						const gap = row.shortfall ? gapGen(row.points) ?? '' : ''
 						// The lossier source's own line, revealed only while reading a day.
@@ -462,20 +555,40 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 									<path d={shortfallLine} fill="none" stroke="currentColor" strokeWidth={1.5} strokeDasharray="6 4" opacity={0.8} />
 								)}
 
+								{zeroes.map((p) => {
+									const cx = at(p)
+									if (!Number.isFinite(cx)) return null
+									return (
+										<rect
+											key={`zero-${p.date}`}
+											x={Math.max(GUTTER, Math.min(GUTTER + plotWidth - stemWidth, cx - stemWidth / 2))}
+											y={bottom - 1}
+											width={stemWidth}
+											height={1}
+											fill="currentColor"
+											opacity={0.3}
+										/>
+									)
+								})}
+
 								{stems.map((p) => {
 									const cx = at(p)
-									const top = y(p.value as number)
-									if (!Number.isFinite(cx) || !Number.isFinite(top)) return null
+									// Not `top`: that is the row band's origin, four lines up in the same scope.
+									const headY = y(p.value as number)
+									if (!Number.isFinite(cx) || !Number.isFinite(headY)) return null
 									return (
 										<rect
 											key={p.date}
-											x={cx - stemWidth / 2}
-											y={top}
+											// Clamped to the plot. The first and last day sit exactly on the
+											// gutter edges, so a centred stem hung up to half its width outside
+											// them — the first one into the y-axis label column.
+											x={Math.max(GUTTER, Math.min(GUTTER + plotWidth - stemWidth, cx - stemWidth / 2))}
+											y={Math.min(headY, bottom)}
 											width={stemWidth}
 											// Floored at 1.5px: a day whose value rounds to nothing on this
 											// scale still happened, and drawing it as zero height would say
 											// it did not.
-											height={Math.max(1.5, bottom - top)}
+											height={Math.max(1.5, Math.abs(bottom - headY))}
 											fill="currentColor"
 											opacity={0.75}
 										/>
@@ -633,7 +746,9 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 				)}
 					{series.map((row) => (
 					<Text key={row.key} size={0} muted>
-						<span aria-hidden="true">{row.complete ? '───' : '╌╌╌'}</span> {row.label} ({row.source})
+						{/* The glyph has to match the mark. A row drawn as stems was legended with a
+						    solid rule, which is the legend describing a chart that is not there. */}
+						<span aria-hidden="true">{row.mark === 'events' ? '▮▮▮' : row.complete ? '───' : '╌╌╌'}</span> {row.label} ({row.source})
 					</Text>
 				))}
 				{missed.map((sentence) => (

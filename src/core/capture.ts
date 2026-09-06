@@ -59,12 +59,20 @@ const MIN_DENOMINATOR = 5
  */
 export function fromOrders(ga4Purchases: number, sanityOrders: number): CaptureEstimate | null {
 	if (sanityOrders < MIN_DENOMINATOR) return null
+
+	// The sensitivity is on the SCREEN, not only in a comment four lines above the threshold. The
+	// note used to end "the denominator is exact" — true of the order count and badly misleading
+	// about the rate, which at seven orders moves fourteen points if one order lands either side of
+	// midnight. This is the most trusted estimate, so it is the one that grosses up every corrected
+	// figure in the tool; the reader is entitled to know how thin it is.
+	const swing = Math.round((1 / sanityOrders) * 100)
 	return {
 		basis: 'orders',
 		rate: ga4Purchases / sanityOrders,
 		observed: ga4Purchases,
 		actual: sanityOrders,
-		note: 'GA4 purchases against the orders that exist. The same event on both sides, and the denominator is exact.',
+		note: `GA4 purchases against the ${sanityOrders} orders that exist — the same event on both sides. `
+			+ `Small numbers move it a long way: one more or fewer order shifts this rate by about ${swing} points.`,
 	}
 }
 

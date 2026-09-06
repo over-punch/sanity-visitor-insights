@@ -9,7 +9,7 @@
 import React, { useCallback, useRef, useState } from 'react'
 import { Box, Button, Card, Container, Flex, Heading, Spinner, Stack, Text } from '@liiift-studio/sanity-ui-compat'
 import type { RangeKey, ReportName, SourceName, SourceStatus } from '../types'
-import { useReport } from './useReport'
+import { knownShortfall, useReport } from './useReport'
 import { daysBetween, shiftDays } from '../core/ranges'
 import { NoticeList } from './Figure'
 import { Badge } from '@liiift-studio/sanity-ui-compat'
@@ -164,6 +164,14 @@ const RANGES: Array<{ key: Exclude<RangeKey, 'custom'>; label: string; span: str
  * Still five tabs. Overview takes the slot freed by folding Diagnostics into Data health, which
  * answers the same question it did — can I trust this — and did not need a tab of its own.
  */
+/**
+ * Tabs whose every figure comes from GA4 alone.
+ *
+ * These get the coverage ribbon. Overview and Data health are excluded because they compute and
+ * state the shortfall themselves — a ribbon there would say the same thing twice.
+ */
+const GA4_ONLY_TABS = ['acquisition', 'journey', 'typeface-interest']
+
 const PANELS: Array<{ id: string; report: ReportName; label: string; blurb: string }> = [
 	{ id: 'overview', report: 'measurement-health', label: 'Overview', blurb: 'Money, traffic and what moved this period' },
 	{ id: 'acquisition', report: 'acquisition', label: 'Acquisition', blurb: 'Where visitors come from' },
@@ -438,6 +446,36 @@ function PanelTabs({ value, onChange }: { value: string; onChange: (next: string
 	)
 }
 
+/**
+ * How much of reality the figures below are drawn from, on the tabs that cannot say it themselves.
+ *
+ * The tool used to declare "treat its figures as broken" on Overview and then hand the reader three
+ * screens of the same instrument's output with no marker at all. This is not a caveat about the
+ * tool; it is a multiplier on every number under it, which is why it sits above them and states the
+ * figure rather than a mood.
+ *
+ * Renders nothing when the shortfall is unknown or small. Unknown has to be silent: a panel that
+ * cannot say how lossy its source is must not imply the source is fine.
+ *
+ * @param ratio - the fraction of reality GA4 is MISSING, 0 to 1
+ */
+function CoverageRibbon({ ratio }: { ratio: number | null }): React.ReactElement | null {
+	// Below a fifth the pageview comparison is not distinguishable from crawlers and prefetches
+	// Vercel counts and GA4 never sees, so a ribbon there would cry wolf on every load.
+	if (ratio === null || ratio < 0.2) return null
+
+	const seen = Math.round((1 - ratio) * 100)
+	return (
+		<Card padding={3} radius={2} tone={ratio > 0.6 ? 'critical' : 'caution'} border>
+			<Text size={1}>
+				Every figure on this tab comes from Google Analytics, which is seeing about {seen}% of
+				this site&rsquo;s traffic in this window. Read them as at least {seen === 0 ? 'undercounts' : `${seen}% of the real numbers`}, not as
+				what happened. Data health explains why.
+			</Text>
+		</Card>
+	)
+}
+
 /** Renders one report panel, including its loading, error and empty states. */
 function ReportPanel({
 	tabId,
@@ -526,6 +564,36 @@ function ReportPanel({
 
 			{state.status === 'ready' && (
 				<Stack space={4}>
+					{/*
+					  * Above the figures, because each of these three changes how the figures are
+					  * READ. That is the axis, not instrument-versus-business — the sort used when
+					  * this last moved was wrong on exactly the cases where the blocks exist. The
+					  * source row renders only when a source failed, so when it is here at all it
+					  * explains why a panel below is empty; the revalidation card says the figures
+					  * are stale before they are read rather than after; and the comparison sentence
+					  * defines every delta underneath it, which makes it a legend, not a footnote.
+					  * The standing caveats stay below the answer: those do not change day to day,
+					  * and they were the boilerplate that used to be the peak of the page.
+					  */}
+					<SourceStatusRow sources={state.envelope.sources} />
+					{state.revalidationError && (
+						<Card padding={3} radius={2} tone="caution" border>
+							<Text size={1}>
+								These figures are the last ones that loaded. Refreshing them failed: {state.revalidationError}
+							</Text>
+						</Card>
+					)}
+				{state.envelope.comparison && COMPARED_TABS.includes(tabId) && (
+						<Text size={0} muted>
+							Changes are against {state.envelope.comparison.range.start} to {state.envelope.comparison.range.end},
+							the equivalent window immediately before this one.
+							{state.envelope.comparison.provisional && (
+								<> This window&rsquo;s last days are still being processed by GA4, so changes read low.</>
+							)}
+					{GA4_ONLY_TABS.includes(tabId) && (
+						<CoverageRibbon ratio={knownShortfall(apiBaseUrl, range, range === 'custom' ? custom : undefined)} />
+					)}
+
 					{tabId === 'overview' && <OverviewPanel data={state.envelope.data as never} previous={state.envelope.comparison?.data as never} onBrush={onBrush} />}
 					{tabId === 'data-health' && (
 						<Stack space={4}>
@@ -548,6 +616,9 @@ function ReportPanel({
 					{tabId === 'journey' && <JourneyPanel data={state.envelope.data as never} />}
 					{tabId === 'typeface-interest' && <TypefaceInterestPanel data={state.envelope.data as never} />}
 
+					{/* The standing caveats, below the answer. These read the same most days — a
+					    source that is configured but lossy, an event with no cutover date — so at the
+					    top they were amber wallpaper above every figure in the tool. */}
 					{/*
 					  * Everything below this line is about the INSTRUMENT, not the business, and it
 					  * sits below the answer for that reason. It used to sit above: a reader opening
@@ -556,14 +627,6 @@ function ReportPanel({
 					  * page was boilerplate that does not change from day to day. The verdict is what
 					  * changes, so the verdict goes first and the provenance follows it.
 					  */}
-					{state.revalidationError && (
-						<Card padding={3} radius={2} tone="caution" border>
-							<Text size={1}>
-								These figures are the last ones that loaded. Refreshing them failed: {state.revalidationError}
-							</Text>
-						</Card>
-					)}
-					<SourceStatusRow sources={state.envelope.sources} />
 					<NoticeList notices={state.envelope.notices} />
 
 					{/* Shown only on the panels that actually draw a delta. It used to render whenever
@@ -573,13 +636,6 @@ function ReportPanel({
 					    different things — Data health's report is measurement-health, so it printed
 					    "Changes are against…" above a panel that draws not one delta, which is
 					    verbatim the bug the comment here says was fixed. */}
-				{state.envelope.comparison && COMPARED_TABS.includes(tabId) && (
-						<Text size={0} muted>
-							Changes are against {state.envelope.comparison.range.start} to {state.envelope.comparison.range.end},
-							the equivalent window immediately before this one.
-							{state.envelope.comparison.provisional && (
-								<> This window&rsquo;s last days are still being processed by GA4, so changes read low.</>
-							)}
 						</Text>
 					)}
 					<Text size={0} muted>

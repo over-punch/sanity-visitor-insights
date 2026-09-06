@@ -24,6 +24,53 @@ import type { RangeKey, ReportEnvelope, ReportName } from '../types'
  */
 const envelopeCache = new Map<string, ReportEnvelope<unknown>>()
 
+/**
+ * The last GA4 shortfall seen for a given site and window, so every tab can know it.
+ *
+ * `shortfallRatio` is computed by one report. The other three panels are built entirely from GA4
+ * and had no access to it at any position on the page, so the tool could print "GA4 is seeing 20%
+ * of your traffic — treat its figures as broken" on one tab and then render `Sessions 357` in the
+ * largest available type on the next, with nothing anywhere saying it was a fifth of reality. A
+ * source that answers confidently and wrongly is `status: 'ok'`, so the source row cannot catch it.
+ *
+ * Keyed by site and window because the shortfall is a property of both — carrying last week's
+ * figure onto a quarter view would be a different lie.
+ */
+const shortfallByWindow = new Map<string, number>()
+
+/** The window part of a cache key: the named range, or the custom bounds. */
+function windowKey(range: string, custom?: { start: string; end: string }): string {
+	return range === 'custom' && custom ? `${custom.start}..${custom.end}` : range
+}
+
+/**
+ * What is known about GA4's coverage of this site and window, or null when nothing is.
+ *
+ * Null is a real answer and must render as nothing: a panel that cannot say how lossy its source is
+ * should not imply the source is fine.
+ *
+ * @param base - the site's API base URL, as passed to the tool
+ * @param range - the range name currently selected
+ * @param custom - the custom bounds, when the range is custom
+ */
+export function knownShortfall(base: string, range: string, custom?: { start: string; end: string }): number | null {
+	return shortfallByWindow.get(`${base}|${windowKey(range, custom)}`) ?? null
+}
+
+/**
+ * Record a shortfall an envelope carried, if it carried one.
+ *
+ * Exported for its tests, not for consumers — deliberately absent from `src/index.ts`, so it is a
+ * module seam rather than public API.
+ */
+export function rememberShortfall(base: string, range: string, custom: { start: string; end: string } | undefined, data: unknown): void {
+	const ratio = (data as { shortfallRatio?: unknown } | null)?.shortfallRatio
+	// Bounded on both sides: a ratio outside 0..1 is a bug upstream, not a coverage figure.
+	if (typeof ratio === 'number' && Number.isFinite(ratio) && ratio >= 0 && ratio <= 1) {
+		shortfallByWindow.set(`${base}|${windowKey(range, custom)}`, ratio)
+	}
+}
+
 /** Identity of a request: everything that changes the answer. */
 function cacheKey(base: string, report: string, range: string, custom?: { start: string; end: string }): string {
 	// apiBaseUrl included: the plugin takes a `name` so it can be registered twice in one Studio,
@@ -185,6 +232,7 @@ export function useReport<T>({ apiBaseUrl, report, range, custom, enabled = true
 				if (requestIdRef.current !== requestId) return
 
 				envelopeCache.set(key, envelope as ReportEnvelope<unknown>)
+				rememberShortfall(apiBaseUrl, range, custom, envelope.data)
 				setState({ status: 'ready', envelope })
 			} catch (e) {
 				if (controller.signal.aborted || requestIdRef.current !== requestId) return
@@ -207,4 +255,9 @@ export function useReport<T>({ apiBaseUrl, report, range, custom, enabled = true
 	}, [client, apiBaseUrl, report, range, custom?.start, custom?.end, nonce, enabled])
 
 	return { state, reload }
+}
+
+/** Drop every remembered shortfall. For tests, so one case cannot leak into the next. */
+export function forgetShortfalls(): void {
+	shortfallByWindow.clear()
 }

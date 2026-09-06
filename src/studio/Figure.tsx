@@ -1125,7 +1125,12 @@ export function SortableTable<Row>({
 		}
 	}
 
-	const hiddenCount = rows.length - visible.length
+	// Rows the FILTER hid, and only those. `rows.length - visible.length` counted the excluded ones
+	// too, because `visible` filters on both — so excluding three rows with no filter text rendered
+	// "3 rows hidden · 3 excluded", and the one line whose job is saying what you are looking at was
+	// arithmetically wrong.
+	const excludedInWindow = rows.filter((row) => excluded.has(rowKey(row))).length
+	const hiddenCount = rows.length - visible.length - excludedInWindow
 	// Counted independently of whether the excluded rows exist in THIS window. Exclusions now
 	// survive a refetch, so excluding a bot referrer on Quarter and then narrowing to a week where
 	// it has no sessions left the exclusion armed and the control gone — silently hiding rows on
@@ -1238,7 +1243,16 @@ export function SortableTable<Row>({
 					{ordered.length === 0 && (
 						<tr>
 							<td colSpan={columns.length} style={bodyCell}>
-								<Text size={1} muted>No rows match this filter.</Text>
+								{/* Which emptiness this is. It always blamed the filter, so a site with no
+								    orders, or an unconfigured GA4, was told it had filtered its own data
+								    away — the reader hunting for a control they never touched. */}
+								<Text size={1} muted>
+									{rows.length === 0
+										? 'Nothing to show for this period.'
+										: query.trim() || excludedInWindow > 0
+											? 'No rows match this filter.'
+											: 'Nothing to show for this period.'}
+								</Text>
 							</td>
 						</tr>
 					)}

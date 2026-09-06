@@ -415,12 +415,23 @@ function Verdict({ data, previous }: { data: MeasurementHealthData; previous?: M
 	// The 24 August collapse — an 86% shortfall running ten days, the founding failure this whole
 	// package cites — would therefore have read, on a Monday: "Revenue flat · traffic flat ·
 	// nothing broken". The figure that names it was computed and rendered two tabs away.
+	// Graded, not a single cliff at 0.6. The threshold was one hard step, so a site where GA4 saw
+	// 45% of its traffic — less than half — got a clean bill of health in the largest type on the
+	// default tab, and a twelve-day collapse inside a ninety-day quarter averaged down below the
+	// line and vanished entirely.
 	const shortfall = data.shortfallRatio
-	const broken = shortfall !== null && shortfall !== undefined && shortfall > 0.6
-		? `GA4 is seeing ${formatPercent(1 - shortfall, 0)} of your traffic — treat its figures as broken`
-		: data.capture?.discrepancy
-			? 'measurement disagrees between sources'
-			: null
+	const seeing = shortfall !== null && shortfall !== undefined
+		? `GA4 is seeing ${formatPercent(1 - shortfall, 0)} of your traffic`
+		: null
+	const broken = shortfall === null || shortfall === undefined
+		? (data.capture?.discrepancy ? 'measurement disagrees between sources' : null)
+		: shortfall > 0.6
+			? `${seeing} — treat its figures as broken`
+			: shortfall > 0.35
+				? `${seeing} — its figures are undercounts, not what happened`
+				: data.capture?.discrepancy
+					? 'measurement disagrees between sources'
+					: null
 	if (broken) parts.push(broken)
 
 	if (parts.length === 0) return null
@@ -428,8 +439,15 @@ function Verdict({ data, previous }: { data: MeasurementHealthData; previous?: M
 	// "Nothing broken" needs a positive test, not the absence of a warning. It used to be appended
 	// whenever `capture.discrepancy` was falsy — which includes capture being absent entirely, so an
 	// older route or an unconfigured site printed a confident all-clear on no evidence at all.
-	const checked = shortfall !== null && shortfall !== undefined
-	const closing = broken ? '' : checked ? ' · nothing broken' : ''
+	// No closing claim at all.
+	//
+	// This used to append "· nothing broken" — a statement about the site, the checkout, the orders
+	// and four other tabs, resting on a single ratio about Google Analytics. It read as "the
+	// business is fine". Between a fifth and a third of loss the coverage is worth STATING, because
+	// it is a real qualifier on the traffic figure beside it, but it is not a verdict; below that,
+	// silence. Silence here means nothing was flagged, which is all this line ever knew.
+	const noticeable = shortfall !== null && shortfall !== undefined && shortfall > 0.2
+	const closing = broken || !noticeable ? '' : ` · ${seeing}`
 
 	return (
 		<Card
@@ -502,7 +520,19 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 											: estimate.basis === 'email' ? 'Measured against email clicks'
 												: 'Measured against Vercel'}
 									</Label>
-									<Text size={4}>{formatPercent(Math.min(1, estimate.rate), 0)}</Text>
+									{/* Unclamped. `Math.min(1, …)` rendered a tag reporting 250% of reality as a
+									    flat 100% under the heading "How much GA4 is seeing" — i.e. perfect —
+									    and over-counting is a real failure this package has a whole
+									    interpretation branch for. It is also the one case where the corrected
+									    figures silently disappear, because grossUp returns null above a rate
+									    of 1, so hiding its cause left the reader with no explanation. */}
+									<Text size={4}>{formatPercent(estimate.rate, 0)}</Text>
+									{estimate.rate > 1.05 && (
+										<Text size={0}>
+											Above 100%: GA4 is counting more than the source it is measured against.
+											That is usually a tag firing twice, not extra traffic.
+										</Text>
+									)}
 									<Text size={0} muted>
 										{formatCount(estimate.observed)} of {formatCount(estimate.actual)}. {estimate.note}
 									</Text>
