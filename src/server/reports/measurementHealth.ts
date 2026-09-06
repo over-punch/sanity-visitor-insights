@@ -284,7 +284,8 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 
 	let vercelPageviews: MetricValue = unavailable('source_error', 'Vercel not configured')
 	// Vercel's own visitor count. Fetched on every call and previously discarded, though it is the
-	// only visitor figure in the tool that consent refusal and ad-blocking cannot reduce.
+	// least lossy visitor figure here — but its own counter is a client script on a first-party
+	// path, so consent tooling and blocklists reach it too, just far less often than they reach GA4.
 	let vercelVisitors: MetricValue = unavailable('source_error', 'Vercel not configured')
 	if (vercel) {
 		try {

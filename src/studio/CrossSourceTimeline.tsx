@@ -64,6 +64,15 @@ export interface Series {
 	 * event, on a date, of a size. Days with nothing draw nothing, which is the truth.
 	 */
 	mark?: 'line' | 'events'
+	/**
+	 * A fixed y domain, instead of scaling the row to its own peak.
+	 *
+	 * Small multiples normally scale each row to itself, which is right for quantities whose
+	 * absolute size is not comparable between rows. It is wrong for a proportion: a coverage row
+	 * auto-scaled to its own maximum would redraw 100% at whatever the best day happened to be, so
+	 * a site running at a flat 20% would show a full-height line and read as healthy.
+	 */
+	domain?: [number, number]
 	points: SeriesPoint[]
 	/**
 	 * What a lossier source saw of the same thing.
@@ -235,55 +244,89 @@ export function findCoverageIncident(days: Array<number | null>, dates: string[]
 	if (measured.length < 21) return null
 
 	const sorted = [...measured].sort((a, b) => a - b)
-	const normal = sorted[Math.floor(sorted.length / 2)]!
-	// A shortfall that is already near-total leaves no room for a fall to be detectable against it.
+	/*
+	 * The 75th percentile, not the median.
+	 *
+	 * A median tolerates contamination only to half the sample, so once an outage covered more than
+	 * half the window the median WAS the outage: the threshold dropped to half the collapsed level,
+	 * the healthy days before it were never "low", and the function returned null. Detection got
+	 * quieter as the fault got worse, which is the opposite of what an alarm is for. A 46-day
+	 * collapse in a 90-day quarter — the default range — was silent.
+	 */
+	const normal = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.75))]!
+	// A source that never clears a tenth leaves no room for a fall to be detected against it. That
+	// is a total shortfall, which the coverage row draws as a flat line near zero.
 	if (normal <= 0.1) return null
 
-	// Half the usual coverage, sustained. Anything shallower is inside the day-to-day variation of a
-	// site doing a few hundred pageviews a day.
 	const threshold = normal * 0.5
 	const MIN_RUN = 3
+	// A run survives up to two consecutive unmeasured days. A null used to end it, and a null is
+	// routine — a day with no traffic at all yields one — so a ten-day outage split into 6 and 3,
+	// the longer half was reported, and the onset date named a day INSIDE the outage rather than
+	// its start. That date is the one thing the reader acts on.
+	const MAX_GAP = 2
 
-	let best: { start: number; end: number } | null = null
+	// Every candidate, longest first. The "needs a before" rule used to be applied to the single
+	// longest run and then ABORT the whole search, so a range that opens mid-outage reported
+	// nothing at all — including any later incident it did have.
+	const runs: Array<{ start: number; end: number }> = []
 	let runStart: number | null = null
+	let gap = 0
 	for (let i = 0; i <= days.length; i++) {
-		const value = days[i]
-		const low = i < days.length && value !== null && value !== undefined && value < threshold
-		if (low && runStart === null) runStart = i
-		if (!low && runStart !== null) {
-			const length = i - runStart
-			if (length >= MIN_RUN && (!best || length > best.end - best.start)) best = { start: runStart, end: i }
+		const value = i < days.length ? days[i] : undefined
+		const low = value !== null && value !== undefined && value < threshold
+		const unmeasured = i < days.length && (value === null || value === undefined)
+
+		if (low) {
+			if (runStart === null) runStart = i
+			gap = 0
+		} else if (unmeasured && runStart !== null && gap < MAX_GAP) {
+			gap += 1
+		} else if (runStart !== null) {
+			// The run ends at the last LOW day, not at the gap that followed it.
+			runs.push({ start: runStart, end: i - gap })
 			runStart = null
+			gap = 0
 		}
 	}
-	if (!best) return null
-
-	const during = days.slice(best.start, best.end).filter((d): d is number => d !== null)
-	const before = days.slice(0, best.start).filter((d): d is number => d !== null)
-	// Without a before, there is nothing to call this a CHANGE from — it is just the range's normal.
-	if (before.length < 3 || during.length === 0) return null
+	runs.sort((a, b) => (b.end - b.start) - (a.end - a.start))
 
 	const mean = (values: number[]) => values.reduce((sum, v) => sum + v, 0) / values.length
-	const onset = dates[best.start]
-	if (!onset) return null
 
-	return {
-		onset,
-		days: best.end - best.start,
-		before: mean(before),
-		during: mean(during),
-		// The run reaching the end of the series is the difference between "this happened" and "this
-		// is happening", which is the difference between a note and a job for today.
-		ongoing: best.end >= days.length,
+	for (const run of runs) {
+		if (run.end - run.start < MIN_RUN) continue
+		const during = days.slice(run.start, run.end).filter((d): d is number => d !== null)
+		const before = days.slice(0, run.start).filter((d): d is number => d !== null)
+		// Without a before there is nothing to call this a CHANGE from — it is the range's normal.
+		if (before.length < 3 || during.length === 0) continue
+
+		const onset = dates[run.start]
+		if (!onset) continue
+
+		const beforeMean = mean(before)
+		const after = days.slice(run.end).filter((d): d is number => d !== null)
+		/*
+		 * "Recovered" is a claim, and it now has to be earned.
+		 *
+		 * It used to mean only that the run did not touch the end of the array — so a null final day,
+		 * or one day back above the threshold, printed "then recovered" while coverage sat at half
+		 * its old level. This is the tool's one dated alarm and it could stand itself down on no
+		 * evidence. Recovery means measured days after the run, averaging back near where they were.
+		 */
+		const recovered = after.length >= MIN_RUN && mean(after) >= beforeMean * 0.8
+
+		return {
+			onset,
+			days: run.end - run.start,
+			before: beforeMean,
+			during: mean(during),
+			ongoing: !recovered,
+		}
 	}
+
+	return null
 }
 
-/**
- * The cross-source timeline.
- *
- * Renders nothing rather than an empty frame when there is not enough to plot — two points cannot
- * show a shape, and an axis with one dot on it invites a reading it cannot support.
- */
 export function CrossSourceTimeline({ series, markers = [], currency, onBrush }: CrossSourceTimelineProps): React.ReactElement | null {
 	const [hoverIndex, setHoverIndex] = useState<number | null>(null)
 	// Whether to draw the constituent sources. Hover reveals them; so does keyboard focus and the
@@ -301,6 +344,8 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 	 * comment claimed the selection stays drawn to confirm the gesture; it never did.
 	 */
 	const [brushed, setBrushed] = useState<[number, number] | null>(null)
+	/** A stable id for this mounted chart, so its SVG defs cannot collide with another instance's. */
+	const instanceId = React.useId().replace(/[^a-zA-Z0-9]/g, '')
 	// Whether the reader arrived at this day by keyboard. Only then does the readout announce.
 	//
 	// The region is driven by `hoverIndex`, which a slow pointer sweep across ninety days changes
@@ -684,6 +729,30 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						}
 					}}
 				>
+					{/* A rule at every date label, behind the data.
+					    Without them the only way to answer "which day is this peak" was to hold a
+					    pointer on it: three labels sat 38px below the last baseline with nothing
+					    joining them to the rows, so dating a feature meant tracing an unruled column by
+					    eye. Faint enough to stay behind the marks, present enough to read against. */}
+					{tickIndexes.map((index) => {
+						const date = dates[index]
+						if (!date) return null
+						const at = x(new Date(`${date}T00:00:00Z`))
+						if (!Number.isFinite(at)) return null
+						return (
+							<line
+								key={`grid-${date}`}
+								x1={at}
+								x2={at}
+								y1={TOP_PAD}
+								y2={TOP_PAD + series.length * ROW_HEIGHT - 18}
+								stroke="currentColor"
+								strokeWidth={1}
+								opacity={0.08}
+							/>
+						)
+					})}
+
 					{series.map((row, rowIndex) => {
 						const top = TOP_PAD + rowIndex * ROW_HEIGHT
 						const bottom = top + ROW_HEIGHT - 18
@@ -698,7 +767,18 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						// Each row scales to ITSELF. That is the whole point of small multiples: no
 						// shared scale means no invented correlation between rows.
 						const peak = d3Max(values) ?? 0
-						const y = scaleLinear().domain([0, peak || 1]).nice().range([bottom, plotTop])
+						// The floor drops below zero when the data does. Clipping each row to its band was
+						// right, but the domain still started at 0, so a refund was positioned below the
+						// baseline and therefore outside the clip — it went from bleeding into the next
+						// row to not being drawn at all, while `shapeOf` still counted it in the row's
+						// spoken total. The clip moved that bug rather than fixing it.
+						const lowest = Math.min(0, ...values)
+						const y = row.domain
+							? scaleLinear().domain(row.domain).range([bottom, plotTop])
+							: scaleLinear().domain([lowest, peak || 1]).nice().range([bottom, plotTop])
+						// Where zero sits once the domain may be negative — the baseline rule and the
+						// stems both hang off this rather than off the bottom of the band.
+						const zeroY = y(0)
 
 						const at = (p: SeriesPoint) => x(new Date(`${p.date}T00:00:00Z`))
 						const defined = (p: SeriesPoint) => p.value !== null
@@ -768,7 +848,12 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						// fill above the plot top and through the label strip into the row above, and a
 						// refund puts a stem below the baseline and through the gutter into the row
 						// below, where either reads as that row's data.
-						const clipId = `row-clip-${rowIndex}`
+						// Namespaced per mounted chart. `row-clip-${rowIndex}` is document-global, so two
+						// instances — a split pane, or this panel beside anything reusing the scheme —
+						// both define `row-clip-0`, and every colliding row resolves to whichever was
+						// parsed first, whose plot width came from a differently sized pane. Silent
+						// mis-clipping, no error.
+						const clipId = `${instanceId}-row-${rowIndex}`
 
 						return (
 							<g key={row.key}>
@@ -777,7 +862,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 										<rect x={GUTTER} y={plotTop} width={plotWidth} height={Math.max(1, bottom - plotTop)} />
 									</clipPath>
 								</defs>
-								<line x1={GUTTER} x2={GUTTER + plotWidth} y1={bottom} y2={bottom} stroke="currentColor" strokeWidth={1} opacity={0.45} />
+								<line x1={GUTTER} x2={GUTTER + plotWidth} y1={zeroY} y2={zeroY} stroke="currentColor" strokeWidth={1} opacity={0.45} />
 
 								{/* The row names itself, in the dead strip above its own band. Small
 								    multiples without in-place labels forfeit the thing they are for:
@@ -835,7 +920,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 											// Above the baseline, taller than it, and darker. At 1px and 0.3 opacity
 											// sitting ON a rule drawn at 0.45, the distinction this exists to keep
 											// was encoded below the baseline's own visibility.
-											y={bottom - 3}
+											y={zeroY - 3}
 											width={stemWidth}
 											height={3}
 											fill="currentColor"
@@ -856,12 +941,12 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 											// gutter edges, so a centred stem hung up to half its width outside
 											// them — the first one into the y-axis label column.
 											x={Math.max(GUTTER, Math.min(GUTTER + plotWidth - stemWidth, cx - stemWidth / 2))}
-											y={Math.min(headY, bottom)}
+											y={Math.min(headY, zeroY)}
 											width={stemWidth}
 											// Floored at 1.5px: a day whose value rounds to nothing on this
 											// scale still happened, and drawing it as zero height would say
 											// it did not.
-											height={Math.max(1.5, Math.abs(bottom - headY))}
+											height={Math.max(1.5, Math.abs(zeroY - headY))}
 											fill="currentColor"
 											opacity={0.75}
 										/>
@@ -948,30 +1033,6 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 							opacity={0.8}
 						/>
 					)}
-
-					{/* A rule at every date label, behind the data.
-					    Without them the only way to answer "which day is this peak" was to hold a
-					    pointer on it: three labels sat 38px below the last baseline with nothing
-					    joining them to the rows, so dating a feature meant tracing an unruled column by
-					    eye. Faint enough to stay behind the marks, present enough to read against. */}
-					{tickIndexes.map((index) => {
-						const date = dates[index]
-						if (!date) return null
-						const at = x(new Date(`${date}T00:00:00Z`))
-						if (!Number.isFinite(at)) return null
-						return (
-							<line
-								key={`grid-${date}`}
-								x1={at}
-								x2={at}
-								y1={TOP_PAD}
-								y2={height - AXIS_HEIGHT}
-								stroke="currentColor"
-								strokeWidth={1}
-								opacity={0.08}
-							/>
-						)
-					})}
 
 					{/* The shared date axis, once, at the bottom.
 					    As many ticks as the measured width affords — it was fixed at three regardless,

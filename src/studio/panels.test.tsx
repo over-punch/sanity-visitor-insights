@@ -16,7 +16,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { readFileSync } from 'node:fs'
 import { calendarDays } from '../server/reports/measurementHealth'
 import { formatCount, formatMoney } from './Figure'
-import { captureModel, fromOrders } from '../core/capture'
+import { decodeView, encodeView, mergeIntoHash } from './urlState'
+import { captureModel, fromOrders, fromPageviews } from '../core/capture'
 import { forgetShortfalls, knownShortfall, rememberShortfall } from './useReport'
 import { CrossSourceTimeline, dayIndexAt, findCoverageIncident } from './CrossSourceTimeline'
 import React from 'react'
@@ -1163,12 +1164,16 @@ describe('panel structure', () => {
 		// shortfallRatio 0 — GA4 is seeing everything, so the all-clear is earned.
 		const html = render(<OverviewPanel data={{ ...base, shortfallRatio: 0 } as never} previous={previous as never} />)
 		expect(html).toMatch(/Revenue up \d+%/)
-		expect(html).toContain('Traffic flat')
+		// The fixture moves traffic 2%, which is suppressed but no longer rendered as "flat" — the
+		// card beside it draws an arrow at that size, and the two used to contradict each other.
+		expect(html).toContain('Traffic little changed')
 		expect(html).toContain('1 campaign sent')
 		// No all-clear is claimed at all: this line only ever knew one coverage ratio, and "nothing
 		// broken" spoke for the site, the checkout and four other tabs.
 		expect(html).not.toContain('nothing broken')
 		expect(html).toContain('Revenue up')
+		// A suppressed move now carries its number, so it cannot contradict the card beneath it.
+		expect(html).toContain('little changed')
 	})
 
 	it('says the measurement disagrees rather than claiming nothing is broken', () => {
@@ -2075,10 +2080,53 @@ describe('a dated collapse reads differently from a standing shortfall', () => {
 		expect(findCoverageIncident([...Array(7).fill(0.9), ...Array(5).fill(0.1)], dates(12))).toBeNull()
 	})
 
-	it('needs a before to call it a change', () => {
-		// A run starting on day one is the range's normal, not a fall within it.
-		const days = [...Array(20).fill(0.1), ...Array(30).fill(0.9)]
-		expect(findCoverageIncident(days, dates(50))?.onset).not.toBe(dates(50)[0])
+	it('needs a before to call it a change, without abandoning later incidents', () => {
+		// This was `expect(found?.onset).not.toBe(dates[0])`, which passes on a null return — so it
+		// would have passed if the function did nothing at all. Worse, the rule aborted the whole
+		// search rather than rejecting one candidate, so a range opening mid-outage reported nothing
+		// including any later incident it did have.
+		const opensLow = [...Array(20).fill(0.1), ...Array(30).fill(0.9)]
+		expect(findCoverageIncident(opensLow, dates(50))).toBeNull()
+
+		// Same opening, plus a real later collapse. The later one must still be found.
+		const alsoLater = [...Array(12).fill(0.1), ...Array(30).fill(0.9), ...Array(14).fill(0.1)]
+		const found = findCoverageIncident(alsoLater, dates(56))
+		expect(found).not.toBeNull()
+		expect(found?.onset).toBe(dates(56)[42])
+	})
+
+	it('still detects an outage covering more than half the window', () => {
+		// A median tolerates contamination only to half the sample, so once the outage was the
+		// majority the median WAS the outage and the function went silent — detection got quieter as
+		// the fault got worse. A 46-day collapse in a 90-day quarter is the default range.
+		const days = [...Array(44).fill(0.9), ...Array(46).fill(0.1)]
+		const found = findCoverageIncident(days, dates(90))
+		expect(found?.onset).toBe(dates(90)[44])
+		expect(found?.days).toBe(46)
+		expect(found?.ongoing).toBe(true)
+	})
+
+	it('does not let a quiet unmeasured day cut an outage in half', () => {
+		// A day with no traffic yields a null, which used to end the run: a ten-day outage split
+		// into 6 and 3, the longer half won, and the reported onset named a day inside the outage
+		// rather than its start.
+		const days = [...Array(30).fill(0.9), 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, null, 0.1, 0.1, 0.1]
+		const found = findCoverageIncident(days, dates(40))
+		expect(found?.onset).toBe(dates(40)[30])
+		expect(found?.days).toBe(10)
+	})
+
+	it('will not say recovered on the strength of one day back', () => {
+		// It meant only "the run did not touch the end of the array", so a single day above the
+		// threshold — or a null final day — printed "then recovered" while coverage sat at half what
+		// it had been. This is the tool's one dated alarm and it could stand itself down.
+		const days = [...Array(30).fill(0.9), ...Array(15).fill(0.1), 0.5]
+		expect(findCoverageIncident(days, dates(46))?.ongoing).toBe(true)
+	})
+
+	it('calls a partial recovery to a lower plateau ongoing', () => {
+		const days = [...Array(30).fill(0.9), ...Array(10).fill(0.1), ...Array(15).fill(0.45)]
+		expect(findCoverageIncident(days, dates(55))?.ongoing).toBe(true)
 	})
 
 	it('is not fooled into taking the incident as its own baseline', () => {
@@ -2110,5 +2158,107 @@ describe('a delta does not point at a change it has rounded away', () => {
 
 	it('still reports a percent move of a tenth of a point', () => {
 		expect(render(<Delta current={43.4} previous={43.2} unit="percent" />)).toContain('+0.2 pts')
+	})
+})
+
+describe('a view can be sent to someone', () => {
+	it('round-trips a custom window', () => {
+		const view = { tab: 'acquisition', range: 'custom', from: '2026-08-24', to: '2026-09-07' }
+		expect(decodeView(`#${encodeView(view)}`)).toEqual(view)
+	})
+
+	it('leaves the URL clean for a view nobody set', () => {
+		expect(encodeView({})).toBe('')
+		expect(mergeIntoHash('', {})).toBe('')
+	})
+
+	it('does not carry a custom window on a named range', () => {
+		// A stale window riding along in every link would reopen someone else's dates when they
+		// clicked a link about the week.
+		const encoded = encodeView({ tab: 'overview', range: 'week', from: '2026-08-24', to: '2026-09-07' })
+		expect(encoded).not.toContain('from')
+		expect(encoded).not.toContain('2026-08-24')
+	})
+
+	it('drops a custom range missing an end, rather than defaulting it', () => {
+		// One end alone resolves against a default the sender never saw — a different window
+		// wearing the same link.
+		expect(decodeView('#insights=range:custom;from:2026-08-24')).toEqual({})
+	})
+
+	it('refuses anything that is not a date or an identifier', () => {
+		// The hash is attacker-controllable in the sense that anyone can send a link, and these
+		// values reach a report request.
+		expect(decodeView('#insights=from:2026-08-24T00:00:00Z;to:../../etc')).toEqual({})
+		expect(decodeView('#insights=tab:<script>')).toEqual({})
+		expect(decodeView('#insights=range:' + 'x'.repeat(200))).toEqual({})
+	})
+
+	it('ignores a fragment belonging to another tool', () => {
+		expect(decodeView('#other=tab:whatever')).toEqual({})
+	})
+
+	it('preserves another tool\'s fragment when writing its own', () => {
+		// The hash is shared. Overwriting it wholesale would silently break whatever else is using it.
+		const next = mergeIntoHash('#other=keep-me', { tab: 'journey', range: 'month' })
+		expect(next).toContain('other=keep-me')
+		expect(next).toContain('insights=tab:journey;range:month')
+	})
+
+	it('replaces its own fragment rather than appending a second one', () => {
+		const once = mergeIntoHash('', { tab: 'overview', range: 'week' })
+		const twice = mergeIntoHash(once, { tab: 'journey', range: 'month' })
+		expect(twice.match(/insights=/g)?.length).toBe(1)
+		expect(twice).toContain('tab:journey')
+	})
+
+	it('survives a truncated link by keeping what parsed', () => {
+		expect(decodeView('#insights=tab:journey;range')).toEqual({ tab: 'journey' })
+	})
+})
+
+describe('the headline agrees with the cards under it', () => {
+	const base = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.1,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		revenue: ok(1000), currency: 'USD', orderStatuses: {},
+		audience: ok(4000), audienceGrowth: unavailable('not_applicable'), campaigns: [],
+		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
+		estimatedSessions: unavailable('not_applicable'), interpretation: 'x', daily: [],
+		crossSource: [], timelineEvents: [],
+	}
+
+	it('does not call a move flat while the card beside it draws an arrow', () => {
+		// Two definitions of flat, an order of magnitude apart, ten pixels apart on the panel: the
+		// verdict suppressed under 5% and the card drew an arrow above 0.5%, so "Traffic flat" sat
+		// directly above "↑ +4% from 2,266".
+		const html = render(<OverviewPanel
+			data={{ ...base, vercelPageviews: ok(2356) } as never}
+			previous={{ ...base, vercelPageviews: ok(2266) } as never}
+		/>)
+		expect(html).toContain('little changed')
+		expect(html).not.toContain('Traffic flat')
+	})
+
+	it('still says flat when the card says no change too', () => {
+		const html = render(<OverviewPanel
+			data={{ ...base, vercelPageviews: ok(2356) } as never}
+			previous={{ ...base, vercelPageviews: ok(2355) } as never}
+		/>)
+		expect(html).toContain('Traffic flat')
+	})
+})
+
+describe('the pageview estimate is described in the direction it actually errs', () => {
+	it('calls it a ceiling on GA4 coverage, not a floor', () => {
+		// The package said "a LOWER bound: Vercel also counts crawlers" for its whole life. Vercel
+		// Web Analytics is the @vercel/analytics client script on a first-party path — it is blocked
+		// too, and it does not run for crawlers at all. So real traffic exceeds Vercel, the true
+		// denominator is larger, and GA4/Vercel flatters GA4 rather than maligning it.
+		const note = fromPageviews(475, 2356)?.note ?? ''
+		expect(note).toContain('ceiling')
+		expect(note).not.toContain('lower bound')
+		expect(note).not.toContain('crawlers')
 	})
 })

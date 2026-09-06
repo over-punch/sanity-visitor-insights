@@ -77,6 +77,7 @@ export default visitorInsights
 
 export { VisitorInsightsTool, type VisitorInsightsToolProps } from './studio/VisitorInsightsTool'
 export { knownShortfall, useReport, type ReportState, type UseReportOptions } from './studio/useReport'
+export { decodeView, encodeView, mergeIntoHash, type ViewState } from './studio/urlState'
 export { MetricFigure, ComparisonBar, Delta, FunnelChart, NoticeList, SortableTable, TrendChart, formatCount, formatMoney, formatPercent } from './studio/Figure'
 export { ChartData, ProportionChart } from './studio/Figure'
 export type { ChartDataProps, DeltaProps, ProportionBar, ProportionChartProps, SortColumn, SortableTableProps } from './studio/Figure'

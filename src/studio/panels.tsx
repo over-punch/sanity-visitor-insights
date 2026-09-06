@@ -218,7 +218,7 @@ export function OverviewPanel({ data, previous, onBrush }: {
 							<MetricFigure metric={metricOr(data.vercelPageviews, OLDER_ROUTE)} label="Pageviews" />
 							<Delta current={metricSortValue(data.vercelPageviews)} previous={metricSortValue(previous?.vercelPageviews)} />
 						</div>
-						<Text size={0} muted>Pageviews, counted server-side.</Text>
+						<Text size={0} muted>Pageviews, from Vercel’s own counter.</Text>
 					</Stack>
 				</Card>
 				<Card padding={3} radius={2} tone="transparent" border>
@@ -293,6 +293,41 @@ export function OverviewPanel({ data, previous, onBrush }: {
 									points: (data.crossSource ?? []).map((d) => ({ date: d.date, value: d.ga4Pageviews })),
 								},
 							},
+							/*
+							 * Coverage as its own row, on a fixed 0–100% axis.
+							 *
+							 * The shaded band under the traffic line is an ABSOLUTE quantity — Vercel
+							 * minus GA4 — so under a flat 20% coverage it is 0.8 times the traffic curve
+							 * and tracks it exactly. Every busy day therefore shows a wider alarm than
+							 * every quiet day with no change whatever in the instrument, and the one
+							 * distinction this tool exists to draw — a standing shortfall against a dated
+							 * collapse — is the one the encoding could not show. It had to be asserted in
+							 * prose by a detector instead, which made that sentence the reader's only
+							 * witness to its own subject.
+							 *
+							 * As a proportion it draws itself: a standing shortfall is a flat line, a
+							 * collapse is a step with a date under it, a gradual decay is a ramp that
+							 * plainly is not an event, and a partial recovery is a line that visibly did
+							 * not return. The reader can check the sentence rather than trust it.
+							 */
+							...((data.crossSource ?? []).some((d) => d.vercelPageviews !== null && d.ga4Pageviews !== null)
+								? [{
+									key: 'coverage',
+									label: 'GA4 coverage',
+									source: 'GA4' as const,
+									complete: true,
+									unit: 'percent' as const,
+									// Fixed, not scaled to its own best day — otherwise a site at a flat 20%
+									// draws a full-height line and reads as healthy.
+									domain: [0, 1] as [number, number],
+									points: (data.crossSource ?? []).map((d) => ({
+										date: d.date,
+										value: d.vercelPageviews !== null && d.ga4Pageviews !== null && d.vercelPageviews > 0
+											? Math.min(1, d.ga4Pageviews / d.vercelPageviews)
+											: null,
+									})),
+								}]
+								: []),
 							...(data.crossSource?.some((d) => d.revenue !== null)
 								? [{
 									key: 'revenue',
@@ -470,9 +505,20 @@ function Verdict({ data, previous }: { data: MeasurementHealthData; previous?: M
 			return
 		}
 		const change = (a - b) / Math.abs(b)
-		// "Flat" rather than a decimal nobody acts on: at seven orders a quarter a 3% move is noise
-		// wearing a percent sign.
-		if (Math.abs(change) < 0.05) parts.push(`${label} flat`)
+		/*
+		 * "Flat" carries its number when there is one.
+		 *
+		 * Two definitions of flat sat ten pixels apart on the same panel: this line called a move
+		 * under 5% flat, while the card beneath it drew an arrow above 0.5% — so the headline could
+		 * read "Traffic flat" in the largest type directly above a Traffic card reading "↑ +4% from
+		 * 2,266". The suppression is still right at these volumes; contradicting the card was not.
+		 * Saying "little changed (+4%)" keeps the judgement and agrees with what is on screen.
+		 */
+		if (Math.abs(change) < 0.05) {
+			parts.push(Math.abs(change) < 0.005
+				? `${label} flat`
+				: `${label} little changed (${change > 0 ? '+' : '−'}${formatPercent(Math.abs(change), 0)})`)
+		}
 		else parts.push(`${label} ${change > 0 ? 'up' : 'down'} ${formatPercent(Math.abs(change), 0)}`)
 	}
 
@@ -560,7 +606,7 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 					The same unit on both sides. Vercel is cookieless and ungated; GA4 is consent-gated and
 					blockable, so GA4 seeing fewer is expected.
 				</Text>
-				<ComparisonBar label="Vercel pageviews" metric={data.vercelPageviews} max={pageviewMax} outOf="Complete: counted server-side." />
+				<ComparisonBar label="Vercel pageviews" metric={data.vercelPageviews} max={pageviewMax} outOf="Blocked less than GA4, but not immune to it." />
 				<ComparisonBar label="GA4 pageviews" metric={data.ga4Pageviews} max={pageviewMax} outOf="A subset of the bar above, not a rival measurement." />
 			</Stack>
 
@@ -674,7 +720,9 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 						<Stack space={3}>
 							<Label size={1} muted>Vercel visitors</Label>
 							<MetricFigure metric={metricOr(data.vercelVisitors, OLDER_ROUTE)} label="Vercel visitors" />
-							<Text size={0} muted>Counted server-side, so neither consent nor ad-blocking reduces it.</Text>
+							{/* Not "server-side". Vercel Web Analytics is the @vercel/analytics client script
+							    on a first-party path — blocked by fewer lists than GA4, and blocked. */}
+							<Text size={0} muted>Vercel&rsquo;s own counter. Blocked far less often than Google Analytics, but not never — so read it as a floor on your real traffic.</Text>
 						</Stack>
 					</Card>
 					<Card padding={3} radius={2} tone="transparent" border>

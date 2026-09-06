@@ -267,17 +267,27 @@ export async function acquisition(input: AcquisitionInput): Promise<AcquisitionD
 	// exists to prevent, not something it prevented. The earlier comment claimed this matched the
 	// capture model's floor; it did not. That floor is on an EXACT denominator, this one is on a
 	// lossy numerator, and the same number means something much weaker here.
-	const MIN_TRACKED_PURCHASES = 8
-
-	// And a coverage gate. Nothing checked how much of the real order book GA4 attributed, so eight
-	// tracked purchases against a thousand Sanity orders — a sub-1% sample — would have been used to
-	// allocate all of the revenue.
-	const coverage = actuals?.orders != null && actuals.orders > 0 ? trackedPurchases / actuals.orders : null
+	/*
+	 * Five, with a coverage WINDOW — not eight with a floor.
+	 *
+	 * Eight was unsatisfiable in the honest case and satisfiable only in the broken one. At seven
+	 * orders a quarter, requiring eight attributed purchases requires coverage above 100%: GA4 must
+	 * have attributed MORE purchases than orders exist, which happens when the purchase tag fires
+	 * twice. So the column was withheld in every sound configuration and rendered in precisely the
+	 * corrupt one. A gate that can only open on bad data is worse than no gate.
+	 *
+	 * The window has both ends now. Below a quarter of the order book the sample is too thin to
+	 * divide revenue by; above about a fifth more purchases than orders, GA4 is counting sales that
+	 * did not happen and its split cannot be trusted either.
+	 */
+	const MIN_TRACKED_PURCHASES = 5
 	const MIN_COVERAGE = 0.25
+	const MAX_COVERAGE = 1.2
+	const coverage = actuals?.orders != null && actuals.orders > 0 ? trackedPurchases / actuals.orders : null
 
 	const splitIsSound = trackedPurchases >= MIN_TRACKED_PURCHASES
 		&& trackedRevenue > 0
-		&& (coverage === null || coverage >= MIN_COVERAGE)
+		&& (coverage === null || (coverage >= MIN_COVERAGE && coverage <= MAX_COVERAGE))
 
 	if (splitIsSound) {
 		for (const row of rows) {
@@ -298,7 +308,11 @@ export async function acquisition(input: AcquisitionInput): Promise<AcquisitionD
 			// A diagnosable fault in its own right: the purchase event is firing and being attributed,
 			// but carrying no value, so GA4 knows a sale happened and not what it was worth.
 			? `GA4 attributed ${trackedPurchases} purchase${trackedPurchases === 1 ? '' : 's'} to a source but recorded no revenue against them, so there is no shape to split your takings by. The purchase event is firing without its value.`
-			: trackedPurchases === 0
+			: coverage !== null && coverage > MAX_COVERAGE
+				// Over-attribution is a finding, not a shortage. Reporting it as "too few" would send
+				// the reader to widen the range, which makes a double-firing tag worse, not better.
+				? `GA4 attributed ${trackedPurchases} purchases to a source but you only have ${actuals?.orders} orders in this range. It is counting sales that did not happen — usually a purchase tag firing twice — so its split cannot be trusted.`
+				: trackedPurchases === 0
 			? 'GA4 attributed no purchases at all to a source in this range, so revenue cannot be split by channel. That usually means the purchase event is not firing, or is firing without its source.'
 			: coverage !== null && coverage < MIN_COVERAGE
 				? `GA4 attributed ${trackedPurchases} of your ${actuals?.orders} orders to a source in this range — too small a sample of your own sales to divide revenue by.`

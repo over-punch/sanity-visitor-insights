@@ -79,10 +79,18 @@ export function fromOrders(ga4Purchases: number, sanityOrders: number): CaptureE
 /**
  * Build the pageview-based estimate.
  *
- * Treat it as a LOWER bound on the capture rate rather than a measurement. Vercel counts
- * server-side, so it also counts crawlers, prefetches and route changes GA4 never sees — which
- * inflates the apparent loss. A gap here that the orders estimate does not corroborate is more
- * likely definitional than a real failure.
+ * An UPPER bound on the capture rate, not a lower one. This comment said the opposite for the life
+ * of the package, on the strength of a claim about Vercel that is not true.
+ *
+ * Vercel Web Analytics is not server-side. It is the `@vercel/analytics` client script — the same
+ * kind of beacon GA4 uses, on a first-party path — so it is blocked too, just by fewer lists, and
+ * it does not run for crawlers at all. The old reasoning was: Vercel over-counts (crawlers), so the
+ * ratio understates GA4's true capture, so treat it as a floor. Both halves are wrong. Vercel is
+ * itself an undercount of reality, so the real denominator is LARGER than the one used here, and
+ * GA4/Vercel therefore flatters GA4 rather than maligning it.
+ *
+ * Which way this matters: when this estimate says GA4 sees a fifth of the traffic, the truth is a
+ * fifth or less — never more. The direction of the caveat printed beside it was reversed.
  */
 export function fromPageviews(ga4Pageviews: number, vercelPageviews: number): CaptureEstimate | null {
 	if (vercelPageviews < MIN_DENOMINATOR) return null
@@ -91,7 +99,7 @@ export function fromPageviews(ga4Pageviews: number, vercelPageviews: number): Ca
 		rate: ga4Pageviews / vercelPageviews,
 		observed: ga4Pageviews,
 		actual: vercelPageviews,
-		note: 'GA4 pageviews against Vercel’s. A lower bound: Vercel also counts crawlers and prefetches that GA4 never sees, so it overstates the loss.',
+		note: 'GA4 pageviews against Vercel’s. Read it as a ceiling: Vercel’s own counter is a script too — blocked by fewer lists than GA4, but blocked — so real traffic is higher than both and GA4’s true share is this or less.',
 	}
 }
 

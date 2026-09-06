@@ -10,6 +10,7 @@ import React, { useCallback, useRef, useState } from 'react'
 import { Box, Button, Card, Container, Flex, Heading, Spinner, Stack, Text } from '@liiift-studio/sanity-ui-compat'
 import type { RangeKey, ReportName, SourceName, SourceStatus } from '../types'
 import { knownShortfall, useReport, type ReportState } from './useReport'
+import { decodeView, mergeIntoHash, type ViewState } from './urlState'
 import type { ReportEnvelope } from '../types'
 import { daysBetween, shiftDays } from '../core/ranges'
 import { NoticeList } from './Figure'
@@ -786,18 +787,52 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 	// Kept for the document title and accessible naming, no longer printed as a subtitle.
 	const siteLabel = props.tool?.options?.siteLabel ?? props.siteLabel ?? ''
 
-	const [range, setRange] = useState<RangeKey>('week')
+	/*
+	 * The view a link asked for, read once at mount.
+	 *
+	 * Read lazily inside useState so it happens on the first render rather than after it — seeding
+	 * from a default and then correcting in an effect would fire a fetch for the week, throw it
+	 * away, and fetch again for the window the link actually named.
+	 */
+	const [linked] = useState<ViewState>(() => (typeof window === 'undefined' ? {} : decodeView(window.location.hash)))
+	// Validated against the tabs and ranges that exist. A link naming something this build does not
+	// have falls back rather than selecting nothing.
+	const linkedRange = RANGES.some((r) => r.key === linked.range) ? (linked.range as RangeKey) : null
+	const linkedTab = PANELS.some((p) => p.id === linked.tab) ? (linked.tab as string) : null
+
+	const [range, setRange] = useState<RangeKey>(linkedRange ?? 'week')
 	// The range in force before a brush, so the escape hatch returns where the reader was rather
 	// than to a week they never chose. Brushing from Quarter and landing in Week loses 358 days,
 	// and the label said so — a stated wrong answer rather than a bug you could rationalise.
-	const [rangeBeforeBrush, setRangeBeforeBrush] = useState<RangeKey>('week')
+	const [rangeBeforeBrush, setRangeBeforeBrush] = useState<RangeKey>(linkedRange ?? 'week')
 	// Seeded with the trailing month so the picker opens on a valid range rather than on two empty
 	// fields. Local dates, not the property's: this is only the form's starting value, and the
 	// server re-resolves whatever is submitted against the property timezone.
-	const [custom, setCustom] = useState(() => ({ start: isoDaysAgo(30), end: isoDaysAgo(0) }))
+	const [custom, setCustom] = useState(() => (linked.from && linked.to
+		? { start: linked.from, end: linked.to }
+		: { start: isoDaysAgo(30), end: isoDaysAgo(0) }))
 	/** Whether the custom window already runs to today, so forward panning has nowhere to go. */
 	const atPresent = custom.end >= isoDaysAgo(0)
-	const [activePanel, setActivePanel] = useState<string>('overview')
+	const [activePanel, setActivePanel] = useState<string>(linkedTab ?? 'overview')
+
+	// And write it back, so the address bar always describes what is on screen.
+	//
+	// replaceState, not pushState: Sanity owns the history stack for its own navigation, and adding
+	// an entry per range click would make the Studio's back button walk through this tool's
+	// filters instead of leaving the tool. The link is still copyable at any moment, which is the
+	// thing that was missing.
+	React.useEffect(() => {
+		if (typeof window === 'undefined') return
+		const next = mergeIntoHash(window.location.hash, {
+			tab: activePanel,
+			range,
+			from: custom.start,
+			to: custom.end,
+		})
+		if (next !== window.location.hash) {
+			window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${next}`)
+		}
+	}, [activePanel, range, custom.start, custom.end])
 
 	const active = PANELS.find((p) => p.id === activePanel) ?? PANELS[0]
 
