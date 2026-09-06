@@ -141,6 +141,34 @@ const cardGrid: React.CSSProperties = {
 }
 
 /**
+ * How many pageviews GA4 did not see on a day, or null when either side is unmeasured.
+ *
+ * Null rather than zero: a day one source did not report is not a day they agreed. Negative is
+ * kept, not clamped — GA4 counting MORE than Vercel is a real and diagnosable state (a tag firing
+ * twice), and hiding it behind a floor of zero would make the two failure modes look identical.
+ *
+ * @param day - one day of the cross-source series
+ */
+export function gapOf(day: { vercelPageviews: number | null; ga4Pageviews: number | null }): number | null {
+	if (day.vercelPageviews === null || day.ga4Pageviews === null) return null
+	return day.vercelPageviews - day.ga4Pageviews
+}
+
+/**
+ * The fraction of a day's pageviews GA4 saw, or null when it cannot be computed.
+ *
+ * Null on a zero denominator as well as on a missing measurement: no traffic means no coverage
+ * figure, and 0/0 rendered as 0% would put the quietest days at the top of a sort meant to find
+ * the worst ones.
+ *
+ * @param day - one day of the cross-source series
+ */
+export function coverageOf(day: { vercelPageviews: number | null; ga4Pageviews: number | null }): number | null {
+	if (day.vercelPageviews === null || day.ga4Pageviews === null || day.vercelPageviews <= 0) return null
+	return day.ga4Pageviews / day.vercelPageviews
+}
+
+/**
  * Overview — the five-minute read.
  *
  * Revenue, orders, the mailing list, the cross-source timeline and the campaign table all used to
@@ -310,6 +338,40 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								key: 'ga4', label: 'Seen by GA4', numeric: true,
 								sortValue: (d) => d.ga4Pageviews,
 								render: (d) => <Text size={1}>{d.ga4Pageviews === null ? '—' : formatCount(d.ga4Pageviews)}</Text>,
+							},
+							{
+								/*
+								 * The disagreement, as a number you can sort on.
+								 *
+								 * This table held `Pageviews` and `Seen by GA4` as separate columns and
+								 * nothing joining them, so the one quantity this whole tool exists to
+								 * surface was the one column missing from the only table that could hold
+								 * it. "Which day did GA4 lose most" was answerable by eye, or by the
+								 * single worst-day sentence under the chart, and by nothing else — not
+								 * sortable, not filterable, not in the CSV.
+								 */
+								key: 'missed', label: 'Missed by GA4', numeric: true,
+								sortValue: (d) => gapOf(d),
+								exportValue: (d) => gapOf(d),
+								render: (d) => {
+									const gap = gapOf(d)
+									return <Text size={1}>{gap === null ? '—' : formatCount(gap)}</Text>
+								},
+							},
+							{
+								/*
+								 * The same disagreement as a proportion, because the two rank days
+								 * differently and both questions are real: the absolute column finds the
+								 * day that cost the most, this one finds the day the instrument worked
+								 * worst. Sorting on it is how a reader dates a collapse.
+								 */
+								key: 'coverage', label: 'GA4 coverage', numeric: true,
+								sortValue: (d) => coverageOf(d),
+								exportValue: (d) => coverageOf(d),
+								render: (d) => {
+									const coverage = coverageOf(d)
+									return <Text size={1}>{coverage === null ? '—' : formatPercent(coverage, 0)}</Text>
+								},
 							},
 							{
 								key: 'orders', label: 'Orders', numeric: true,

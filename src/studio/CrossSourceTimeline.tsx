@@ -134,6 +134,13 @@ const TOP_PAD = 22
 /** Type size inside the plot. A real value now that the scale is uniform. */
 const AXIS_TYPE = 11
 /**
+ * Height reserved above each row's plot for its label, in user units.
+ *
+ * Enough for AXIS_TYPE plus its descender and a little air. The plot starts below it, so a row's
+ * peak can reach the top of its scale without meeting its own name.
+ */
+const LABEL_STRIP = 16
+/**
  * Shortest span a brush may apply.
  *
  * Matches the chart's own render floor. Anything shorter narrows the range to a window the chart
@@ -202,6 +209,8 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 	const [brushAnchor, setBrushAnchor] = useState<number | null>(null)
 	/** The committed span, kept so the selection stays drawn after the pointer is released. */
 	const [brushed, setBrushed] = useState<[number, number] | null>(null)
+	/** Whether the last drag was too short to apply, so the chart can say so instead of ignoring it. */
+	const [tooShort, setTooShort] = useState(false)
 	/**
 	 * The chart's rendered width in CSS pixels, so the viewBox can track it.
 	 *
@@ -300,7 +309,16 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 	 */
 	const commit = useCallback(
 		(from: number, to: number) => {
-			if (!onBrush || to - from < MIN_BRUSH_DAYS - 1) return
+			if (!onBrush) return
+			// Says so. This returned early and left nothing on screen, so the most likely mis-drag —
+			// a short one — read as the chart ignoring the reader. The comment on the pointer-leave
+			// handler rejects exactly this ("a silent no-op that looks like success") and then the
+			// commit path did it.
+			if (to - from < MIN_BRUSH_DAYS - 1) {
+				setTooShort(true)
+				return
+			}
+			setTooShort(false)
 			const start = dates[from]
 			const end = dates[to]
 			if (start && end) onBrush(start, end)
@@ -309,7 +327,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 	)
 
 	const onMove = useCallback(
-		(event: React.MouseEvent<SVGSVGElement>) => {
+		(event: React.PointerEvent<SVGSVGElement>) => {
 			const index = indexAt(event.clientX)
 			if (index === null) return
 			setHoverIndex(index)
@@ -322,6 +340,23 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 	if (dates.length < 3 || series.length === 0 || !x) return null
 
 	const hoveredDate = hoverIndex !== null ? dates[hoverIndex] : null
+	/**
+	 * Which days get a date label, spread evenly from first to last.
+	 *
+	 * Always includes both ends. The count is driven by the measured plot width rather than fixed,
+	 * so a wide pane is not left with three labels across a metre of axis.
+	 */
+	const tickIndexes = useMemo(() => {
+		if (dates.length === 0) return []
+		if (dates.length === 1) return [0]
+		const affordable = Math.max(2, Math.min(8, Math.floor(plotWidth / 90)))
+		const step = (dates.length - 1) / (affordable - 1)
+		const indexes = Array.from({ length: affordable }, (_, i) => Math.round(i * step))
+		// Deduped: a short range can round two slots onto the same day, which would draw one label
+		// on top of another and give the axis two identical ends.
+		return [...new Set(indexes)]
+	}, [dates.length, plotWidth])
+
 	const revealed = pinned || hoverIndex !== null
 
 	// What the drawing says, in words. Serves a screen reader, anyone who cannot resolve the axis
@@ -355,14 +390,36 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 		if (!row.shortfall) return []
 		const seen = new Map(row.shortfall.points.map((p) => [p.date, p.value]))
 		let gap = 0
+		let excess = 0
 		let worst: { date: string; ratio: number } | null = null
+
+		// "Widest" needs a volume floor, because a ratio on an unbounded denominator is won by the
+		// quietest day: one Vercel pageview and no GA4 scores a perfect 1.0 and beats a real
+		// incident. At these volumes low-traffic days are routine, so without this the headline
+		// sentence names a trivial Sunday most of the time. A tenth of the busiest day is the bar.
+		const busiest = row.points.reduce((best, p) => Math.max(best, p.value ?? 0), 0)
+		const floor = Math.max(1, busiest * 0.1)
+
 		for (const point of row.points) {
 			if (point.value === null) continue
 			const saw = seen.get(point.date)
 			if (saw == null) continue
-			gap += point.value - saw
+			const difference = point.value - saw
+			// Signed sums kept apart. Adding them let days where GA4 counted MORE — a prefetch, a
+			// double-firing tag — quietly cancel days where it counted less, so a site with both
+			// problems reported no gap at all.
+			if (difference >= 0) gap += difference
+			else excess += -difference
 			const ratio = point.value > 0 ? 1 - saw / point.value : 0
-			if (!worst || ratio > worst.ratio) worst = { date: point.date, ratio }
+			if (point.value >= floor && (!worst || ratio > worst.ratio)) worst = { date: point.date, ratio }
+		}
+
+		// Over-counting is its own finding, not the absence of one. It used to fall through the
+		// `gap <= 0` guard and print nothing, so the failure mode with the loudest cause — a tag
+		// installed twice — was the one the chart stayed silent about.
+		if (excess > gap) {
+			return [`${row.shortfall.source} counted ${formatCount(Math.round(excess - gap))} MORE ${row.label.toLowerCase()} `
+				+ `than ${row.source} over this period, which usually means a tag firing twice rather than extra traffic.`]
 		}
 		if (gap <= 0 || !worst) return []
 		return [`${row.shortfall.source} missed ${formatCount(Math.round(gap))} ${row.label.toLowerCase()} over this period; `
@@ -383,13 +440,18 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 					// The viewBox tracks the measured width, so the scale is exactly 1 and every size
 					// here is a real CSS pixel. Height is fixed rather than derived from the aspect
 					// ratio, so rows keep their height whatever the pane does.
-					onMouseMove={onMove}
+					// onPointerMove, not onMouseMove. The anchor and the commit were already pointer
+					// events but the EXTENSION was not, and touch and pen send no compatibility
+					// mousemove stream during a drag — so `brushed` stayed at [i, i], commit saw a
+					// zero-length span, and the gesture did nothing while the legend advertised it.
+					onPointerMove={onMove}
 					// A selection in flight is abandoned when the pointer leaves, but nothing is left
 					// drawn: a selection still on screen that never applied is a silent no-op that
 					// looks like success.
-					onMouseLeave={() => { setHoverIndex(null); setBrushAnchor(null); setBrushed(null) }}
+					onPointerLeave={() => { setHoverIndex(null); setBrushAnchor(null); setBrushed(null) }}
 					onPointerDown={(event) => {
 						if (!onBrush) return
+						setTooShort(false)
 						const index = indexAt(event.clientX)
 						if (index === null) return
 						event.preventDefault()
@@ -454,12 +516,18 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 					{series.map((row, rowIndex) => {
 						const top = TOP_PAD + rowIndex * ROW_HEIGHT
 						const bottom = top + ROW_HEIGHT - 18
+						// The row label gets its own strip above the plot rather than sharing it. The
+						// label sat at `top + 12` with the scale's maximum AT `top`, so by construction
+						// the tallest point of every row — the peak day, the thing the row exists to
+						// show — passed under its own name, along with the axis-max figure at `top + 4`.
+						// Roughly a third of each band was type over data.
+						const plotTop = top + LABEL_STRIP
 
 						const values = row.points.map((p) => p.value).filter((v): v is number => v !== null)
 						// Each row scales to ITSELF. That is the whole point of small multiples: no
 						// shared scale means no invented correlation between rows.
 						const peak = d3Max(values) ?? 0
-						const y = scaleLinear().domain([0, peak || 1]).nice().range([bottom, top])
+						const y = scaleLinear().domain([0, peak || 1]).nice().range([bottom, plotTop])
 
 						const at = (p: SeriesPoint) => x(new Date(`${p.date}T00:00:00Z`))
 						const defined = (p: SeriesPoint) => p.value !== null
@@ -527,10 +595,13 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 								    above its own — bound by proximity to the wrong band, which is the
 								    one thing small multiples exist to get right. On row 0 it also ran
 								    straight through the campaign marker dots. */}
-								<text x={GUTTER + 4} y={top + 12} fontSize={AXIS_TYPE} fill="currentColor" opacity={0.7} fontWeight={500}>
+								<text x={GUTTER + 4} y={top + 11} fontSize={AXIS_TYPE} fill="currentColor" opacity={0.85} fontWeight={500}>
 									{row.label}
 								</text>
-								<text x={GUTTER + plotWidth} y={top + 12} textAnchor="end" fontSize={AXIS_TYPE} fill="currentColor" opacity={0.5}>
+								{/* 0.5 put 11px type at about 3.9:1 on a white card, under the 4.5:1 floor for
+						    text this size. The fill's alpha was measured and documented; the type's
+						    was not. 0.72 clears it in both themes. */}
+						<text x={GUTTER + plotWidth} y={top + 11} textAnchor="end" fontSize={AXIS_TYPE} fill="currentColor" opacity={0.72}>
 									{row.source}{row.complete ? '' : ' · partial'}
 								</text>
 
@@ -541,7 +612,11 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 								<text x={GUTTER - 6} y={y(y.domain()[1] as number) + 4} textAnchor="end" fontSize={AXIS_TYPE} fill="currentColor" opacity={0.7}>
 									{formatValue(y.domain()[1] as number, row.unit, currency)}
 								</text>
-								<text x={GUTTER - 6} y={bottom + 4} textAnchor="end" fontSize={AXIS_TYPE} fill="currentColor" opacity={0.7}>0</text>
+								{/* Formatted, like the top of the same axis. A literal "0" sat under "$800.00"
+						    or "43.0%" — the two ends of one axis written in different units. */}
+						<text x={GUTTER - 6} y={bottom + 4} textAnchor="end" fontSize={AXIS_TYPE} fill="currentColor" opacity={0.7}>
+							{formatValue(0, row.unit, currency)}
+						</text>
 
 								{/* One alpha, measured, not tied to hover.
 								    A previous comment claimed 0.26/0.34 cleared 3:1 and it did not —
@@ -675,9 +750,12 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						/>
 					)}
 
-					{/* The shared date axis, once, at the bottom. Ticks are the ends and the middle —
-					    enough to orient without crowding a chart this wide. */}
-					{[0, Math.floor(dates.length / 2), dates.length - 1].map((index, position) => {
+					{/* The shared date axis, once, at the bottom.
+					    As many ticks as the measured width affords — it was fixed at three regardless,
+					    so a 1400px pane got the same three labels as a 400px one, and the one thing
+					    measuring the chart makes cheap went unused. ~90px per label keeps them from
+					    touching at the longest label this formatter produces. */}
+					{tickIndexes.map((index, position) => {
 						const date = dates[index]
 						if (!date) return null
 						return (
@@ -685,10 +763,10 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 								key={date}
 								x={x(new Date(`${date}T00:00:00Z`))}
 								y={height - 6}
-								textAnchor={position === 0 ? 'start' : position === 2 ? 'end' : 'middle'}
+								textAnchor={position === 0 ? 'start' : position === tickIndexes.length - 1 ? 'end' : 'middle'}
 								fontSize={AXIS_TYPE}
 								fill="currentColor"
-								opacity={0.55}
+								opacity={0.72}
 							>
 								{tickLabel(new Date(`${date}T00:00:00Z`))}
 							</text>
@@ -762,9 +840,13 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 				)}
 				{markers.length > 0 && <Text size={0} muted>Vertical rules mark campaign sends.</Text>}
 				{onBrush && (
-					<Text size={0} muted>
-						Drag across at least three days — or hold shift and use the arrow keys, then Enter — to
-						narrow every panel to that span.
+					// The refusal replaces the instruction rather than sitting beside it, and it is a
+					// live region: the reader has just dragged and is looking at the chart, not at the
+					// small print under it.
+					<Text size={0} muted={!tooShort} aria-live="polite">
+						{tooShort
+							? `That span was too short to apply — the chart needs at least ${MIN_BRUSH_DAYS} days. Drag a little wider.`
+							: 'Drag across at least three days — or hold shift and use the arrow keys, then Enter — to narrow every panel to that span.'}
 					</Text>
 				)}
 			</div>

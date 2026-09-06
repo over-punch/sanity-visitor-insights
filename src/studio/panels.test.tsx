@@ -25,8 +25,10 @@ import {
 	OverviewPanel,
 	DataHealthPanel,
 	TypefaceInterestPanel,
+	coverageOf,
+	gapOf,
 } from './panels'
-import { VisitorInsightsTool } from './VisitorInsightsTool'
+import { PanelBoundary, VisitorInsightsTool } from './VisitorInsightsTool'
 
 // The tool mounts a panel, and the panel's hook calls useClient(), which needs a Studio source
 // context these tests deliberately do not build. The contract under test is the props shape, so the
@@ -1633,5 +1635,76 @@ describe('a table says accurately what it is showing', () => {
 		// exclude control, which is not what this is about.
 		expect(html).not.toMatch(/\d+ rows? hidden/)
 		expect(html).not.toMatch(/\d+ excluded/)
+	})
+})
+
+describe('disagreement is a quantity, not only a shaded area', () => {
+	it('gives the day-by-day table a sortable gap and coverage column', () => {
+		// The table had Pageviews and Seen by GA4 as separate columns and nothing joining them, so
+		// "which day did GA4 lose most" was answerable by eye and by nothing else.
+		const html = render(<OverviewPanel data={{
+			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.8,
+			ga4Sessions: ok(357), orders: ok(2), consentRate: unavailable('not_instrumented'),
+			vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+			revenue: ok(0), currency: 'USD', orderStatuses: {},
+			audience: ok(1), audienceGrowth: ok(0), campaigns: [],
+			capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
+			estimatedSessions: unavailable('not_applicable'), interpretation: 'x', daily: [],
+			crossSource: ['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04'].map((date, i) => ({
+				date, vercelPageviews: 300, ga4Pageviews: i === 2 ? 20 : 250, ga4Sessions: 60, orders: 0, revenue: null,
+			})),
+			timelineEvents: [],
+		} as never} />)
+		expect(html).toContain('Missed by GA4')
+		expect(html).toContain('GA4 coverage')
+		// The collapsed day: 300 - 20 missed, at 7% coverage.
+		expect(html).toContain('280')
+		expect(html).toContain('7%')
+	})
+
+	it('reports a day either source did not measure as unknown, not as agreement', () => {
+		// Zero would say the sources agreed; they did not, one of them was silent.
+		expect(gapOf({ vercelPageviews: null, ga4Pageviews: 40 })).toBeNull()
+		expect(gapOf({ vercelPageviews: 300, ga4Pageviews: null })).toBeNull()
+		expect(coverageOf({ vercelPageviews: null, ga4Pageviews: 40 })).toBeNull()
+	})
+
+	it('keeps a negative gap rather than flooring it at zero', () => {
+		// GA4 counting more than Vercel is a diagnosable state — a tag firing twice — and flooring
+		// it would make that indistinguishable from perfect agreement.
+		expect(gapOf({ vercelPageviews: 100, ga4Pageviews: 260 })).toBe(-160)
+	})
+
+	it('has no coverage figure for a day with no traffic', () => {
+		// 0/0 rendered as 0% would sort the quietest days to the top of a ranking meant to find the
+		// worst ones — the same unbounded-denominator trap as the worst-day sentence.
+		expect(coverageOf({ vercelPageviews: 0, ga4Pageviews: 0 })).toBeNull()
+	})
+})
+
+describe('a caught panel error clears on tab change without discarding state', () => {
+	/**
+	 * Exercised through the boundary's own static, which is where the logic lives. Rendering a
+	 * thrown error and then changing a prop needs a DOM these tests do not have; the static is pure
+	 * and is the thing the fix actually changed.
+	 */
+	const derive = (PanelBoundary as unknown as {
+		getDerivedStateFromProps: (
+			p: { resetKey: string },
+			s: { error: Error | null; shownFor: string },
+		) => { error: Error | null; shownFor: string } | null
+	}).getDerivedStateFromProps
+
+	it('clears the error when the tab changes', () => {
+		const next = derive({ resetKey: 'journey' }, { error: new Error('boom'), shownFor: 'acquisition' })
+		expect(next).toEqual({ error: null, shownFor: 'journey' })
+	})
+
+	it('leaves state alone when the tab has not changed', () => {
+		// Returning a fresh object every render would clear an error the instant it was caught, and
+		// the panel would loop between throwing and rendering.
+		const error = new Error('boom')
+		expect(derive({ resetKey: 'journey' }, { error, shownFor: 'journey' })).toBeNull()
+		expect(derive({ resetKey: 'journey' }, { error: null, shownFor: 'journey' })).toBeNull()
 	})
 })

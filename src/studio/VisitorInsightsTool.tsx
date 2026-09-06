@@ -677,16 +677,35 @@ const COMPARED_TABS = ['overview', 'acquisition']
  * happened twice, and both times the reader lost four working panels to fix one.
  */
 class PanelBoundary extends React.Component<
-	{ children: React.ReactNode },
-	{ error: Error | null }
+	{ children: React.ReactNode; resetKey: string },
+	{ error: Error | null; shownFor: string }
 > {
-	constructor(props: { children: React.ReactNode }) {
+	constructor(props: { children: React.ReactNode; resetKey: string }) {
 		super(props)
-		this.state = { error: null }
+		this.state = { error: null, shownFor: props.resetKey }
 	}
 
 	static getDerivedStateFromError(error: Error) {
 		return { error }
+	}
+
+	/**
+	 * Clear a caught error when the tab changes, WITHOUT remounting the subtree.
+	 *
+	 * This boundary used to be keyed on the active tab, which cleared the error by throwing the
+	 * whole subtree away — and with it every table's sort, filter and exclusions, and `useReport`'s
+	 * state, which resets to `idle` and refetches. So the natural exploratory loop — sort
+	 * Acquisition by engagement, check Journey, come back — always cost the reader their work, on a
+	 * component that invests real care in preserving exactly that state across a RANGE change.
+	 *
+	 * A reset key does the one thing the mount key was there for and nothing else.
+	 */
+	static getDerivedStateFromProps(
+		props: { resetKey: string },
+		state: { error: Error | null; shownFor: string },
+	) {
+		if (props.resetKey !== state.shownFor) return { error: null, shownFor: props.resetKey }
+		return null
 	}
 
 	componentDidCatch(error: Error) {
@@ -718,6 +737,8 @@ class PanelBoundary extends React.Component<
 }
 
 /** The tool itself. */
+export { PanelBoundary }
+
 export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): React.ReactElement {
 	// Nested options win, since that is the shape the Studio supplies; the flat props are the
 	// direct-use fallback. See VisitorInsightsToolComponentProps for why both exist.
@@ -734,6 +755,8 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 	// fields. Local dates, not the property's: this is only the form's starting value, and the
 	// server re-resolves whatever is submitted against the property timezone.
 	const [custom, setCustom] = useState(() => ({ start: isoDaysAgo(30), end: isoDaysAgo(0) }))
+	/** Whether the custom window already runs to today, so forward panning has nowhere to go. */
+	const atPresent = custom.end >= isoDaysAgo(0)
 	const [activePanel, setActivePanel] = useState<string>('overview')
 
 	const active = PANELS.find((p) => p.id === activePanel) ?? PANELS[0]
@@ -784,13 +807,26 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 						>
 							← earlier
 						</button>
+						{/* Disabled at the present, rather than allowed to overshoot it. The server
+						    rejects a future end date with a 400, which the panel renders as a critical
+						    card IN PLACE OF ALL CONTENT — including the timeline you would use to get
+						    back. A navigation control should not be able to put the tool into an error
+						    state the server already knows is unreachable. */}
 						<button
 							type="button"
 							style={inlineClear}
 							aria-label="Shift the window forward by its own length"
+							disabled={atPresent}
+							title={atPresent ? 'This window already ends today' : undefined}
 							onClick={() => {
 								const span = daysBetween(custom.start, custom.end)
-								setCustom({ start: shiftDays(custom.start, span), end: shiftDays(custom.end, span) })
+								const today = isoDaysAgo(0)
+								const end = shiftDays(custom.end, span)
+								// Shifted by whatever room is left when a full step would overshoot, so
+								// the last press lands on today rather than doing nothing.
+								const allowed = end > today ? daysBetween(custom.end, today) : span
+								if (allowed <= 0) return
+								setCustom({ start: shiftDays(custom.start, allowed), end: shiftDays(custom.end, allowed) })
 							}}
 						>
 							later →
@@ -814,7 +850,7 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 						{/* Keyed on the tab, so a throw on one panel does not render the error card for
 						    every other. Without the key the boundary held `error` forever and its own
 						    copy — "The other panels are unaffected" — became false. */}
-						<PanelBoundary key={activePanel}>
+						<PanelBoundary resetKey={activePanel}>
 							<ReportPanel
 								tabId={active?.id ?? 'overview'}
 								report={active?.report ?? 'measurement-health'}
