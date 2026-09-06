@@ -47,7 +47,7 @@ vi.mock('sanity', () => ({
 	definePlugin: (definition: unknown) => definition,
 }))
 import visitorInsights from '../index'
-import { Delta, MetricFigure, NoticeList, ProportionChart, SortableTable } from './Figure'
+import { Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, SortableTable } from './Figure'
 import { holdsPreviousAnswer } from './useReport'
 import { ok, partial, unavailable } from '../types'
 import { UI } from '@liiift-studio/sanity-ui-compat'
@@ -2363,5 +2363,40 @@ describe('an estimate never prints a range its own point sits outside', () => {
 		expect(grossed!.basis).toBe('pageviews')
 		expect(grossed!.rate).toBeCloseTo(0.2, 6)
 		expect(Math.round(1000 / grossed!.rate)).toBe(Math.round(grossed!.value))
+	})
+})
+
+describe('a funnel rate needs a denominator that can carry one', () => {
+	const stages = (values: number[]) => values.map((value, i) => ({
+		key: `s${i}`,
+		label: ['Landed', 'Viewed a typeface', 'Used the tester', 'Added to cart', 'Began checkout', 'Purchased'][i]!,
+		value,
+		conversionFromPrevious: i === 0 ? null : value / values[i - 1]!,
+	}))
+
+	it('prints a rate where the population supports it', () => {
+		const html = render(<FunnelChart stages={stages([2000, 900, 400, 120, 60, 24])} measurement="sequence" />)
+		expect(html).toContain('of landed')
+		expect(html).toContain('of began checkout')
+	})
+
+	it('withholds a step-to-step rate computed on single digits', () => {
+		// The last figure in the tool still stating a small-sample number with full authority: at
+		// seven orders a quarter "33.3% of began checkout" is one visitor out of three, drawn to a
+		// decimal place beside rates computed on hundreds.
+		const html = render(<FunnelChart stages={stages([400, 180, 60, 12, 3, 1])} measurement="sequence" />)
+		expect(html).not.toContain('of began checkout')
+	})
+
+	it('still shows the counts, which are facts at any size', () => {
+		// How many people reached a step does not need a population; the ratio does.
+		const html = render(<FunnelChart stages={stages([400, 180, 60, 12, 3, 1])} measurement="sequence" />)
+		expect(html).toContain('12')
+		expect(html).toContain('3')
+	})
+
+	it('says why a rate is missing rather than leaving a gap', () => {
+		const html = render(<FunnelChart stages={stages([8, 5, 3])} measurement="sequence" />)
+		expect(html).toContain('too few to give a rate')
 	})
 })

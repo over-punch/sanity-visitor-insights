@@ -478,6 +478,17 @@ export interface FunnelChartProps {
 }
 
 /**
+ * The smallest denominator a step-to-step rate may be computed on.
+ *
+ * Thirty. Below it one extra visitor moves the printed percentage by more than three points, so the
+ * figure describes the arrival of a single person rather than the behaviour of a group — and at
+ * these foundries' volumes the lower rungs of a funnel sit well under it. The count beside it is
+ * still shown, because how many people reached a step is a fact at any size; it is the ratio that
+ * needs a population.
+ */
+const MIN_RATE_DENOMINATOR = 30
+
+/**
  * A funnel.
  *
  * Widths are a share of the FIRST stage rather than of the largest, which is what makes it read as
@@ -554,11 +565,28 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
 							    percentages had no way to see how narrow the funnel had already
 							    become. On stage two the previous step IS entry, so printing both
 							    read as "100.0% of landed · 500.0% of landed". */}
+							{/*
+							  * A rate is printed only where its denominator can carry one.
+							  *
+							  * This was the last figure in the tool still stating a small-sample number
+							  * with full authority. At seven orders a quarter and a fifth of traffic
+							  * captured, the lower rungs hold single digits — so "33.3% of began
+							  * checkout" was one visitor out of three, drawn to a decimal place and
+							  * sitting in the same type as a rate computed on hundreds. One more sale
+							  * moves it thirty points.
+							  *
+							  * The count still shows: how many people reached a step is a fact at any
+							  * size. It is the RATIO that needs a denominator, which is the same rule
+							  * the revenue split and the catalogue index already follow.
+							  */}
 							<Text size={0} muted>
 								{index === 0
 									? 'entry step'
-									: `${formatPercent(share, 1)} of ${stages[0]?.label.toLowerCase()}`}
+									: entry >= MIN_RATE_DENOMINATOR
+										? `${formatPercent(share, 1)} of ${stages[0]?.label.toLowerCase()}`
+										: 'too few to give a rate'}
 								{index > 1 && stage.conversionFromPrevious !== null && previous
+									&& (previous.value ?? 0) >= MIN_RATE_DENOMINATOR
 									? ` · ${formatPercent(stage.conversionFromPrevious, 1)} of ${previous.label.toLowerCase()}`
 									: ''}
 							</Text>
