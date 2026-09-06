@@ -83,6 +83,17 @@ export interface CrossSourceTimelineProps {
 	markers?: TimelineMarker[]
 	/** ISO 4217 code for any `money` series. */
 	currency?: string | null
+	/**
+	 * Called when the reader drags across a span, with inclusive ISO dates.
+	 *
+	 * Time is the only dimension all four sources genuinely share, which makes it the only thing
+	 * worth linking on — a referrer row carries no date and a funnel step carries no source, so
+	 * value-based cross-filtering would need dimensions the reports do not request and could not
+	 * afford. Dragging a span and having every panel reflow to it is the whole of the cross-filter
+	 * this data model supports, and it costs one callback: the range state already drives
+	 * everything.
+	 */
+	onBrush?: (start: string, end: string) => void
 }
 
 /**
@@ -131,12 +142,16 @@ function tickLabel(date: Date): string {
  * Renders nothing rather than an empty frame when there is not enough to plot — two points cannot
  * show a shape, and an axis with one dot on it invites a reading it cannot support.
  */
-export function CrossSourceTimeline({ series, markers = [], currency }: CrossSourceTimelineProps): React.ReactElement | null {
+export function CrossSourceTimeline({ series, markers = [], currency, onBrush }: CrossSourceTimelineProps): React.ReactElement | null {
 	const [hoverIndex, setHoverIndex] = useState<number | null>(null)
 	// Whether to draw the constituent sources. Hover reveals them; so does keyboard focus and the
 	// explicit toggle, because a chart whose detail exists only under a pointer is unreachable on a
 	// phone and to anyone navigating by keyboard.
 	const [pinned, setPinned] = useState(false)
+	/** Index the drag began at, or null when not dragging. */
+	const [brushAnchor, setBrushAnchor] = useState<number | null>(null)
+	/** The committed span, kept so the selection stays drawn after the pointer is released. */
+	const [brushed, setBrushed] = useState<[number, number] | null>(null)
 	const frameRef = useRef<SVGSVGElement | null>(null)
 
 	// Every date any series reported, ascending. Built from the union so a series with a gap does
@@ -157,18 +172,29 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 			.range([GUTTER, GUTTER + plotWidth])
 	}, [dates, plotWidth])
 
-	const onMove = useCallback(
-		(event: React.MouseEvent<SVGSVGElement>) => {
+	/** Pointer position to a day index, in the shared viewBox space. */
+	const indexAt = useCallback(
+		(clientX: number) => {
 			const frame = frameRef.current
-			if (!frame || dates.length === 0) return
+			if (!frame || dates.length === 0) return null
 			const box = frame.getBoundingClientRect()
-			// Position within the plot, in the same 0–100 space as the viewBox.
-			const ratio = ((event.clientX - box.left) / box.width) * WIDTH
+			const ratio = ((clientX - box.left) / box.width) * WIDTH
 			const clamped = Math.max(GUTTER, Math.min(GUTTER + plotWidth, ratio))
 			const index = Math.round(((clamped - GUTTER) / plotWidth) * (dates.length - 1))
-			setHoverIndex(Math.max(0, Math.min(dates.length - 1, index)))
+			return Math.max(0, Math.min(dates.length - 1, index))
 		},
 		[dates.length, plotWidth],
+	)
+
+	const onMove = useCallback(
+		(event: React.MouseEvent<SVGSVGElement>) => {
+			const index = indexAt(event.clientX)
+			if (index === null) return
+			setHoverIndex(index)
+			// Mid-drag: extend the selection rather than only moving the crosshair.
+			if (brushAnchor !== null) setBrushed([Math.min(brushAnchor, index), Math.max(brushAnchor, index)])
+		},
+		[indexAt, brushAnchor],
 	)
 
 	if (dates.length < 3 || series.length === 0 || !x) return null
@@ -219,10 +245,29 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 					viewBox={`0 0 ${WIDTH} ${height}`}
 					// Default preserveAspectRatio, so the scale is uniform and nothing is stretched.
 					// height:auto lets the intrinsic aspect ratio drive it, which also means the
-					// rendered box matches the viewBox exactly and the pointer maths below is exact.
-					style={{ width: '100%', height: 'auto', display: 'block' }}
+					// rendered box matches the viewBox exactly and the pointer maths is exact.
 					onMouseMove={onMove}
-					onMouseLeave={() => setHoverIndex(null)}
+					onMouseLeave={() => { setHoverIndex(null); setBrushAnchor(null) }}
+					onMouseDown={(event) => {
+						if (!onBrush) return
+						const index = indexAt(event.clientX)
+						if (index === null) return
+						event.preventDefault()
+						setBrushAnchor(index)
+						setBrushed([index, index])
+					}}
+					onMouseUp={() => {
+						if (!onBrush || brushAnchor === null) return
+						const index = hoverIndex ?? brushAnchor
+						const from = Math.min(brushAnchor, index)
+						const to = Math.max(brushAnchor, index)
+						setBrushAnchor(null)
+						// A click is not a drag. Selecting one day would hand every panel a
+						// single-day range, which at these volumes is mostly withheld rows.
+						if (to - from < 1) { setBrushed(null); return }
+						onBrush(dates[from] as string, dates[to] as string)
+					}}
+					style={{ width: '100%', height: 'auto', display: 'block', cursor: onBrush ? 'col-resize' : 'default' }}
 					tabIndex={0}
 					role="img"
 					// The label carries the SHAPE, not just the subject. It previously said only which
@@ -241,10 +286,22 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 						if (event.key === 'ArrowLeft') next = Math.max(current - 1, 0)
 						if (event.key === 'Home') next = 0
 						if (event.key === 'End') next = dates.length - 1
-						if (event.key === 'Escape') { setHoverIndex(null); return }
+						if (event.key === 'Escape') { setHoverIndex(null); setBrushed(null); return }
+						if (event.key === 'Enter' && brushed && brushed[1] > brushed[0] && onBrush) {
+							event.preventDefault()
+							onBrush(dates[brushed[0]] as string, dates[brushed[1]] as string)
+							return
+						}
 						if (next === null) return
 						event.preventDefault()
 						setHoverIndex(next)
+						// Shift extends a selection, so the brush is reachable without a pointer —
+						// which matters more here than usual, since this is the tool's one
+						// cross-filter and the pane is often narrow.
+						if (event.shiftKey && onBrush) {
+							const anchor = brushed ? brushed[0] : current
+							setBrushed([Math.min(anchor, next), Math.max(anchor, next)])
+						}
 					}}
 				>
 					{series.map((row, rowIndex) => {
@@ -355,6 +412,30 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 						)
 					})}
 
+					{/* The selection. Drawn as two dimmed flanks rather than a tinted middle, so the
+					    chosen span keeps the card's own background and stays the most legible part of
+					    the chart — a tint over the data would fight the marks it is meant to frame. */}
+					{brushed && brushed[1] > brushed[0] && (
+						<g aria-hidden="true">
+							<rect
+								x={GUTTER}
+								y={TOP_PAD - 8}
+								width={Math.max(0, x(new Date(`${dates[brushed[0]]}T00:00:00Z`)) - GUTTER)}
+								height={series.length * ROW_HEIGHT - 10}
+								fill="currentColor"
+								opacity={0.12}
+							/>
+							<rect
+								x={x(new Date(`${dates[brushed[1]]}T00:00:00Z`))}
+								y={TOP_PAD - 8}
+								width={Math.max(0, GUTTER + plotWidth - x(new Date(`${dates[brushed[1]]}T00:00:00Z`)))}
+								height={series.length * ROW_HEIGHT - 10}
+								fill="currentColor"
+								opacity={0.12}
+							/>
+						</g>
+					)}
+
 					{hoveredDate && (
 						<line
 							x1={x(new Date(`${hoveredDate}T00:00:00Z`))}
@@ -445,6 +526,12 @@ export function CrossSourceTimeline({ series, markers = [], currency }: CrossSou
 					<Text size={0} muted>Shaded: what your analytics did not see.</Text>
 				)}
 				{markers.length > 0 && <Text size={0} muted>Vertical rules mark campaign sends.</Text>}
+				{onBrush && (
+					<Text size={0} muted>
+						Drag across the chart — or hold shift and use the arrow keys, then Enter — to narrow
+						every panel to that span.
+					</Text>
+				)}
 			</div>
 		</Stack>
 	)

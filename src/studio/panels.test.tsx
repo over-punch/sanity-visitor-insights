@@ -1181,3 +1181,51 @@ describe('panel structure', () => {
 		expect(html).toContain('GA4 reachable')
 	})
 })
+
+describe('brushing and details on demand', () => {
+	const days = Array.from({ length: 10 }, (_, i) => `2026-09-${String(i + 1).padStart(2, '0')}`)
+	const base = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		revenue: ok(910), currency: 'USD', orderStatuses: {},
+		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
+		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
+		estimatedSessions: unavailable('not_applicable'),
+		interpretation: 'x', daily: [],
+		crossSource: days.map((date, i) => ({
+			date, vercelPageviews: 300 + i * 10, ga4Pageviews: 70 + i * 3, ga4Sessions: 60 + i, orders: i, revenue: i * 120,
+		})),
+		timelineEvents: [],
+	}
+
+	it('offers the chart figures as a table, collapsed', () => {
+		// A chart is a picture of the data and not the data. Serves a screen reader, a keyboard
+		// user, anyone who cannot resolve axis type, and the copy-to-spreadsheet workflow — and
+		// costs a sighted reader one line because it is a details element.
+		const html = render(<OverviewPanel data={base as never} />)
+		expect(html).toContain('<details')
+		expect(html).toContain('Show these figures as a table')
+		expect(html).toContain('Seen by GA4')
+	})
+
+	it('advertises brushing only when something can receive it', () => {
+		// Without a handler the drag would do nothing, and telling the reader to drag would be a lie.
+		expect(render(<OverviewPanel data={base as never} />)).not.toContain('narrow every panel')
+		expect(render(<OverviewPanel data={base as never} onBrush={() => {}} />))
+			.toContain('narrow every panel')
+	})
+
+	it('names the keyboard route to the brush, not just the drag', () => {
+		// This is the tool's one cross-filter, and the pane is often narrow — a mouse-only
+		// cross-filter is a cross-filter most of the time.
+		const html = render(<OverviewPanel data={base as never} onBrush={() => {}} />)
+		expect(html).toContain('arrow keys')
+		expect(html).toContain('Enter')
+	})
+
+	it('sets a col-resize cursor only when brushing is available', () => {
+		expect(render(<OverviewPanel data={base as never} onBrush={() => {}} />)).toContain('cursor:col-resize')
+		expect(render(<OverviewPanel data={base as never} />)).not.toContain('cursor:col-resize')
+	})
+})

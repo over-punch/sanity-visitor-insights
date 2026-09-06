@@ -297,6 +297,61 @@ export function ComparisonBar({ label, metric, max, tone = 'default' }: Comparis
 	)
 }
 
+/** Props for ChartData. */
+export interface ChartDataProps<Row> {
+	/** What the disclosure is called. Names the chart it belongs to. */
+	label: string
+	rows: Row[]
+	columns: Array<SortColumn<Row>>
+	rowKey: (row: Row) => string
+	exportName?: string
+}
+
+/**
+ * The figures behind a chart, as a table, collapsed by default.
+ *
+ * A chart is a picture of the data and not the data. Every other panel here renders a table for
+ * exactly that reason — the file header used to say so, and it stopped being true the moment the
+ * charts landed, leaving two time series with no equivalent anywhere in the tool.
+ *
+ * One disclosure serves four readers at once: someone using a screen reader, for whom an SVG under
+ * `role="img"` is a single opaque node; someone navigating by keyboard; someone who cannot resolve
+ * axis type at any size; and anyone who wants these numbers in a spreadsheet, since the table
+ * brings sorting and CSV copy with it. Collapsed, so it costs a sighted reader one line.
+ */
+export function ChartData<Row>({ label, rows, columns, rowKey, exportName }: ChartDataProps<Row>): React.ReactElement | null {
+	if (rows.length === 0) return null
+
+	return (
+		<details style={disclosureBlock}>
+			<summary style={disclosureSummary}>{label}</summary>
+			<div style={{ marginTop: 10 }}>
+				<SortableTable<Row>
+					caption={label}
+					rows={rows}
+					columns={columns}
+					rowKey={rowKey}
+					exportName={exportName}
+				/>
+			</div>
+		</details>
+	)
+}
+
+/** The disclosure wrapper for a chart's figures. */
+const disclosureBlock: React.CSSProperties = { width: '100%' }
+
+/** Its control. Underlined so it reads as actionable, like the caveat disclosure. */
+const disclosureSummary: React.CSSProperties = {
+	cursor: 'pointer',
+	font: 'inherit',
+	fontSize: '0.85em',
+	opacity: 0.75,
+	textDecoration: 'underline',
+	textUnderlineOffset: 3,
+	width: 'fit-content',
+}
+
 /** One bar of a proportion chart. */
 export interface ProportionBar {
 	key: string

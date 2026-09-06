@@ -15,7 +15,7 @@
 
 import React from 'react'
 import { Badge, Box, Card, Flex, Grid, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ComparisonBar, Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, SortableTable, TrendChart, formatCount, formatMoney, formatPercent } from './Figure'
+import { ChartData, ComparisonBar, Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, SortableTable, TrendChart, formatCount, formatMoney, formatPercent } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import type {
 	AcquisitionData,
@@ -23,6 +23,7 @@ import type {
 	SourceRow,
 	TypefaceInterestRow,
 	DiagnosticReport,
+	CrossSourceDay,
 	EmailCampaign,
 	JourneyData,
 	LandingPage,
@@ -160,7 +161,12 @@ const numericCell: React.CSSProperties = { ...cell, textAlign: 'right' }
  * under plumbing, on tab four, behind a door labelled for the instrument. This is the same data,
  * first, under a heading that says what it is.
  */
-export function OverviewPanel({ data, previous }: { data: MeasurementHealthData; previous?: MeasurementHealthData }): React.ReactElement {
+export function OverviewPanel({ data, previous, onBrush }: {
+	data: MeasurementHealthData
+	previous?: MeasurementHealthData
+	/** Narrow every panel to a span dragged on the timeline. */
+	onBrush?: (start: string, end: string) => void
+}): React.ReactElement {
 	return (
 		<Stack space={4}>
 			<Verdict data={data} previous={previous} />
@@ -207,7 +213,39 @@ export function OverviewPanel({ data, previous }: { data: MeasurementHealthData;
 						Each row has its own scale. Hover a day, or use the control below, to see what each
 						source saw of it.
 					</Text>
+					<ChartData<CrossSourceDay>
+						label="Show these figures as a table"
+						rows={data.crossSource ?? []}
+						rowKey={(d) => d.date}
+						exportName="timeline"
+						columns={[
+							{ key: 'date', label: 'Date', sortValue: (d) => d.date, render: (d) => <Text size={1}>{d.date}</Text> },
+							{
+								key: 'vercel', label: 'Pageviews', numeric: true,
+								sortValue: (d) => d.vercelPageviews,
+								render: (d) => <Text size={1}>{d.vercelPageviews === null ? '—' : formatCount(d.vercelPageviews)}</Text>,
+							},
+							{
+								key: 'ga4', label: 'Seen by GA4', numeric: true,
+								sortValue: (d) => d.ga4Pageviews,
+								render: (d) => <Text size={1}>{d.ga4Pageviews === null ? '—' : formatCount(d.ga4Pageviews)}</Text>,
+							},
+							{
+								key: 'orders', label: 'Orders', numeric: true,
+								sortValue: (d) => d.orders,
+								render: (d) => <Text size={1}>{d.orders === null ? '—' : formatCount(d.orders)}</Text>,
+							},
+							{
+								key: 'revenue', label: 'Revenue', numeric: true,
+								sortValue: (d) => d.revenue,
+								exportValue: (d) => (d.revenue === null ? null : formatMoney(d.revenue, data.currency ?? null)),
+								render: (d) => <Text size={1}>{d.revenue === null ? '—' : formatMoney(d.revenue, data.currency ?? null)}</Text>,
+							},
+						]}
+					/>
+
 					<CrossSourceTimeline
+						onBrush={onBrush}
 						currency={data.currency ?? null}
 						markers={data.timelineEvents ?? []}
 						series={[

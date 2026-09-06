@@ -10,6 +10,7 @@ import React, { useCallback, useRef, useState } from 'react'
 import { Box, Button, Card, Container, Flex, Heading, Spinner, Stack, Text } from '@liiift-studio/sanity-ui-compat'
 import type { RangeKey, ReportName, SourceName, SourceStatus } from '../types'
 import { useReport } from './useReport'
+import { daysBetween } from '../core/ranges'
 import { NoticeList } from './Figure'
 import { Badge } from '@liiift-studio/sanity-ui-compat'
 import { AcquisitionPanel, DataHealthPanel, JourneyPanel, OverviewPanel, TypefaceInterestPanel } from './panels'
@@ -62,6 +63,29 @@ function tabStyle(selected: boolean): React.CSSProperties {
 		cursor: 'pointer',
 		whiteSpace: 'nowrap',
 	}
+}
+
+/** The context line under the tabs, saying what the panels are currently narrowed to. */
+const contextRow: React.CSSProperties = {
+	display: 'flex',
+	gap: 12,
+	alignItems: 'baseline',
+	flexWrap: 'wrap',
+}
+
+/** Clearing the narrowed span. Text, not a button-looking control — it is an undo, not an action. */
+const inlineClear: React.CSSProperties = {
+	appearance: 'none',
+	background: 'transparent',
+	border: 'none',
+	color: 'inherit',
+	font: 'inherit',
+	fontSize: '0.8em',
+	opacity: 0.75,
+	padding: 0,
+	textDecoration: 'underline',
+	textUnderlineOffset: 3,
+	cursor: 'pointer',
 }
 
 /** One range button. Selected state carries weight and a border, never colour alone. */
@@ -406,6 +430,7 @@ function ReportPanel({
 	apiBaseUrl,
 	range,
 	custom,
+	onBrush,
 }: {
 	/** The tab being drawn. No longer the same as `report`: two tabs share one envelope. */
 	tabId: string
@@ -413,6 +438,7 @@ function ReportPanel({
 	apiBaseUrl: string
 	range: RangeKey
 	custom: { start: string; end: string }
+	onBrush?: (start: string, end: string) => void
 }): React.ReactElement {
 	const { state, reload } = useReport<unknown>({ apiBaseUrl, report, range, custom })
 	// Data health additionally shows the configuration checks. Fetched only on that tab, so the
@@ -497,7 +523,7 @@ function ReportPanel({
 						</Text>
 					)}
 
-					{tabId === 'overview' && <OverviewPanel data={state.envelope.data as never} previous={state.envelope.comparison?.data as never} />}
+					{tabId === 'overview' && <OverviewPanel data={state.envelope.data as never} previous={state.envelope.comparison?.data as never} onBrush={onBrush} />}
 					{tabId === 'data-health' && <DataHealthPanel data={state.envelope.data as never} diagnostics={diagnostics.status === 'ready' ? (diagnostics.envelope.data as never) : undefined} />}
 					{tabId === 'acquisition' && <AcquisitionPanel data={state.envelope.data as never} previous={state.envelope.comparison?.data as never} />}
 					{tabId === 'journey' && <JourneyPanel data={state.envelope.data as never} />}
@@ -614,6 +640,20 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 
 				<PanelTabs value={activePanel} onChange={setActivePanel} />
 
+				{/* The constraint, stated where it applies, on every panel.
+				    Once a span can be dragged, a reader is regularly in a window nobody chose from
+				    a menu — and the only indication of it was a footer line below all the content. */}
+				{range === 'custom' && (
+					<div style={contextRow}>
+						<Text size={0} muted>
+							Narrowed to {custom.start} to {custom.end} ({daysBetween(custom.start, custom.end)} days)
+						</Text>
+						<button type="button" style={inlineClear} onClick={() => setRange('week')}>
+							Back to the week
+						</button>
+					</div>
+				)}
+
 				<Box
 					role="tabpanel"
 					id={`panel-${activePanel}`}
@@ -625,7 +665,14 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 					<Stack space={4}>
 						{active && <Text size={1} muted>{active.blurb}</Text>}
 						<PanelBoundary onRetry={() => setActivePanel(activePanel)}>
-							<ReportPanel tabId={active?.id ?? 'overview'} report={active?.report ?? 'measurement-health'} apiBaseUrl={apiBaseUrl} range={range} custom={custom} />
+							<ReportPanel
+								tabId={active?.id ?? 'overview'}
+								report={active?.report ?? 'measurement-health'}
+								apiBaseUrl={apiBaseUrl}
+								range={range}
+								custom={custom}
+								onBrush={(start, end) => { setCustom({ start, end }); setRange('custom') }}
+							/>
 						</PanelBoundary>
 					</Stack>
 				</Box>

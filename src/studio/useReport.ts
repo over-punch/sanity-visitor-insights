@@ -10,6 +10,25 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useClient } from 'sanity'
 import type { RangeKey, ReportEnvelope, ReportName } from '../types'
 
+/**
+ * Envelopes already fetched this session, keyed by what identifies them.
+ *
+ * Module-level and deliberately unbounded within a session: there are five reports and a handful of
+ * ranges, so the ceiling is tens of entries. Without it every tab visit was a fresh round trip —
+ * Acquisition to Journey and back paid twice and waited twice — and the server's own cache is
+ * per-instance with a five-minute TTL, so a cold serverless instance re-fanned-out to GA4, Vercel,
+ * Sanity and Mailchimp to answer a question it had answered a moment earlier.
+ *
+ * Served immediately, then revalidated behind, so a return trip is a view change rather than a
+ * page load. That is most of what makes five tabs feel like one dataset.
+ */
+const envelopeCache = new Map<string, ReportEnvelope<unknown>>()
+
+/** Identity of a request: everything that changes the answer. */
+function cacheKey(report: string, range: string, custom?: { start: string; end: string }): string {
+	return [report, range, custom?.start ?? '', custom?.end ?? ''].join('|')
+}
+
 /** Sanity API version this tool pins. Fixed rather than "latest" so behaviour cannot drift. */
 const API_VERSION = '2024-03-01'
 
@@ -63,6 +82,13 @@ export function useReport<T>({ apiBaseUrl, report, range, custom, enabled = true
 		requestIdRef.current = requestId
 
 		const controller = new AbortController()
+		const key = cacheKey(report, range, custom)
+		const cached = envelopeCache.get(key)
+
+		// A cached answer for THIS key is shown at once and still revalidated. Marked stale so the
+		// reader knows a fresher one is coming, rather than being told nothing and wondering.
+		if (cached) setState({ status: 'ready', envelope: cached as ReportEnvelope<T>, stale: true })
+
 		// Keep showing the last answer while fetching the next one, marked stale.
 		//
 		// This used to clear to `loading` unconditionally, which unmounted the ready subtree and
@@ -70,7 +96,7 @@ export function useReport<T>({ apiBaseUrl, report, range, custom, enabled = true
 		// whether a ranking holds and the ranking is gone, after the screen went blank — so a reader
 		// could never hold a question steady while changing one variable, which is the whole of
 		// what "explorable" means. It also dumped keyboard focus to the body on every range change.
-		setState((current) => (current.status === 'ready' ? { ...current, stale: true } : { status: 'loading' }))
+		else setState((current) => (current.status === 'ready' ? { ...current, stale: true } : { status: 'loading' }))
 
 		async function run() {
 			// The Studio client carries the session token under token-based auth. Under cookie-based
@@ -129,6 +155,7 @@ export function useReport<T>({ apiBaseUrl, report, range, custom, enabled = true
 				const envelope = (await response.json()) as ReportEnvelope<T>
 				if (requestIdRef.current !== requestId) return
 
+				envelopeCache.set(key, envelope as ReportEnvelope<unknown>)
 				setState({ status: 'ready', envelope })
 			} catch (e) {
 				if (controller.signal.aborted || requestIdRef.current !== requestId) return
