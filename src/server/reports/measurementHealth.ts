@@ -418,23 +418,50 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	 * already documented.
 	 */
 	const unsettled = new Set(provisionalDates(range, input.now))
-	const settledGa4 = [...ga4ByDate.entries()].filter(([date]) => !unsettled.has(date))
-	const settledVercel = vercelIsDaily
-		? Object.entries(vercelByDate).filter(([date]) => !unsettled.has(date))
+
+	/*
+	 * The SAME days on both sides, not just the same provisional filter.
+	 *
+	 * Settling was fixed on the provisional axis and left broken on the membership one: the two
+	 * sides were filtered independently and their totals differenced regardless of whether they
+	 * covered the same days. `vercelIsDaily` tolerates up to 30% of days missing, so nearly a third
+	 * of a range could be present on one side and absent on the other while still being called
+	 * daily — and every one of those days counted as a shortfall that was really an absence.
+	 */
+	const comparable = vercelIsDaily
+		? [...ga4ByDate.keys()].filter((date) => !unsettled.has(date) && typeof vercelByDate[date] === 'number')
 		: []
 
 	const settledShortfall = (() => {
-		if (settledGa4.length === 0 || settledVercel.length === 0) return null
-		const ga4Total = settledGa4.reduce((sum, [, value]) => sum + value, 0)
-		const vercelTotal = settledVercel.reduce((sum, [, value]) => sum + (value ?? 0), 0)
+		// A handful of shared days is a ratio of noise. Below this the whole-range totals, which at
+		// least cover one consistent window each, are the better answer.
+		const MIN_COMPARABLE_DAYS = 3
+		if (comparable.length < MIN_COMPARABLE_DAYS) return null
+		let ga4Total = 0
+		let vercelTotal = 0
+		for (const date of comparable) {
+			ga4Total += ga4ByDate.get(date) ?? 0
+			vercelTotal += vercelByDate[date] ?? 0
+		}
 		return vercelTotal > 0 ? (vercelTotal - ga4Total) / vercelTotal : null
 	})()
 
+	// Every day in the window is still settling, so the ratio below is the artefact, not a finding.
+	if (settledShortfall === null && vercelIsDaily && unsettled.size >= daysInRange(range)) {
+		input.notices?.push('Every day in this range is still being processed by Google Analytics, so the comparison against Vercel reads far worse than it is. Choose a range that ends before yesterday.')
+	}
+
 	const shortfallRatio = settledShortfall !== null
 		? settledShortfall
-		// Falls back to whole-range totals only where daily figures are unavailable — a quarter or a
-		// year, where Vercel reports weekly buckets. Two unsettled days out of ninety move that
-		// ratio by well under a point, so the fallback is not carrying the bias the short ranges did.
+		/*
+		 * The fallback, for when too few days can be compared like for like.
+		 *
+		 * The comment here used to say this ran "only where daily figures are unavailable — a quarter
+		 * or a year". Both halves stopped being true: chunked fetching made quarter and year come
+		 * back daily, and the fallback is instead reached on a very short range ending today, where
+		 * every day may be provisional — carrying not "well under a point" of bias but all of it.
+		 * That case now says so rather than passing the whole-range ratio off as measured.
+		 */
 		: ga4Pageviews.status !== 'unavailable' && vercelPageviews.status !== 'unavailable' && vercelPageviews.value > 0
 			? (vercelPageviews.value - ga4Pageviews.value) / vercelPageviews.value
 			: null

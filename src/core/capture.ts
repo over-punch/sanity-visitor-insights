@@ -144,11 +144,19 @@ export function fromEmail(ga4Sessions: number, mailchimpClicks: number): Capture
 function samplingInterval(estimate: CaptureEstimate): { low: number; high: number } {
 	const n = estimate.actual
 	if (!Number.isFinite(n) || n <= 0) return { low: estimate.rate, high: estimate.rate }
-	// Bounded at the rate itself in the degenerate case, so a rate of exactly 0 or 1 — where the
-	// standard error is 0 — does not claim a certainty it has not earned either.
+	/*
+	 * The interval is built around the RATE, not around a clamped copy of it.
+	 *
+	 * `p` was clamped to 0..1 for the variance — correct, a proportion's variance is only defined
+	 * there — and then the bounds were clamped to 0..1 as well. A rate above 1 is explicitly
+	 * supported here ("above 1 means GA4 counted more, not less"), so a 140% capture rate came back
+	 * with a range of 91% to 100%: a point estimate outside its own interval, printed as such.
+	 *
+	 * The variance still uses the clamped proportion; only the bounds follow the rate.
+	 */
 	const p = Math.min(1, Math.max(0, estimate.rate))
 	const error = 2 * Math.sqrt(Math.max(p * (1 - p), 0.02) / n)
-	return { low: Math.max(0, p - error), high: Math.min(1, p + error) }
+	return { low: Math.max(0, estimate.rate - error), high: estimate.rate + error }
 }
 
 /** The combined view of GA4's capture rate. */

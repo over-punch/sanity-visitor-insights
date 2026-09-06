@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs'
 import { calendarDays } from '../server/reports/measurementHealth'
 import { dailyWindows } from '../server/vercel'
 import { zonedDay } from '../server/orders'
+import { formatInTimeZone } from '../core/ranges'
 import { formatCount, formatMoney } from './Figure'
 import { decodeView, encodeView, mergeIntoHash } from './urlState'
 import { captureModel, fromOrders, fromPageviews, grossUp } from '../core/capture'
@@ -2211,8 +2212,12 @@ describe('a long range still comes back day by day', () => {
 		expect(dailyWindows('2020-01-01', '2026-12-31')).toEqual([])
 	})
 
-	it('returns nothing for an inverted range', () => {
-		expect(dailyWindows('2026-09-05', '2026-06-08')).toEqual([])
+	it('throws on an inverted or malformed range rather than answering emptily', () => {
+		// Empty meant two different things — "too long, use one coarse call" and "these dates are
+		// nonsense" — and the caller could not tell them apart, so a bad date fell through to
+		// granularityFor, which computes Math.round(NaN) + 1 and silently answers 'month'.
+		expect(() => dailyWindows('2026-09-05', '2026-06-08')).toThrow(RangeError)
+		expect(() => dailyWindows('not-a-date', '2026-09-05')).toThrow(RangeError)
 	})
 
 	it('needs one window for a short range, which is the old behaviour', () => {
@@ -2263,8 +2268,23 @@ describe('an order lands on the day it happened, where the reader lives', () => 
 		expect(zonedDay('2026-09-05T12:00:00Z', 'Not/AZone')).toBe('2026-09-05')
 	})
 
-	it('survives a malformed timestamp', () => {
-		expect(zonedDay('not-a-date', 'UTC')).toBe('not-a-date')
+	it('refuses to invent a day from input that has none', () => {
+		// It returned iso.slice(0, 10), so a malformed timestamp became an eight-character key in the
+		// by-date map and was drawn on the chart as a day. A bucket key must never be able to invent
+		// one; the order still counts toward the totals, it just cannot be placed.
+		expect(zonedDay('not-a-date', 'UTC')).toBeNull()
+		expect(zonedDay(undefined, 'UTC')).toBeNull()
+		expect(zonedDay(12345, 'UTC')).toBeNull()
+	})
+
+	it('agrees with the routine the range bounds are built from', () => {
+		// They must match exactly for an order to land inside the window that selected it, and two
+		// separate Intl calls — one format(), one reassembling formatToParts() — were relied on to
+		// agree with nothing making them.
+		for (const iso of ['2026-09-06T01:30:00Z', '2026-03-08T10:00:00Z', '2026-11-01T08:30:00Z']) {
+			expect(zonedDay(iso, 'America/Los_Angeles'))
+				.toBe(formatInTimeZone(new Date(iso), 'America/Los_Angeles'))
+		}
 	})
 })
 
@@ -2293,5 +2313,23 @@ describe('a filtered correction does not smuggle the excluded estimate back in',
 		expect(grossed!.value).toBeCloseTo(357 * 7, 0)
 		// The upper end is honestly enormous rather than absent.
 		expect(grossed!.high).toBeGreaterThan(grossed!.value)
+	})
+})
+
+describe('a capture rate above 100% keeps its point inside its own interval', () => {
+	it('does not clamp the bounds to a range the rate sits outside', () => {
+		// A rate above 1 is explicitly supported — it means GA4 counted more, not less — but the
+		// bounds were clamped to 0..1, so a 140% capture rate came back as 91% to 100%: a point
+		// estimate printed outside the interval drawn around it.
+		const model = captureModel([fromOrders(14, 10)])
+		expect(model.rate).toBeCloseTo(1.4, 6)
+		expect(model.low as number).toBeLessThan(model.rate as number)
+		expect(model.high as number).toBeGreaterThan(model.rate as number)
+	})
+
+	it('still floors the lower bound at zero', () => {
+		// Below zero has no meaning for a capture rate, however wide the interval.
+		const model = captureModel([fromOrders(1, 6)])
+		expect(model.low as number).toBeGreaterThanOrEqual(0)
 	})
 })

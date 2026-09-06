@@ -71,9 +71,15 @@ export function dailyWindows(start: string, end: string): Array<{ start: string;
 	const MAX_WINDOWS = 6
 	const first = Date.parse(`${start}T00:00:00Z`)
 	const last = Date.parse(`${end}T00:00:00Z`)
-	if (!Number.isFinite(first) || !Number.isFinite(last) || last < first) return []
+	// Malformed input is not the same as "too long", and both returned an empty array — so the
+	// caller fell through to `granularityFor`, which computes Math.round(NaN) + 1 and silently
+	// answers 'month'. A bad date became a coarse chart rather than an error anyone could see.
+	if (!Number.isFinite(first) || !Number.isFinite(last) || last < first) {
+		throw new RangeError(`Vercel series requested for an invalid range: ${start} to ${end}`)
+	}
 
 	const days = Math.round((last - first) / 86_400_000) + 1
+	// Too long: the caller falls back to one coarser call, which is the right answer here.
 	if (days > MAX_DAYS * MAX_WINDOWS) return []
 
 	const windows: Array<{ start: string; end: string }> = []

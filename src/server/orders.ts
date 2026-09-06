@@ -31,7 +31,7 @@
  * documents untouched. When GA4 was reporting a fifth of reality, this was still complete.
  */
 
-import { zonedDayEndUtc, zonedDayStartUtc } from '../core/ranges'
+import { formatInTimeZone, zonedDayEndUtc, zonedDayStartUtc } from '../core/ranges'
 
 /** Fields safe to read from an order. Nothing here identifies a person. */
 const SAFE_ORDER_FIELDS = ['_createdAt']
@@ -265,26 +265,27 @@ function money(value: unknown, minorUnits?: boolean): number | null {
 }
 
 /**
- * The calendar date an instant falls on, in a given IANA timezone.
+ * The calendar date an instant falls on, in a given IANA timezone, or null when it has none.
  *
- * `en-CA` because it formats as YYYY-MM-DD, which is the shape every other date in this package
- * uses. Falls back to the UTC date if the zone is not one the runtime knows, so a bad config
- * misplaces a day rather than throwing.
+ * Delegates to `formatInTimeZone`, which is the routine the range bounds already use. Two separate
+ * Intl calls doing the same job — one with `format()`, one reassembling `formatToParts()` — had to
+ * agree exactly for an order to land inside the window that selected it, and nothing made them.
+ *
+ * Null, not a fallback string, for input that is not a date. It used to return `iso.slice(0, 10)`,
+ * so a malformed timestamp became an eight-character key in the by-date map and was drawn on the
+ * chart as a day — the one thing a bucket key must never be able to invent.
  *
  * @param iso - an ISO 8601 instant
  * @param timezone - IANA zone name
  */
-export function zonedDay(iso: string, timezone: string): string {
+export function zonedDay(iso: unknown, timezone: string): string | null {
+	if (typeof iso !== 'string') return null
 	const parsed = new Date(iso)
-	if (Number.isNaN(parsed.getTime())) return iso.slice(0, 10)
+	if (Number.isNaN(parsed.getTime())) return null
 	try {
-		return new Intl.DateTimeFormat('en-CA', {
-			timeZone: timezone,
-			year: 'numeric',
-			month: '2-digit',
-			day: '2-digit',
-		}).format(parsed)
+		return formatInTimeZone(parsed, timezone)
 	} catch {
+		// An unrecognised zone misplaces a day rather than losing the order entirely.
 		return parsed.toISOString().slice(0, 10)
 	}
 }
@@ -329,6 +330,14 @@ export async function countOrders(
 		 * property every order placed after 5pm local was drawn on the following day.
 		 */
 		const date = zonedDay(order._createdAt, options.timezone)
+		// An order whose timestamp cannot be read still counts toward the totals — it exists — but it
+		// cannot be placed on a day, and inventing one would draw it on the chart as fact.
+		if (date === null) {
+			total += 1
+			const untimed = money(order.orderTotal, options.totalInMinorUnits)
+			if (untimed !== null) revenue = (revenue ?? 0) + untimed
+			continue
+		}
 		byDate[date] = (byDate[date] ?? 0) + 1
 		total += 1
 

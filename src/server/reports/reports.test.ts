@@ -1604,3 +1604,51 @@ describe('Mailchimp', () => {
 		expect(data.campaigns).toEqual([])
 	})
 })
+
+describe('the shortfall compares like days with like', () => {
+	const week: DateRange = { key: 'week', start: '2026-08-20', end: '2026-08-26', timezone: 'UTC' }
+
+	/** A GA4 daily report over the given date->pageviews map, in GA4's own YYYYMMDD form. */
+	const ga4Daily = (byDate: Record<string, number>) =>
+		makeGa4Report(Object.entries(byDate).map(([date, value]) => ({
+			dimensions: [date.replace(/-/g, '')],
+			metrics: [value],
+		})))
+
+	it('ignores a day one source reported and the other did not', async () => {
+		// The two sides were filtered independently and their totals differenced regardless of
+		// whether they covered the same days — and vercelIsDaily tolerates 30% of days missing, so
+		// nearly a third of a range could be present on one side only. Every such day counted as a
+		// shortfall that was really an absence.
+		const data = await measurementHealth({
+			config: siteConfig(),
+			range: week,
+			now: new Date('2026-08-27T12:00:00Z'),
+			ga4: createFakeGa4Client({
+				batch: () => [
+					makeGa4Total(400),
+					makeGa4Report([{ metrics: [400, 320] }]),
+					makeGa4Total(0),
+					// GA4 covers the whole week.
+					ga4Daily({
+						'2026-08-20': 80, '2026-08-21': 80, '2026-08-22': 80,
+						'2026-08-23': 80, '2026-08-24': 80, '2026-08-25': 80,
+					}),
+				],
+			}),
+			// Vercel is missing the 25th entirely — but still covers enough of the week to count as
+			// a daily series, which is exactly the state that made this bug reachable.
+			vercel: createFakeVercelClient(makeVercelPageviews({
+				'2026-08-20': 100, '2026-08-21': 100, '2026-08-22': 100,
+				'2026-08-23': 100, '2026-08-24': 100,
+			})),
+			sanity: null,
+		})
+
+		// Five shared days — the 20th to the 24th. GA4's 25th is dropped because Vercel never
+		// reported it, and the 26th because it is still settling. 400 GA4 against 500 Vercel is the
+		// fifth that is genuinely missing; including GA4's unmatched day against a Vercel total that
+		// never contained it produced 0.0, i.e. perfect agreement, from an absence.
+		expect(data.shortfallRatio).toBeCloseTo(0.2, 2)
+	})
+})
