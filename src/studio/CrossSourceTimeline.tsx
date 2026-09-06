@@ -198,6 +198,86 @@ export function dayIndexAt(
 	return Math.max(0, Math.min(count - 1, index))
 }
 
+/** A sustained collapse in one source's coverage, as opposed to a standing shortfall. */
+export interface CoverageIncident {
+	/** First day of the run. */
+	onset: string
+	/** How many consecutive days it has lasted. */
+	days: number
+	/** Typical coverage before it, 0 to 1. */
+	before: number
+	/** Typical coverage during it, 0 to 1. */
+	during: number
+	/** Whether the run reaches the last measured day, i.e. it has not recovered. */
+	ongoing: boolean
+}
+
+/**
+ * Tell a dated incident apart from a constant shortfall.
+ *
+ * The summary used to give a total and a single worst day, which cannot distinguish "GA4 always
+ * sees a fifth of the traffic" from "GA4 saw everything until the 24th, then almost nothing for ten
+ * days" — and the second is the founding case of this entire package. The two need opposite
+ * responses: one is a measurement caveat to live with, the other is a fault with a date on it.
+ *
+ * The method is deliberately blunt, because the input is noisy at these volumes: take each day's
+ * coverage, take the median as the range's normal, and look for a run of consecutive days sitting
+ * far below that normal. A median is used rather than a mean so the incident itself does not define
+ * the baseline it is measured against.
+ *
+ * @param days - coverage per day in date order, null on days that cannot be measured
+ * @param dates - the matching dates, same length and order
+ */
+export function findCoverageIncident(days: Array<number | null>, dates: string[]): CoverageIncident | null {
+	const measured = days.filter((d): d is number => d !== null)
+	// Three weeks of daily figures before this is worth attempting. Below that a "run" is as likely
+	// to be a quiet fortnight as a fault, and naming a date carries more authority than the evidence.
+	if (measured.length < 21) return null
+
+	const sorted = [...measured].sort((a, b) => a - b)
+	const normal = sorted[Math.floor(sorted.length / 2)]!
+	// A shortfall that is already near-total leaves no room for a fall to be detectable against it.
+	if (normal <= 0.1) return null
+
+	// Half the usual coverage, sustained. Anything shallower is inside the day-to-day variation of a
+	// site doing a few hundred pageviews a day.
+	const threshold = normal * 0.5
+	const MIN_RUN = 3
+
+	let best: { start: number; end: number } | null = null
+	let runStart: number | null = null
+	for (let i = 0; i <= days.length; i++) {
+		const value = days[i]
+		const low = i < days.length && value !== null && value !== undefined && value < threshold
+		if (low && runStart === null) runStart = i
+		if (!low && runStart !== null) {
+			const length = i - runStart
+			if (length >= MIN_RUN && (!best || length > best.end - best.start)) best = { start: runStart, end: i }
+			runStart = null
+		}
+	}
+	if (!best) return null
+
+	const during = days.slice(best.start, best.end).filter((d): d is number => d !== null)
+	const before = days.slice(0, best.start).filter((d): d is number => d !== null)
+	// Without a before, there is nothing to call this a CHANGE from — it is just the range's normal.
+	if (before.length < 3 || during.length === 0) return null
+
+	const mean = (values: number[]) => values.reduce((sum, v) => sum + v, 0) / values.length
+	const onset = dates[best.start]
+	if (!onset) return null
+
+	return {
+		onset,
+		days: best.end - best.start,
+		before: mean(before),
+		during: mean(during),
+		// The run reaching the end of the series is the difference between "this happened" and "this
+		// is happening", which is the difference between a note and a job for today.
+		ongoing: best.end >= days.length,
+	}
+}
+
 /**
  * The cross-source timeline.
  *
@@ -221,6 +301,14 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 	 * comment claimed the selection stays drawn to confirm the gesture; it never did.
 	 */
 	const [brushed, setBrushed] = useState<[number, number] | null>(null)
+	// Whether the reader arrived at this day by keyboard. Only then does the readout announce.
+	//
+	// The region is driven by `hoverIndex`, which a slow pointer sweep across ninety days changes
+	// about ninety times — so a screen-reader user got the whole chart twice, once as the static
+	// summary and once as an unthrottled stream. Keyboard stepping is the case the live region was
+	// added for, and it changes one day at a time on purpose.
+	const [steppedByKeyboard, setSteppedByKeyboard] = useState(false)
+
 	/** Whether the last drag was too short to apply, so the chart can say so instead of ignoring it. */
 	const [tooShort, setTooShort] = useState(false)
 	/**
@@ -346,6 +434,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 		(event: React.PointerEvent<SVGSVGElement>) => {
 			const index = indexAt(event.clientX)
 			if (index === null) return
+			setSteppedByKeyboard(false)
 			setHoverIndex(index)
 			// Mid-drag: extend the selection rather than only moving the crosshair.
 			if (brushAnchor !== null) {
@@ -460,6 +549,25 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 		}
 		if (gap <= 0) return sentences
 
+		// An incident, if there is one. Stated BEFORE the total, because "coverage fell on the 24th
+		// and has not recovered" is a different kind of fact from "the gap was this big" — the first
+		// is a fault with a date, the second is a quantity to caveat.
+		const coverageByDay = row.points.map((point) => {
+			if (point.value === null || point.value <= 0) return null
+			const saw = seen.get(point.date)
+			return saw == null ? null : saw / point.value
+		})
+		const incident = findCoverageIncident(coverageByDay, row.points.map((p) => p.date))
+		if (incident) {
+			sentences.push(
+				`${row.shortfall.source} coverage fell from about ${formatPercent(incident.before, 0)} to `
+				+ `${formatPercent(incident.during, 0)} on ${tickLabel(new Date(`${incident.onset}T00:00:00Z`))}`
+				+ (incident.ongoing
+					? `, and has stayed there for ${incident.days} days. That is a change on a date, not a standing shortfall — something altered on or around then.`
+					: ` for ${incident.days} days, then recovered.`),
+			)
+		}
+
 		// The total is stated whether or not a worst day can be named. It used to be discarded when
 		// `worst` was null — which the volume floor made reachable, since a single big spike raises
 		// the bar for every other day — so the tool's headline figure disappeared because the
@@ -559,6 +667,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						}
 						if (next === null) return
 						event.preventDefault()
+						setSteppedByKeyboard(true)
 						setHoverIndex(next)
 						// Shift extends a selection, so the brush is reachable without a pointer —
 						// which matters more here than usual, since this is the tool's one
@@ -652,8 +761,22 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						// disagreed about the same days and the one on top was the one that lied.
 						const shortfallLine = row.shortfall && revealed ? lineGen(shortfallPoints) ?? '' : ''
 
+						// Every mark is clipped to its own band.
+						//
+						// scaleLinear does not clamp, so two states the chart was recently taught to
+						// draw escape their row: GA4 counting MORE than the complete source puts the
+						// fill above the plot top and through the label strip into the row above, and a
+						// refund puts a stem below the baseline and through the gutter into the row
+						// below, where either reads as that row's data.
+						const clipId = `row-clip-${rowIndex}`
+
 						return (
 							<g key={row.key}>
+								<defs>
+									<clipPath id={clipId}>
+										<rect x={GUTTER} y={plotTop} width={plotWidth} height={Math.max(1, bottom - plotTop)} />
+									</clipPath>
+								</defs>
 								<line x1={GUTTER} x2={GUTTER + plotWidth} y1={bottom} y2={bottom} stroke="currentColor" strokeWidth={1} opacity={0.45} />
 
 								{/* The row names itself, in the dead strip above its own band. Small
@@ -695,6 +818,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 								    light. 0.48 gives 3.33:1 light and 4.16:1 dark, so one number serves
 								    both themes. It is constant because a quantity that brightens when
 								    the pointer enters the chart is jitter, not information. */}
+								<g clipPath={`url(#${clipId})`}>
 								{gap && <path d={gap} fill="currentColor" opacity={0.48} />}
 
 								{shortfallLine && (
@@ -754,6 +878,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 									strokeDasharray={row.complete ? undefined : '6 4'}
 									opacity={row.complete ? 0.95 : 0.7}
 								/>}
+								</g>
 							</g>
 						)
 					})}
@@ -824,6 +949,30 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						/>
 					)}
 
+					{/* A rule at every date label, behind the data.
+					    Without them the only way to answer "which day is this peak" was to hold a
+					    pointer on it: three labels sat 38px below the last baseline with nothing
+					    joining them to the rows, so dating a feature meant tracing an unruled column by
+					    eye. Faint enough to stay behind the marks, present enough to read against. */}
+					{tickIndexes.map((index) => {
+						const date = dates[index]
+						if (!date) return null
+						const at = x(new Date(`${date}T00:00:00Z`))
+						if (!Number.isFinite(at)) return null
+						return (
+							<line
+								key={`grid-${date}`}
+								x1={at}
+								x2={at}
+								y1={TOP_PAD}
+								y2={height - AXIS_HEIGHT}
+								stroke="currentColor"
+								strokeWidth={1}
+								opacity={0.08}
+							/>
+						)
+					})}
+
 					{/* The shared date axis, once, at the bottom.
 					    As many ticks as the measured width affords — it was fixed at three regardless,
 					    so a 1400px pane got the same three labels as a 400px one, and the one thing
@@ -851,7 +1000,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 
 			{/* The readout. Every series at the hovered date, so the co-movement question is answered
 			    in numbers as well as in shape. */}
-			<div style={readoutRow} aria-live="polite">
+			<div style={readoutRow} aria-live={steppedByKeyboard ? 'polite' : 'off'}>
 				<Text size={0} weight="medium">
 					{/* The selection is confirmed where the gesture happens. The only confirmation was
 					    a line above the tab strip, the full height of the panel away from the drag. */}

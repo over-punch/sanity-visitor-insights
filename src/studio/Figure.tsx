@@ -100,7 +100,16 @@ export function Delta({ current, previous, riseIsGood = true, unit = 'count' }: 
 
 	const absolute = now - before
 
-	if (absolute === 0) {
+	// Flat means "rounds to nothing at the precision this prints", not "identical to the last bit".
+	//
+	// Only an exact zero counted as flat, so a percent move of 0.04 points printed "↑ +0.0 pts" and
+	// a count move of 2 on 1,000 printed "↑ 0%" — an arrow and a direction attached to a magnitude
+	// of zero, which is a claim the figure has already rounded away. It fires on the Acquisition
+	// share cards, whose inputs are floats.
+	const roundsToNothing = unit === 'percent'
+		? Math.abs(absolute) < 0.05
+		: before !== 0 && Math.abs(absolute / Math.abs(before)) < 0.005
+	if (absolute === 0 || roundsToNothing) {
 		return <span style={deltaStyle('flat')}>no change</span>
 	}
 

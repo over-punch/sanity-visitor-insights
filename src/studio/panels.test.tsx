@@ -18,7 +18,7 @@ import { calendarDays } from '../server/reports/measurementHealth'
 import { formatCount, formatMoney } from './Figure'
 import { captureModel, fromOrders } from '../core/capture'
 import { forgetShortfalls, knownShortfall, rememberShortfall } from './useReport'
-import { CrossSourceTimeline, dayIndexAt } from './CrossSourceTimeline'
+import { CrossSourceTimeline, dayIndexAt, findCoverageIncident } from './CrossSourceTimeline'
 import React from 'react'
 import {
 	AcquisitionPanel,
@@ -1478,7 +1478,9 @@ describe('discrete events are not drawn as a continuous line', () => {
 		// A monotone curve through two points spread over a month drew a smooth rise and fall
 		// across twenty-eight days on which nothing happened.
 		const html = render(<OverviewPanel data={data as never} />)
-		const rects = html.match(/<rect[^>]*>/g) ?? []
+		// fill="currentColor" is what makes it a data mark. The per-row clip rect lives in <defs>
+		// and carries no fill, so it must not be counted.
+		const rects = (html.match(/<rect[^>]*>/g) ?? []).filter((r) => r.includes('fill="currentColor"'))
 		const stems = rects.filter((r) => !/height="3"/.test(r))
 		expect(stems.length).toBe(2)
 	})
@@ -1487,7 +1489,9 @@ describe('discrete events are not drawn as a continuous line', () => {
 		// Drawing nothing for a zero made "no sales that day" identical to "Sanity reported nothing
 		// for that day" — the distinction this package's figure primitives exist to keep.
 		const html = render(<OverviewPanel data={data as never} />)
-		const rects = html.match(/<rect[^>]*>/g) ?? []
+		// fill="currentColor" is what makes it a data mark. The per-row clip rect lives in <defs>
+		// and carries no fill, so it must not be counted.
+		const rects = (html.match(/<rect[^>]*>/g) ?? []).filter((r) => r.includes('fill="currentColor"'))
 		expect(rects.filter((r) => /height="3"/.test(r)).length).toBe(28)
 	})
 
@@ -1500,7 +1504,9 @@ describe('discrete events are not drawn as a continuous line', () => {
 			),
 		}
 		const html = render(<OverviewPanel data={gappy as never} />)
-		const rects = html.match(/<rect[^>]*>/g) ?? []
+		// fill="currentColor" is what makes it a data mark. The per-row clip rect lives in <defs>
+		// and carries no fill, so it must not be counted.
+		const rects = (html.match(/<rect[^>]*>/g) ?? []).filter((r) => r.includes('fill="currentColor"'))
 		// 30 days; days 0-9 unmeasured, which swallows the order on day 4. That leaves 20 measured
 		// days carrying one order: 19 zero ticks and 1 stem.
 		expect(rects.filter((r) => /height="3"/.test(r)).length).toBe(19)
@@ -2023,5 +2029,86 @@ describe('money keeps one precision down a column', () => {
 		// carry two separator conventions.
 		expect(formatMoney(1200, 'USD')).toContain('1,200')
 		expect(formatCount(1200)).toBe('1,200')
+	})
+})
+
+describe('a dated collapse reads differently from a standing shortfall', () => {
+	const dates = (n: number) => Array.from({ length: n }, (_, i) => {
+		const d = new Date(Date.UTC(2026, 6, 1) + i * 86_400_000)
+		return d.toISOString().slice(0, 10)
+	})
+
+	it('finds the day coverage fell and says it has not recovered', () => {
+		// The founding case: Darden's GA4 ran at ~95% and fell to ~15% on one day, and the summary
+		// could not tell that apart from "GA4 always sees a fifth", because a total and a worst day
+		// are the same two numbers either way.
+		const days = [...Array(40).fill(0.95), ...Array(12).fill(0.15)]
+		const found = findCoverageIncident(days, dates(52))
+		expect(found?.onset).toBe('2026-08-10')
+		expect(found?.days).toBe(12)
+		expect(found?.ongoing).toBe(true)
+		expect(found?.before).toBeCloseTo(0.95, 2)
+		expect(found?.during).toBeCloseTo(0.15, 2)
+	})
+
+	it('says nothing when the shortfall is simply constant', () => {
+		// A site GA4 has always undercounted has no incident to report, and inventing one would send
+		// the reader hunting for a change that never happened.
+		expect(findCoverageIncident(Array(60).fill(0.2), dates(60))).toBeNull()
+	})
+
+	it('reports a recovered dip as recovered', () => {
+		const days = [...Array(30).fill(0.9), ...Array(5).fill(0.1), ...Array(20).fill(0.9)]
+		const found = findCoverageIncident(days, dates(55))
+		expect(found?.ongoing).toBe(false)
+		expect(found?.days).toBe(5)
+	})
+
+	it('ignores a dip too short to be a fault', () => {
+		// Two days is a weekend, a deploy, a cache. Naming a date carries authority the evidence
+		// does not have.
+		const days = [...Array(30).fill(0.9), 0.1, 0.1, ...Array(20).fill(0.9)]
+		expect(findCoverageIncident(days, dates(52))).toBeNull()
+	})
+
+	it('will not name a date from a short range', () => {
+		expect(findCoverageIncident([...Array(7).fill(0.9), ...Array(5).fill(0.1)], dates(12))).toBeNull()
+	})
+
+	it('needs a before to call it a change', () => {
+		// A run starting on day one is the range's normal, not a fall within it.
+		const days = [...Array(20).fill(0.1), ...Array(30).fill(0.9)]
+		expect(findCoverageIncident(days, dates(50))?.onset).not.toBe(dates(50)[0])
+	})
+
+	it('is not fooled into taking the incident as its own baseline', () => {
+		// A mean would be dragged down by a long outage until the outage stopped looking unusual.
+		// The median keeps the pre-collapse normal as the reference.
+		const days = [...Array(25).fill(0.9), ...Array(25).fill(0.1)]
+		const found = findCoverageIncident(days, dates(50))
+		expect(found).not.toBeNull()
+		expect(found?.before).toBeCloseTo(0.9, 2)
+	})
+})
+
+describe('a delta does not point at a change it has rounded away', () => {
+	it('calls a sub-tenth-of-a-point percent move flat', () => {
+		// It printed "↑ +0.0 pts from 43.2%" — an arrow and a direction on a magnitude of zero.
+		expect(render(<Delta current={43.24} previous={43.2} unit="percent" />)).toContain('no change')
+	})
+
+	it('calls a move that rounds to 0% flat', () => {
+		// 2 on 1,000 rounds to "0%", and an arrow beside it contradicts the number it labels.
+		expect(render(<Delta current={1002} previous={1000} />)).toContain('no change')
+	})
+
+	it('still reports a move that survives its own rounding', () => {
+		const html = render(<Delta current={1200} previous={1000} />)
+		expect(html).toContain('+20%')
+		expect(html).not.toContain('no change')
+	})
+
+	it('still reports a percent move of a tenth of a point', () => {
+		expect(render(<Delta current={43.4} previous={43.2} unit="percent" />)).toContain('+0.2 pts')
 	})
 })
