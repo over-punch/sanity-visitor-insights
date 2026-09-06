@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from './fetchWithTimeout'
 /**
  * Mailchimp — the audience a foundry actually owns.
  *
@@ -93,7 +94,7 @@ export function createMailchimpClient(apiKey: string, listId: string): Mailchimp
 
 	async function get<T>(path: string, params: Record<string, string> = {}): Promise<T> {
 		const query = new URLSearchParams(params).toString()
-		const response = await fetch(`${base}${path}${query ? `?${query}` : ''}`, {
+		const response = await fetchWithTimeout(`${base}${path}${query ? `?${query}` : ''}`, {
 			headers: { Authorization: auth },
 		})
 

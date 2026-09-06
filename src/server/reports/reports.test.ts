@@ -8,6 +8,9 @@
  * reaching a GROQ projection.
  */
 
+import { fetchWithTimeout } from '../fetchWithTimeout'
+import { alignBatch, type Ga4Report } from '../ga4'
+import { countLicenceTiers } from '../orders'
 import { describe, expect, it, vi } from 'vitest'
 
 // The GA4 client signs a service-account JWT before every call. These tests are about the request
@@ -1689,5 +1692,99 @@ describe('an unreadable order book is stated, not absorbed', () => {
 
 		const empty = data.crossSource.filter((d) => d.orders === 0)
 		expect(empty.length).toBeGreaterThan(0)
+	})
+})
+
+describe('bounded requests and aligned batches', () => {
+	it('gives up on a hung upstream rather than holding the panel', async () => {
+		// No client had a timeout, so a hung connection held the whole panel until the platform's
+		// function limit — and because the report layer fans out with Promise.all, the slowest of up
+		// to fourteen calls set the floor for all of them. The reader saw a spinner, not an error.
+		const original = globalThis.fetch
+		globalThis.fetch = ((_input: string, init?: RequestInit) => new Promise((_resolve, reject) => {
+			init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+		})) as typeof fetch
+
+		try {
+			await expect(fetchWithTimeout('https://example.test/hang', {}, 20))
+				.rejects.toThrow(/timed out/)
+		} finally {
+			globalThis.fetch = original
+		}
+	})
+
+	it('honours a caller signal without swallowing it as a timeout', async () => {
+		// Adding a timeout must not stop a caller's own cancellation working, and an abort the caller
+		// asked for should not be reported as the upstream being slow.
+		const original = globalThis.fetch
+		globalThis.fetch = ((_input: string, init?: RequestInit) => new Promise((_resolve, reject) => {
+			init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+		})) as typeof fetch
+
+		const caller = new AbortController()
+		try {
+			const pending = fetchWithTimeout('https://example.test/hang', { signal: caller.signal }, 5_000)
+			caller.abort()
+			await expect(pending).rejects.toThrow(/aborted/)
+		} finally {
+			globalThis.fetch = original
+		}
+	})
+
+	it('keeps a short GA4 batch aligned with the requests that produced it', () => {
+		// Against the REAL alignment, not the fake client — a first attempt at this test drove the
+		// fixture instead of the code and passed while the padding never ran.
+		const report = (rows: number): Ga4Report => ({
+			rows: Array.from({ length: rows }, () => ({ dimensions: [], metrics: [1] })),
+			thresholded: false, sampled: false, rowCount: rows,
+		})
+
+		// Two chunks: the first asked for five and got three, the second asked for one and got one.
+		const aligned = alignBatch([
+			{ reports: [report(1), report(2), report(3)], expected: 5 },
+			{ reports: [report(9)], expected: 1 },
+		])
+
+		expect(aligned.length).toBe(6)
+		// The requests that were answered keep their own results...
+		expect(aligned[0]?.rowCount).toBe(1)
+		expect(aligned[2]?.rowCount).toBe(3)
+		// ...the unanswered ones read as empty, never as the next chunk's data...
+		expect(aligned[3]?.rowCount).toBe(0)
+		expect(aligned[4]?.rowCount).toBe(0)
+		// ...and the following chunk stays where its caller expects it, rather than sliding up.
+		expect(aligned[5]?.rowCount).toBe(9)
+	})
+
+})
+
+describe('order queries count published documents only', () => {
+	it('excludes drafts from every order query', async () => {
+		// @sanity/client v6 defaults to the `raw` perspective for a token-authenticated request, and
+		// the sites pass a token — so an order anyone has opened and edited in the Studio comes back
+		// twice, as `orderId` and as `drafts.orderId`. That double-counts it in the total, in the
+		// revenue and in its day's stem, in the one figure this tool calls exact and calibrates the
+		// capture model against.
+		const queries: string[] = []
+		const client = {
+			fetch: (query: string) => {
+				queries.push(query)
+				return Promise.resolve([])
+			},
+		} as never
+
+		const options = orderQueryOptions(
+			{ documentType: 'order', statusField: 'orderStatus.status', countedStatuses: ['verified'] },
+			{ start: '2026-08-20', end: '2026-08-26', timezone: 'UTC' },
+		)
+
+		await countOrders(client, options)
+		await countOrdersByTypeface(client, options, 'typefaces')
+		await countLicenceTiers(client, options, 'typefaces', { licenseDesktop: 'Desktop' })
+
+		expect(queries.length).toBe(3)
+		for (const query of queries) {
+			expect(query, query).toContain('!(_id in path("drafts.**"))')
+		}
 	})
 })

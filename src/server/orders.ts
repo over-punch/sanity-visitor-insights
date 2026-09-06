@@ -197,6 +197,21 @@ export interface SanityQueryClient {
 function orderFilter(documentType: string, excludeFilter?: string): string {
 	const clauses = [
 		`_type == $documentType`,
+		/*
+		 * Published only.
+		 *
+		 * @sanity/client v6 defaults to the `raw` perspective for a token-authenticated request, and
+		 * the sites pass a token — so an order that anyone has opened and edited in the Studio comes
+		 * back twice, as `orderId` and as `drafts.orderId`. That double-counts it in the order total,
+		 * in the revenue, and in its day's stem: a 14% error at seven orders a quarter, in the one
+		 * figure this tool calls exact and calibrates the whole capture model against.
+		 *
+		 * Darden currently has no draft orders, so this is latent rather than live — which is exactly
+		 * the kind of thing that stays latent until the day someone opens an order to check it.
+		 * Filtering here rather than relying on a perspective the consumer configures, because the
+		 * consumer is a site that has no reason to know this report depends on it.
+		 */
+		`!(_id in path("drafts.**"))`,
 		`_createdAt >= $start`,
 		`_createdAt < $end`,
 	]

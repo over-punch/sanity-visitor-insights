@@ -14,6 +14,7 @@
  * hostname filter is ANDed into every request.
  */
 
+import { fetchWithTimeout } from './fetchWithTimeout'
 import { getAccessToken, type ServiceAccountKey } from './googleAuth'
 
 const DATA_API_BASE = 'https://analyticsdata.googleapis.com/v1beta'
@@ -78,6 +79,16 @@ export interface Ga4Report {
 	 */
 	timeZone?: string
 }
+
+/**
+ * A report GA4 did not return, used to keep a short batch aligned with its requests.
+ *
+ * Empty rows and no `metricTotal`, so every consumer's own absent-versus-zero handling takes over:
+ * `sumFirstMetric` yields 0 rows to sum and the metric reads as unavailable rather than as a
+ * measured zero. It must never look like data.
+ */
+const EMPTY_REPORT: Ga4Report = { rows: [], thresholded: false, sampled: false, rowCount: 0 }
+
 
 /** Raw Data API response shape, narrowed to what is read here. */
 interface RawReport {
@@ -280,6 +291,28 @@ export function andFilters(...filters: Array<unknown | undefined>): unknown | un
 }
 
 /**
+ * Flatten batch chunks while keeping each caller's index pointing at the request it made.
+ *
+ * Exported for its test: the fake GA4 client used throughout the suite returns whatever a fixture
+ * hands it, so a test written against that client never reaches this code — which is how a first
+ * attempt at guarding this defect ended up asserting the fixture's behaviour instead.
+ *
+ * @param chunks - per chunk, the parsed reports it returned and how many were requested
+ */
+export function alignBatch(chunks: Array<{ reports: Ga4Report[]; expected: number }>): Ga4Report[] {
+	return chunks.flatMap(({ reports, expected }) => {
+		if (reports.length !== expected) {
+			console.error(
+				`Visitor insights: GA4 returned ${reports.length} of ${expected} reports in a batch; padding to keep results aligned.`,
+			)
+		}
+		// Padded, never truncated: a short chunk yields empty reports at its tail rather than sliding
+		// every later caller's index onto someone else's data.
+		return Array.from({ length: expected }, (_, i) => reports[i] ?? EMPTY_REPORT)
+	})
+}
+
+/**
  * Build a GA4 client for one property.
  *
  * @param propertyId - numeric GA4 property id
@@ -299,7 +332,7 @@ export function createGa4Client(propertyId: string, key: ServiceAccountKey, opti
 	async function post<T>(path: string, body: unknown, base: string = DATA_API_BASE): Promise<T> {
 		const token = await getAccessToken(key)
 
-		const response = await fetch(`${base}/properties/${propertyId}:${path}`, {
+		const response = await fetchWithTimeout(`${base}/properties/${propertyId}:${path}`, {
 			method: 'POST',
 			headers: {
 				Authorization: `Bearer ${token}`,
@@ -344,9 +377,23 @@ export function createGa4Client(propertyId: string, key: ServiceAccountKey, opti
 				),
 			)
 
-			// Order is preserved across chunks, because callers index the result positionally
-			// against the requests they passed in.
-			return responses.flatMap((raw) => (raw.reports ?? []).map(parseReport))
+			/*
+			 * Alignment is CHECKED, not assumed.
+			 *
+			 * Callers destructure this positionally — measurementHealth reads
+			 * `[views, sessions, consent, daily, purchases, emailReport]` across a 5+1 chunk split —
+			 * and the old comment asserted order was preserved. Chunk order was; alignment was not. A
+			 * 200 carrying fewer entries than its chunk requested slides every later result down one,
+			 * so the purchase report would be read as pageviews and published as a pageview total.
+			 * Padding keeps each caller's index pointing at the request it made, and a short chunk
+			 * yields an empty report rather than someone else's data.
+			 */
+			return alignBatch(
+				responses.map((raw, index) => ({
+					reports: (raw.reports ?? []).map(parseReport),
+					expected: chunks[index]!.length,
+				})),
+			)
 		},
 
 		async runFunnelReport(steps, range) {

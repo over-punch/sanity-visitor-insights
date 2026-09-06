@@ -286,6 +286,18 @@ export function createVisitorInsightsHandler(options: HandlerOptions) {
 						}
 						: {}),
 				}
+			}, (envelope) => {
+				/*
+				 * A degraded answer is cached for seconds, not minutes.
+				 *
+				 * A GA4 429 or a Vercel blip is caught inside the report and returned as an envelope
+				 * of `unavailable` values — a normal return, stored as a success. The panel then stayed
+				 * blank for the full window and no refresh could clear it, because the key does not
+				 * vary with the outcome. Twenty seconds is still enough to stop a reload storm while
+				 * letting the next look find the source recovered.
+				 */
+				const degraded = Object.values(envelope.sources).some((source) => source?.status !== 'ok')
+				return degraded ? Math.min(ttl, 20_000) : ttl
 			})
 
 			res.status(200).json(envelope)

@@ -60,12 +60,28 @@ export function setCached<T>(key: string, value: T, ttlMs: number = DEFAULT_TTL_
  * Concurrent callers may both compute on a cold key; that is acceptable here and avoids the
  * complexity of an in-flight promise registry for a cache this small.
  */
-export async function withCache<T>(key: string, ttlMs: number, compute: () => Promise<T>): Promise<T> {
+export async function withCache<T>(
+	key: string,
+	ttlMs: number,
+	compute: () => Promise<T>,
+	/**
+	 * How long to keep this particular result.
+	 *
+	 * Given the computed value, so a caller can cache a healthy answer for the full window and a
+	 * degraded one for seconds. A failure inside a report is caught and returned as an envelope full
+	 * of `unavailable` — a normal return as far as this function is concerned — so a one-second GA4
+	 * blip was stored as a success and blanked the panel for the whole TTL, with no refresh able to
+	 * clear it because the key does not vary with the outcome. Five minutes of a real-looking outage
+	 * from a transient one, on the tool whose subject is telling those apart.
+	 */
+	ttlFor?: (value: T) => number,
+): Promise<T> {
 	const hit = getCached<T>(key)
 	if (hit !== undefined) return hit
 
 	const value = await compute()
-	setCached(key, value, ttlMs)
+	const ttl = ttlFor ? ttlFor(value) : ttlMs
+	if (ttl > 0) setCached(key, value, ttl)
 	return value
 }
 

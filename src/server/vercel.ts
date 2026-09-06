@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from './fetchWithTimeout'
 import { formatInTimeZone } from '../core/ranges'
 /**
  * Vercel Web Analytics client.
@@ -119,7 +120,7 @@ export function createVercelClient(projectId: string, token: string, teamId?: st
 		const params = new URLSearchParams({ projectId, ...extra })
 		if (teamId) params.set('teamId', teamId)
 
-		const response = await fetch(`${API_BASE}/${path}?${params.toString()}`, {
+		const response = await fetchWithTimeout(`${API_BASE}/${path}?${params.toString()}`, {
 			headers: { Authorization: `Bearer ${token}` },
 		})
 
