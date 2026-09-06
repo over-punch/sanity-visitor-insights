@@ -21,6 +21,13 @@ export interface VercelPageviews {
 	total: number | null
 	/** Distinct visitors over the whole range. Not a sum of the daily figures — visitors dedupe. */
 	visitors: number | null
+	/**
+	 * How many windows of the daily series failed to fetch.
+	 *
+	 * Above zero, `byDate` has a hole the size of a whole window while `total` still spans the range,
+	 * so the two must not be differenced and the chart must not draw the hole as an outage.
+	 */
+	incompleteWindows?: number
 }
 
 /** A Vercel client bound to one project. */
@@ -134,15 +141,28 @@ export function createVercelClient(projectId: string, token: string, teamId?: st
 
 					const parts = await Promise.all(requests.map((params) =>
 						query<{ data?: AggregateRow[] }>('visits/aggregate', { ...params, limit: '100' })
+							.then((part) => ({ ...part, failed: false }))
 							.catch((e: Error) => {
 								// The series is supplementary — it feeds the chart, not the headline
 								// figure. Losing it must not cost the totals, which is what the panel
-								// actually compares. One failed window costs only its own days.
+								// actually compares.
 								console.error('Visitor insights: Vercel series window unavailable:', e.message)
-								return { data: [] as AggregateRow[] }
+								return { data: [] as AggregateRow[], failed: true }
 							}),
 					))
-					return { data: parts.flatMap((part) => part.data ?? []) }
+					/*
+					 * A failed window is REPORTED, not silently absent.
+					 *
+					 * One window of six failing on a year leaves 303 of 365 days — still above the 70%
+					 * bar that decides whether the series counts as daily — so the chart drew a 62-day
+					 * hole indistinguishable from a real two-month outage, on the panel built to tell
+					 * those apart. This is the same class of bug the whole-series case already fixed,
+					 * reintroduced at window granularity by the chunking.
+					 */
+					return {
+						data: parts.flatMap((part) => part.data ?? []),
+						incompleteWindows: parts.filter((part) => part.failed).length,
+					}
 				})(),
 			])
 
@@ -154,6 +174,11 @@ export function createVercelClient(projectId: string, token: string, teamId?: st
 
 			return {
 				byDate,
+				// How many windows of the daily series are missing. The totals call is not chunked —
+				// it has no range limit — so `total` always spans the whole range while `byDate` may
+				// not, and the two feed different figures on one panel. Saying so is what lets the
+				// panel avoid comparing them.
+				incompleteWindows: series.incompleteWindows ?? 0,
 				total: totals.data?.pageviews ?? null,
 				// Absent is not zero. A malformed or partial response used to become ok(0) and render
 				// as a measured figure — on the very panel whose job is to detect that.

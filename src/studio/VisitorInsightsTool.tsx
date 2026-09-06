@@ -462,17 +462,43 @@ function PanelTabs({ value, onChange }: { value: string; onChange: (next: string
  * @param ratio - the fraction of reality GA4 is MISSING, 0 to 1
  */
 function CoverageRibbon({ ratio }: { ratio: number | null }): React.ReactElement | null {
+	/*
+	 * Unknown is said, not left blank.
+	 *
+	 * The shortfall is learned only when a measurement-health envelope resolves for this exact
+	 * window — which happens on Overview and Data health. Arrive on Acquisition by link, or change
+	 * the range while sitting here, and it is simply not known: the ribbon rendered nothing, which
+	 * on a tab built entirely from GA4 is indistinguishable from "coverage is fine". A tool whose
+	 * subject is the difference between "measured nothing" and "did not measure" cannot make that
+	 * mistake about itself.
+	 */
+	if (ratio === null) {
+		return (
+			<Text size={0} muted>
+				Every figure on this tab comes from Google Analytics. How much of your traffic it is seeing
+				has not been checked for this window — open Overview or Data health to measure it.
+			</Text>
+		)
+	}
+
 	// Below a fifth the pageview comparison is not distinguishable from crawlers and prefetches
 	// Vercel counts and GA4 never sees, so a ribbon there would cry wolf on every load.
-	if (ratio === null || ratio < 0.2) return null
+	if (ratio < 0.2) return null
 
 	const seen = Math.round((1 - ratio) * 100)
+	// Coarse on purpose. "5.0×" is a point estimate with a decimal place, printed larger and louder
+	// than anything else in the tool, on a quantity every other surface here wraps in an interval
+	// and an Estimated badge. The multiplier is the actionable direction — that was the reason for
+	// stating it — but it does not get to claim a precision the figure behind it has not earned.
+	const multiplier = seen > 0 ? Math.round(100 / seen) : null
 	return (
 		<Card padding={3} radius={2} tone={ratio > 0.6 ? 'critical' : 'caution'} border>
 			<Text size={1}>
-				Every figure on this tab comes from Google Analytics, which is seeing about {seen}% of this
-				site&rsquo;s traffic in this window — so the real numbers are roughly{' '}
-				{seen > 0 ? `${(100 / seen).toFixed(1)}×` : 'many times'} these. Data health explains why.
+				Every figure on this tab comes from Google Analytics, which is seeing roughly {seen}% of this
+				site&rsquo;s traffic in this window — so the real numbers are{' '}
+				{multiplier === null ? 'many times' : `several times`} these
+				{multiplier !== null && multiplier > 1 ? ` (very roughly ${multiplier}×)` : ''}. Data health
+				explains why, and how uncertain that is.
 			</Text>
 		</Card>
 	)

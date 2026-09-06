@@ -84,6 +84,48 @@ describe('measurementHealth', () => {
 		expect(data.shortfallRatio).toBeCloseTo(0.2, 5)
 	})
 
+	it('excludes GA4\u2019s unprocessed days from the shortfall', async () => {
+		/*
+		 * The headline fix of the settled-day change, and until the clock became injectable nothing
+		 * reached it: every fixture uses a fixed past range, so no day is provisional and each test
+		 * exercised the fallback. Reverting the whole thing left the suite green.
+		 *
+		 * Here "now" is the 26th — the last day of the range — so the 25th and 26th are still
+		 * settling. GA4 reports nothing for those two days while Vercel reports its usual traffic,
+		 * which is the exact shape of the artefact.
+		 */
+		const daily: Record<string, number> = {}
+		const ga4Rows: Array<{ dimensions: string[]; metrics: number[] }> = []
+		for (let day = 20; day <= 26; day += 1) {
+			const date = `2026-08-${day}`
+			daily[date] = 100
+			// GA4 has settled figures through the 24th and nothing after.
+			// GA4 returns YYYYMMDD, not ISO — the report converts it.
+			ga4Rows.push({ dimensions: [`202608${day}`], metrics: [day <= 24 ? 80 : 0] })
+		}
+
+		const data = await measurementHealth({
+			config: siteConfig(),
+			range,
+			now: new Date('2026-08-26T12:00:00Z'),
+			ga4: createFakeGa4Client({
+				batch: () => [
+					makeGa4Total(400),
+					makeGa4Report([{ metrics: [400, 320] }]),
+					makeGa4Total(0),
+					makeGa4Report(ga4Rows),
+				],
+			}),
+			vercel: createFakeVercelClient(makeVercelPageviews(daily)),
+			sanity: null,
+		})
+
+		// Settled days only: 5 days of 80 GA4 against 5 days of 100 Vercel = a fifth missing.
+		// Counting the two unsettled days would make it 400/700, i.e. 43% — more than twice the
+		// truth, and a third of the way to the verdict's "treat its figures as broken" line.
+		expect(data.shortfallRatio).toBeCloseTo(0.2, 2)
+	})
+
 	it('does not compute a shortfall when one pageview source is missing', async () => {
 		const data = await measurementHealth({
 			config: siteConfig(),

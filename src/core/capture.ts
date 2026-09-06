@@ -272,24 +272,45 @@ export function grossUp(
 	if (usable.length === 0) return null
 	const rate = usable[0]!.rate
 	const rates = usable.map((e) => e.rate)
-	model = {
-		...model,
-		rate,
-		low: usable.length > 1 ? Math.min(...rates) : model.low,
-		high: usable.length > 1 ? Math.max(...rates) : model.high,
-	}
+	// The interval is rebuilt from the ADMISSIBLE estimates only.
+	//
+	// It fell through to the model's own low/high when filtering left one estimate — and those are
+	// the min and max across EVERY estimate, including the ones just excluded. So a traffic figure
+	// was given a lower bound derived entirely from the orders rate: exactly the purchase-tag
+	// capture this filter exists to keep out, arriving through the back door and printed as the
+	// bottom of the range. It also bypassed the lone-estimate sampling interval in precisely the
+	// case the filter creates.
+	const bounds = usable.length > 1
+		? { low: Math.min(...rates), high: Math.max(...rates) }
+		: samplingInterval(usable[0]!)
+	model = { ...model, rate, low: bounds.low, high: bounds.high }
 
 	if (model.rate === null || model.rate <= 0 || model.low === null || model.high === null) return null
-	if (model.low <= 0 || model.high <= 0) return null
+	if (model.high <= 0) return null
 
 	// A rate at or above 1 means GA4 is not undercounting on this measure, so there is nothing to
 	// gross up and pretending otherwise would inflate a figure that is already complete.
 	if (model.rate >= 1) return null
 
-	// The interval inverts: the LOW capture rate produces the HIGH estimate of reality.
+	/*
+	 * The interval inverts: the LOW capture rate produces the HIGH estimate of reality.
+	 *
+	 * A low bound of zero means the upper end is unbounded, and that used to discard the whole
+	 * figure — `if (model.low <= 0) return null`. The sampling interval reaches zero whenever the
+	 * rate is at or under roughly 4/(n+4), which at a fifth capture and single-digit orders is the
+	 * archetypal case for these foundries, so the correction vanished exactly where it was wanted.
+	 * Worse, the caller then reported "not enough overlap between sources to estimate a true
+	 * figure", which was false: there was overlap and a usable point estimate, and only the upper
+	 * bound was unbounded.
+	 *
+	 * The guard belonged to a different failure — a missing rate — and was catching a legitimately
+	 * wide interval instead. A floored bound keeps the point and states an upper end that is
+	 * honestly enormous rather than pretending there is none.
+	 */
+	const floor = Math.max(model.low, 0.01)
 	return {
 		value: observed / model.rate,
 		low: observed / Math.min(1, model.high),
-		high: observed / model.low,
+		high: observed / floor,
 	}
 }

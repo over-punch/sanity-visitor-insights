@@ -51,6 +51,15 @@ export interface MeasurementHealthInput {
 	mailchimp?: MailchimpClient | null
 	/** Report-level caveats. Sampling is pushed here so the panel shows it without extra plumbing. */
 	notices?: string[]
+	/**
+	 * The clock, injectable for tests.
+	 *
+	 * `provisionalDates` already takes one — `ranges.ts` threads it deliberately — and this report
+	 * called it with the default, which made the settled-day shortfall untestable: any fixture with
+	 * a fixed past range has no provisional days, so every test exercised the fallback and the
+	 * headline path was reached by nothing. Reverting it left the whole suite green.
+	 */
+	now?: Date
 }
 
 /** Build the plain-language reading shown beneath the figures. */
@@ -96,7 +105,7 @@ function interpret(ga4Views: MetricValue, vercelViews: MetricValue, shortfall: n
 		return `${base} That is far more than consent refusal and ad-blocking can account for — those `
 			+ `typically cost tens of percent, not most of the traffic. Treat this as a measurement `
 			+ `failure until proven otherwise: check that the tag still fires on a real page load, and `
-			+ `whether a GA4 data filter or stream setting changed. The daily series below will show `
+			+ `whether a GA4 data filter or stream setting changed. The coverage row on Overview shows `
 			+ `whether the gap opened on a particular day, which distinguishes a break from a drift.`
 	}
 
@@ -299,6 +308,8 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	// least lossy visitor figure here — but its own counter is a client script on a first-party
 	// path, so consent tooling and blocklists reach it too, just far less often than they reach GA4.
 	let vercelVisitors: MetricValue = unavailable('source_error', 'Vercel not configured')
+	/** Windows of the daily series that failed. Above zero, the series has a hole the size of one. */
+	let vercelIncompleteWindows = 0
 	if (vercel) {
 		try {
 			const result = await vercel.pageviews(range.start, range.end)
@@ -312,6 +323,10 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 				? unavailable('source_error', 'Vercel returned no visitor count')
 				: ok(result.visitors)
 			vercelByDate = result.byDate
+			vercelIncompleteWindows = result.incompleteWindows ?? 0
+			if (vercelIncompleteWindows > 0) {
+				input.notices?.push('Part of Vercel\u2019s daily series did not load, so the day-by-day comparison is switched off for this range. The range totals are unaffected.')
+			}
 		} catch (e) {
 			console.error('Visitor insights: Vercel query failed:', (e as Error).message)
 			vercelPageviews = unavailable('source_error')
@@ -383,7 +398,12 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	// to false, said nothing, and left the row legended "complete" with a solid rule and no data.
 	// The panel whose entire purpose is telling "measured nothing" from "did not measure" could not
 	// tell them apart about itself.
-	const vercelIsDaily = vercelDates.length > 0 && vercelDates.length > (daysInRange(range) * 0.7)
+	// A series with a failed window is not daily either, however many days survived. One window of
+	// six failing on a year leaves 303 of 365 days — comfortably over the 70% bar — and the missing
+	// two months would have drawn as a real outage.
+	const vercelIsDaily = vercelDates.length > 0
+		&& vercelIncompleteWindows === 0
+		&& vercelDates.length > (daysInRange(range) * 0.7)
 
 	/*
 	 * Computed over SETTLED days only, when the daily figures exist to do it.
@@ -397,7 +417,7 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	 * The alarm this tool exists to raise was the one most easily manufactured by a delay it had
 	 * already documented.
 	 */
-	const unsettled = new Set(provisionalDates(range))
+	const unsettled = new Set(provisionalDates(range, input.now))
 	const settledGa4 = [...ga4ByDate.entries()].filter(([date]) => !unsettled.has(date))
 	const settledVercel = vercelIsDaily
 		? Object.entries(vercelByDate).filter(([date]) => !unsettled.has(date))

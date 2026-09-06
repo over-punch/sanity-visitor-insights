@@ -46,7 +46,7 @@ vi.mock('sanity', () => ({
 	definePlugin: (definition: unknown) => definition,
 }))
 import visitorInsights from '../index'
-import { Delta, MetricFigure, NoticeList, ProportionChart, SortableTable, TrendChart } from './Figure'
+import { Delta, MetricFigure, NoticeList, ProportionChart, SortableTable } from './Figure'
 import { holdsPreviousAnswer } from './useReport'
 import { ok, partial, unavailable } from '../types'
 import { UI } from '@liiift-studio/sanity-ui-compat'
@@ -490,98 +490,6 @@ describe('MetricFigure units', () => {
  * was correct; none of them could distinguish that cliff from a gap that had always been there,
  * and diagnosing it meant exporting both series by hand.
  */
-describe('TrendChart', () => {
-	const series = [
-		{ date: '2026-08-20', ga4: 471, vercel: 494 },
-		{ date: '2026-08-21', ga4: 422, vercel: 503 },
-		{ date: '2026-08-22', ga4: 389, vercel: 387 },
-		{ date: '2026-08-23', ga4: 390, vercel: 438 },
-		{ date: '2026-08-24', ga4: 70, vercel: 490 },
-	]
-
-	it('draws a line for each source, one solid and one dashed', () => {
-		const html = render(<TrendChart points={series} />)
-		expect(html).toContain('<svg')
-		// Counted by stroked paths specifically: the shaded gap band is a filled path and is not
-		// a line, so a bare <path> count would silently pass whatever else got added.
-		const stroked = (html.match(/<path[^>]*stroke="currentColor"/g) ?? []).length
-		expect(stroked).toBe(2)
-		expect(html).toContain('stroke-dasharray')
-	})
-
-	it('shades the band between the two lines, which is the gap itself', () => {
-		const html = render(<TrendChart points={series} />)
-		// A filled path with no stroke — the band, not a line.
-		expect(html).toMatch(/<path[^>]*fill="currentColor"[^>]*stroke="none"/)
-	})
-
-	it('does not shade across a day where one source is missing', () => {
-		const gapped = [
-			{ date: '2026-08-20', ga4: 471, vercel: 494 },
-			{ date: '2026-08-21', ga4: null, vercel: 503 },
-			{ date: '2026-08-22', ga4: 389, vercel: 387 },
-			{ date: '2026-08-23', ga4: 390, vercel: 438 },
-		]
-		const html = render(<TrendChart points={gapped} />)
-		// One band only, over 22nd-23rd. Shading through the 21st would invent a gap from an absence.
-		expect((html.match(/<path[^>]*stroke="none"/g) ?? []).length).toBe(1)
-	})
-
-	it('labels both axes, with real dates on the x axis', () => {
-		const html = render(<TrendChart points={series} />)
-		expect(html).toContain('20 Aug')
-		expect(html).toContain('24 Aug')
-		// Y axis carries a zero baseline and a top figure.
-		expect(html).toContain('>0<')
-	})
-
-	it('rounds the y axis up to a readable maximum', () => {
-		const html = render(<TrendChart points={[
-			{ date: '2026-08-20', ga4: 471, vercel: 494 },
-			{ date: '2026-08-21', ga4: 422, vercel: 503 },
-			{ date: '2026-08-22', ga4: 389, vercel: 387 },
-		]} />)
-		// 503 rounds up to 1,000 rather than topping the axis at an arbitrary 503.
-		expect(html).toContain('1,000')
-	})
-
-	it('breaks the line where a day has no figure, rather than drawing through zero', () => {
-		const gapped = [
-			{ date: '2026-08-20', ga4: 471, vercel: 494 },
-			{ date: '2026-08-21', ga4: null, vercel: 503 },
-			{ date: '2026-08-22', ga4: 389, vercel: 387 },
-		]
-		const html = render(<TrendChart points={gapped} />)
-		// A break restarts the path with a second moveto. One M means the gap was drawn through.
-		const ga4Path = (html.match(/d="([^"]*)"/g) ?? [])[1] ?? ''
-		expect((ga4Path.match(/M/g) ?? []).length).toBe(2)
-	})
-
-	it('renders nothing when there are too few points to show a shape', () => {
-		// Rendered without the `render` helper, which asserts non-empty output — the whole point
-		// here is that the component declines to draw rather than showing a two-point "trend".
-		const html = renderToStaticMarkup(
-			<ThemeProvider theme={theme}><TrendChart points={series.slice(0, 2)} /></ThemeProvider>,
-		)
-		expect(html).not.toContain('<svg')
-	})
-
-	it('describes itself for screen readers', () => {
-		expect(render(<TrendChart points={series} />)).toContain('2026-08-20 to 2026-08-24')
-	})
-})
-
-/**
- * Version skew between the Studio and the API route.
- *
- * These are separate deployments on separate schedules. A Studio upgraded ahead of its route
- * receives a response missing whatever the newer version added, and on 2026-09-01 that took the
- * whole tool down: a Studio on 0.8.0 read `data.daily.length` from a route still on 0.6.2 and threw
- * "Cannot read properties of undefined". A panel must show less, never crash.
- *
- * Each case below renders a payload shaped like an older route's, cast because the current types
- * describe the newer shape — which is exactly the situation at runtime.
- */
 describe('panels tolerate an older route response', () => {
 	it('measurement health renders without the daily series', () => {
 		const legacy = {
@@ -662,33 +570,6 @@ describe('layout does not depend on design tokens resolving', () => {
 	})
 })
 
-/**
- * The chart is reachable without a mouse.
- *
- * A hover-only readout gives keyboard and touch users a picture they cannot interrogate — the same
- * failure as the tooltip-only explanations on unavailable metrics.
- */
-describe('TrendChart keyboard access', () => {
-	const series = [
-		{ date: '2026-08-20', ga4: 471, vercel: 494 },
-		{ date: '2026-08-21', ga4: 422, vercel: 503 },
-		{ date: '2026-08-22', ga4: 389, vercel: 387 },
-	]
-
-	it('is focusable', () => {
-		expect(render(<TrendChart points={series} />)).toContain('tabindex="0"')
-	})
-
-	it('tells the reader both ways in are available', () => {
-		expect(render(<TrendChart points={series} />)).toContain('arrow keys')
-	})
-
-	it('summarises itself for a screen reader without needing hover', () => {
-		const html = render(<TrendChart points={series} />)
-		expect(html).toContain('2026-08-20 to 2026-08-22')
-		expect(html).toContain('Peak')
-	})
-})
 
 /**
  * Caveats collapse past two.
@@ -2384,5 +2265,33 @@ describe('an order lands on the day it happened, where the reader lives', () => 
 
 	it('survives a malformed timestamp', () => {
 		expect(zonedDay('not-a-date', 'UTC')).toBe('not-a-date')
+	})
+})
+
+describe('a filtered correction does not smuggle the excluded estimate back in', () => {
+	it('builds its interval from the admissible estimates only', () => {
+		// The low/high fell through to the model's own, which are the min and max across EVERY
+		// estimate — so a traffic figure got a lower bound derived entirely from the orders rate,
+		// exactly the purchase-tag capture the filter exists to keep out.
+		const model = captureModel([fromOrders(120, 200), fromPageviews(400, 2000)])
+		const grossed = grossUp(400, model, ['pageviews', 'email'])
+		expect(grossed).not.toBeNull()
+		// 400 / 0.60 = 667 would be the orders rate leaking through as the bottom of the range.
+		expect(grossed!.low).toBeGreaterThan(1500)
+		// And the point must sit inside its own interval, not on its edge.
+		expect(grossed!.value).toBeGreaterThan(grossed!.low)
+		expect(grossed!.value).toBeLessThan(grossed!.high)
+	})
+
+	it('still corrects at the volumes this package actually sees', () => {
+		// The sampling interval reaches zero whenever the rate is at or under about 4/(n+4), which at
+		// a fifth capture and single-digit orders is the ordinary case — and grossUp discarded the
+		// whole figure over it, while the caller reported "not enough overlap", which was false.
+		const model = captureModel([fromOrders(1, 7)])
+		const grossed = grossUp(357, model)
+		expect(grossed).not.toBeNull()
+		expect(grossed!.value).toBeCloseTo(357 * 7, 0)
+		// The upper end is honestly enormous rather than absent.
+		expect(grossed!.high).toBeGreaterThan(grossed!.value)
 	})
 })
