@@ -323,10 +323,14 @@ export function OverviewPanel({ data, previous, onBrush }: {
 					)}
 
 					<ChartData<CrossSourceDay>
+						note="A negative miss means GA4 counted MORE than Vercel that day — usually a tag firing twice, not extra traffic."
 						label="Show these figures as a table"
 						rows={data.crossSource ?? []}
 						rowKey={(d) => d.date}
 						exportName="timeline"
+						// Filterable, like every other table in the tool. This one carries the columns
+						// the whole package exists for and was the only table with no filter box.
+						filterOn={(d) => d.date}
 						columns={[
 							{ key: 'date', label: 'Date', sortValue: (d) => d.date, render: (d) => <Text size={1}>{d.date}</Text> },
 							{
@@ -352,7 +356,6 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								 */
 								key: 'missed', label: 'Missed by GA4', numeric: true,
 								sortValue: (d) => gapOf(d),
-								exportValue: (d) => gapOf(d),
 								render: (d) => {
 									const gap = gapOf(d)
 									return <Text size={1}>{gap === null ? '—' : formatCount(gap)}</Text>
@@ -367,7 +370,13 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								 */
 								key: 'coverage', label: 'GA4 coverage', numeric: true,
 								sortValue: (d) => coverageOf(d),
-								exportValue: (d) => coverageOf(d),
+								// The FORMATTED value, matching the cell. Passing the raw ratio through
+								// shipped 0.06666666666666667 into a CSV column whose cell reads "7%" —
+								// verbatim the case exportValue exists to prevent.
+								exportValue: (d) => {
+									const coverage = coverageOf(d)
+									return coverage === null ? null : formatPercent(coverage, 0)
+								},
 								render: (d) => {
 									const coverage = coverageOf(d)
 									return <Text size={1}>{coverage === null ? '—' : formatPercent(coverage, 0)}</Text>

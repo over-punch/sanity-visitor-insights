@@ -311,6 +311,10 @@ export interface ChartDataProps<Row> {
 	columns: Array<SortColumn<Row>>
 	rowKey: (row: Row) => string
 	exportName?: string
+	/** A line above the table, for anything a column header cannot carry. */
+	note?: string
+	/** Which column to filter on, if the table should offer a filter box. */
+	filterOn?: (row: Row) => string
 }
 
 /**
@@ -325,19 +329,21 @@ export interface ChartDataProps<Row> {
  * axis type at any size; and anyone who wants these numbers in a spreadsheet, since the table
  * brings sorting and CSV copy with it. Collapsed, so it costs a sighted reader one line.
  */
-export function ChartData<Row>({ label, rows, columns, rowKey, exportName }: ChartDataProps<Row>): React.ReactElement | null {
+export function ChartData<Row>({ label, rows, columns, rowKey, exportName, note, filterOn }: ChartDataProps<Row>): React.ReactElement | null {
 	if (rows.length === 0) return null
 
 	return (
 		<details style={disclosureBlock}>
 			<summary style={disclosureSummary}>{label}</summary>
 			<div style={{ marginTop: 10 }}>
+				{note && <Text size={0} muted style={{ marginBottom: 8, display: 'block' }}>{note}</Text>}
 				<SortableTable<Row>
 					caption={label}
 					rows={rows}
 					columns={columns}
 					rowKey={rowKey}
 					exportName={exportName}
+					filterOn={filterOn}
 				/>
 			</div>
 		</details>

@@ -124,7 +124,7 @@ export interface CrossSourceTimelineProps {
  */
 const WIDTH = 760
 /** Height of one series row. */
-const ROW_HEIGHT = 74
+const ROW_HEIGHT = 92
 /** Space under the last row for the shared date axis. */
 const AXIS_HEIGHT = 26
 /** Left gutter for each row's own y-axis labels — 7% of the width, not 52%. */
@@ -135,6 +135,11 @@ const TOP_PAD = 22
 const AXIS_TYPE = 11
 /**
  * Height reserved above each row's plot for its label, in user units.
+ *
+ * ROW_HEIGHT was raised by this amount plus a little when the strip was introduced. Carving it out
+ * of the existing 74 left a 40px plot inside a 74px row — 34px of gutter serving 40px of data,
+ * where a doubling of daily pageviews moved the line about thirteen pixels. The overlap was real;
+ * paying for the fix out of the data band was not.
  *
  * Enough for AXIS_TYPE plus its descender and a little air. The plot starts below it, so a row's
  * peak can reach the top of its scale without meeting its own name.
@@ -207,7 +212,14 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 	const [pinned, setPinned] = useState(false)
 	/** Index the drag began at, or null when not dragging. */
 	const [brushAnchor, setBrushAnchor] = useState<number | null>(null)
-	/** The committed span, kept so the selection stays drawn after the pointer is released. */
+	/**
+	 * The span being dragged, in day indices. Null when no drag is in flight.
+	 *
+	 * Deliberately NOT kept after release. Committing changes the range, which replaces the whole
+	 * series underneath these indices — so a selection left drawn would be positioned against days
+	 * that no longer exist, which is how it once produced NaN geometry. An earlier version of this
+	 * comment claimed the selection stays drawn to confirm the gesture; it never did.
+	 */
 	const [brushed, setBrushed] = useState<[number, number] | null>(null)
 	/** Whether the last drag was too short to apply, so the chart can say so instead of ignoring it. */
 	const [tooShort, setTooShort] = useState(false)
@@ -315,7 +327,11 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 			// handler rejects exactly this ("a silent no-op that looks like success") and then the
 			// commit path did it.
 			if (to - from < MIN_BRUSH_DAYS - 1) {
-				setTooShort(true)
+				// A click is not a failed drag. `to === from` means the pointer never moved — which is
+				// the ordinary gesture for reading a day — and scolding it fired the refusal far more
+				// often on non-gestures than on real mis-drags, training the reader to ignore the one
+				// line of copy that carries a genuine one.
+				setTooShort(to > from)
 				return
 			}
 			setTooShort(false)
@@ -332,19 +348,29 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 			if (index === null) return
 			setHoverIndex(index)
 			// Mid-drag: extend the selection rather than only moving the crosshair.
-			if (brushAnchor !== null) setBrushed([Math.min(brushAnchor, index), Math.max(brushAnchor, index)])
+			if (brushAnchor !== null) {
+				const from = Math.min(brushAnchor, index)
+				const to = Math.max(brushAnchor, index)
+				// Only when the span actually changes. A fresh array every pointer move re-rendered
+				// the chart — and re-announced its live readout — on every pixel of a drag, where
+				// setHoverIndex alone bails out on an unchanged index.
+				setBrushed((current) => (current && current[0] === from && current[1] === to ? current : [from, to]))
+			}
 		},
 		[indexAt, brushAnchor],
 	)
 
-	if (dates.length < 3 || series.length === 0 || !x) return null
-
-	const hoveredDate = hoverIndex !== null ? dates[hoverIndex] : null
 	/**
 	 * Which days get a date label, spread evenly from first to last.
 	 *
 	 * Always includes both ends. The count is driven by the measured plot width rather than fixed,
 	 * so a wide pane is not left with three labels across a metre of axis.
+	 *
+	 * ABOVE the early return, and it must stay there. It sat below, so any render that bailed —
+	 * fewer than three days, no series — called one hook fewer than the render before it, and React
+	 * throws "Rendered fewer hooks than expected", taking the whole Studio pane rather than the
+	 * chart. It was masked only because the panel happens to gate on the same three-day minimum,
+	 * which makes this component's own documented guard dead code and the safety one caller away.
 	 */
 	const tickIndexes = useMemo(() => {
 		if (dates.length === 0) return []
@@ -356,6 +382,10 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 		// on top of another and give the axis two identical ends.
 		return [...new Set(indexes)]
 	}, [dates.length, plotWidth])
+
+	if (dates.length < 3 || series.length === 0 || !x) return null
+
+	const hoveredDate = hoverIndex !== null ? dates[hoverIndex] : null
 
 	const revealed = pinned || hoverIndex !== null
 
@@ -417,13 +447,36 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 		// Over-counting is its own finding, not the absence of one. It used to fall through the
 		// `gap <= 0` guard and print nothing, so the failure mode with the loudest cause — a tag
 		// installed twice — was the one the chart stayed silent about.
-		if (excess > gap) {
-			return [`${row.shortfall.source} counted ${formatCount(Math.round(excess - gap))} MORE ${row.label.toLowerCase()} `
-				+ `than ${row.source} over this period, which usually means a tag firing twice rather than extra traffic.`]
+		// Both faults, separately, and never their difference. Printing `excess - gap` re-created
+		// exactly the cancellation the accumulation above was split up to avoid: 1,100 over-counted
+		// against 1,000 under-counted reported as "100 more". Returning early on it also suppressed
+		// the under-count sentence — this tool's central figure — whenever a second, unrelated
+		// defect happened to be larger.
+		const sentences: string[] = []
+		if (excess > 0) {
+			sentences.push(`${row.shortfall.source} counted ${formatValue(Math.round(excess), row.unit, currency)} MORE `
+				+ `${row.label.toLowerCase()} than ${row.source} on some days, which usually means a tag firing twice `
+				+ `rather than extra traffic.`)
 		}
-		if (gap <= 0 || !worst) return []
-		return [`${row.shortfall.source} missed ${formatCount(Math.round(gap))} ${row.label.toLowerCase()} over this period; `
-			+ `the gap was widest on ${tickLabel(new Date(`${worst.date}T00:00:00Z`))} at ${formatPercent(worst.ratio, 0)}.`]
+		if (gap <= 0) return sentences
+
+		// The total is stated whether or not a worst day can be named. It used to be discarded when
+		// `worst` was null — which the volume floor made reachable, since a single big spike raises
+		// the bar for every other day — so the tool's headline figure disappeared because the
+		// SUPERLATIVE could not be computed. The floor was there to fix which day gets named, not
+		// whether the total gets said.
+		//
+		// The unit, too: this built every sentence with formatCount, so a revenue shortfall read
+		// "Sanity missed 1,234 revenue".
+		const total = `${row.shortfall.source} missed ${formatValue(Math.round(gap), row.unit, currency)} `
+			+ `${row.label.toLowerCase()} over this period`
+		// Only a positive ratio is a gap. `worst` takes the maximum among floor-clearing days, and
+		// when every one of those was over-counted that maximum is negative — "the gap was widest at
+		// −24%", which is not a gap.
+		sentences.push(worst && worst.ratio > 0
+			? `${total}; the gap was widest on ${tickLabel(new Date(`${worst.date}T00:00:00Z`))} at ${formatPercent(worst.ratio, 0)}.`
+			: `${total}.`)
+		return sentences
 	})
 
 	const summary = `${dates.length} days from ${tickLabel(new Date(`${dates[0]}T00:00:00Z`))} to `
@@ -448,7 +501,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 					// A selection in flight is abandoned when the pointer leaves, but nothing is left
 					// drawn: a selection still on screen that never applied is a silent no-op that
 					// looks like success.
-					onPointerLeave={() => { setHoverIndex(null); setBrushAnchor(null); setBrushed(null) }}
+					onPointerLeave={() => { setHoverIndex(null); setBrushAnchor(null); setBrushed(null); setTooShort(false) }}
 					onPointerDown={(event) => {
 						if (!onBrush) return
 						setTooShort(false)
@@ -577,9 +630,13 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 							: []
 						const gap = row.shortfall ? gapGen(row.points) ?? '' : ''
 						// The lossier source's own line, revealed only while reading a day.
-						const shortfallLine = row.shortfall && revealed
-							? lineGen(shortfallPoints.filter((p) => p.value !== null)) ?? ''
-							: ''
+						// The SAME generator, nulls left in, so `.defined()` breaks the line where GA4
+						// reported nothing. Filtering them out first joined the surviving points into a
+						// continuous stroke — so a GA4 outage, the single event this chart was built to
+						// expose, was drawn as a smooth line straight through the missing days. The
+						// shaded region beneath already broke correctly, so the fill and the line
+						// disagreed about the same days and the one on top was the one that lied.
+						const shortfallLine = row.shortfall && revealed ? lineGen(shortfallPoints) ?? '' : ''
 
 						return (
 							<g key={row.key}>
@@ -637,11 +694,14 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 										<rect
 											key={`zero-${p.date}`}
 											x={Math.max(GUTTER, Math.min(GUTTER + plotWidth - stemWidth, cx - stemWidth / 2))}
-											y={bottom - 1}
+											// Above the baseline, taller than it, and darker. At 1px and 0.3 opacity
+											// sitting ON a rule drawn at 0.45, the distinction this exists to keep
+											// was encoded below the baseline's own visibility.
+											y={bottom - 3}
 											width={stemWidth}
-											height={1}
+											height={3}
 											fill="currentColor"
-											opacity={0.3}
+											opacity={0.55}
 										/>
 									)
 								})}

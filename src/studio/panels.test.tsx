@@ -16,7 +16,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { readFileSync } from 'node:fs'
 import { captureModel, fromOrders } from '../core/capture'
 import { forgetShortfalls, knownShortfall, rememberShortfall } from './useReport'
-import { dayIndexAt } from './CrossSourceTimeline'
+import { CrossSourceTimeline, dayIndexAt } from './CrossSourceTimeline'
 import React from 'react'
 import {
 	AcquisitionPanel,
@@ -28,7 +28,7 @@ import {
 	coverageOf,
 	gapOf,
 } from './panels'
-import { PanelBoundary, VisitorInsightsTool } from './VisitorInsightsTool'
+import { PanelBoundary, ReadyReport, VisitorInsightsTool } from './VisitorInsightsTool'
 
 // The tool mounts a panel, and the panel's hook calls useClient(), which needs a Studio source
 // context these tests deliberately do not build. The contract under test is the props shape, so the
@@ -1386,52 +1386,69 @@ describe('the chart draws at a 1:1 scale', () => {
 
 describe('chrome sits on the side of the figures that matches what it does', () => {
 	/**
-	 * A SOURCE test, deliberately.
+	 * A RENDER test now, not a source-order one.
 	 *
-	 * `ReportPanel` only reaches its ready branch after a fetch resolves, and these tests render to
-	 * static markup, where effects never run — so there is no rendered output to assert against
-	 * without building a fetch harness for one ordering question. Reading the source is the honest
-	 * way to check it, as long as it says so. Its limit is real: a wrapper with CSS `order` or a
-	 * portal would keep this green while the visual order regressed.
+	 * This used to read the file and compare string offsets, and said so — its stated limit was that
+	 * a wrapper could keep it green while the visual order regressed. That is close to what then
+	 * happened: a wrapper (an unclosed <Text>) swallowed the panels, and the source test could not
+	 * see it because the tokens were still in the right order. Rendering compares what is drawn.
 	 */
-	const source = readFileSync(new URL('./VisitorInsightsTool.tsx', import.meta.url), 'utf8')
-	const ready = source.slice(source.indexOf("{state.status === 'ready' && ("))
-	const panel = ready.indexOf("tabId === 'overview'")
+	const data = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.8,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		revenue: ok(910), currency: 'USD', orderStatuses: {},
+		audience: ok(4000), audienceGrowth: unavailable('not_applicable'), campaigns: [],
+		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
+		estimatedSessions: unavailable('not_applicable'), interpretation: 'x', daily: [],
+		crossSource: [], timelineEvents: [],
+	}
 
-	it('finds the panel body', () => {
-		expect(panel).toBeGreaterThan(-1)
-	})
+	// Lazy. Rendering at describe scope means any throw happens during collection and takes the
+	// entire file with it — which is how a bad fixture once hid 134 unrelated tests.
+	const draw = () => renderToStaticMarkup(
+		<ThemeProvider theme={theme}>
+			<ReadyReport
+				envelope={{
+					report: 'measurement-health',
+					range: { start: '2026-06-08', end: '2026-09-05', timezone: 'UTC' },
+					sources: { ga4: { status: 'degraded', detail: 'not configured for this site' } },
+					notices: ['A standing caveat about this site.'],
+					data,
+					comparison: { range: { start: '2026-03-10', end: '2026-06-07' }, data, provisional: false },
+				} as never}
+				tabId="overview"
+				apiBaseUrl="https://x.test"
+				range="quarter"
+				custom={{ start: '2026-06-08', end: '2026-09-05' }}
+				revalidationError="the network dropped"
+				diagnostics={{ status: 'idle' } as never}
+			/>
+		</ThemeProvider>,
+	)
+
+	const at = (needle: string) => draw().indexOf(needle)
+	const figures = () => at('Revenue')
 
 	// The axis is whether the block changes how the figures below it are READ, not whether it is
-	// about the instrument. The source row renders only when a source failed, so when it renders at
-	// all it explains an empty panel; the revalidation card says the figures are stale; and the
-	// comparison sentence defines every delta beneath it.
+	// about the instrument.
 	for (const [chrome, why] of [
-		['<SourceStatusRow', 'explains why the panel below it is empty'],
-		['state.revalidationError && (', 'says the figures are stale before they are read'],
-		// The JSX, not the comment above it — matching on prose let this assert the wrong token.
-		['{state.envelope.comparison.range.start}', 'is the legend for every delta beneath it'],
+		['not configured for this site', 'explains why the panel below it is empty'],
+		['the network dropped', 'says the figures are stale before they are read'],
+		['Changes are against', 'is the legend for every delta beneath it'],
 	] as const) {
-		it(`puts ${chrome} above the figures, because it ${why}`, () => {
-			expect(ready.indexOf(chrome)).toBeGreaterThan(-1)
-			expect(ready.indexOf(chrome)).toBeLessThan(panel)
+		it(`puts "${chrome}" above the figures, because it ${why}`, () => {
+			expect(at(chrome)).toBeGreaterThan(-1)
+			expect(at(chrome)).toBeLessThan(figures())
 		})
 	}
 
 	// These read the same most days, so at the top they were amber wallpaper above every figure.
-	for (const chrome of ['<NoticeList', 'Figures cover']) {
-		it(`puts ${chrome} below the figures, because it does not change day to day`, () => {
-			expect(ready.indexOf(chrome)).toBeGreaterThan(panel)
+	for (const chrome of ['A standing caveat about this site.', 'Figures cover']) {
+		it(`puts "${chrome}" below the figures, because it does not change day to day`, () => {
+			expect(at(chrome)).toBeGreaterThan(figures())
 		})
 	}
-
-	it('renders each block exactly once, so a move cannot become a duplicate', () => {
-		// The weakest link in a source test: substring presence would also be satisfied by a block
-		// left behind under `{false && …}`. Counting at least rules out the copy-paste failure.
-		for (const chrome of ['<SourceStatusRow', '<NoticeList', 'state.revalidationError && (']) {
-			expect(ready.split(chrome).length - 1, chrome).toBe(1)
-		}
-	})
 })
 
 describe('discrete events are not drawn as a continuous line', () => {
@@ -1458,7 +1475,7 @@ describe('discrete events are not drawn as a continuous line', () => {
 		// across twenty-eight days on which nothing happened.
 		const html = render(<OverviewPanel data={data as never} />)
 		const rects = html.match(/<rect[^>]*>/g) ?? []
-		const stems = rects.filter((r) => !/height="1"/.test(r))
+		const stems = rects.filter((r) => !/height="3"/.test(r))
 		expect(stems.length).toBe(2)
 	})
 
@@ -1467,7 +1484,7 @@ describe('discrete events are not drawn as a continuous line', () => {
 		// for that day" — the distinction this package's figure primitives exist to keep.
 		const html = render(<OverviewPanel data={data as never} />)
 		const rects = html.match(/<rect[^>]*>/g) ?? []
-		expect(rects.filter((r) => /height="1"/.test(r)).length).toBe(28)
+		expect(rects.filter((r) => /height="3"/.test(r)).length).toBe(28)
 	})
 
 	it('leaves a day with no measurement blank', () => {
@@ -1482,8 +1499,8 @@ describe('discrete events are not drawn as a continuous line', () => {
 		const rects = html.match(/<rect[^>]*>/g) ?? []
 		// 30 days; days 0-9 unmeasured, which swallows the order on day 4. That leaves 20 measured
 		// days carrying one order: 19 zero ticks and 1 stem.
-		expect(rects.filter((r) => /height="1"/.test(r)).length).toBe(19)
-		expect(rects.filter((r) => !/height="1"/.test(r)).length).toBe(1)
+		expect(rects.filter((r) => /height="3"/.test(r)).length).toBe(19)
+		expect(rects.filter((r) => !/height="3"/.test(r)).length).toBe(1)
 	})
 
 	it('does not turn the traffic row into stems too', () => {
@@ -1706,5 +1723,116 @@ describe('a caught panel error clears on tab change without discarding state', (
 		const error = new Error('boom')
 		expect(derive({ resetKey: 'journey' }, { error, shownFor: 'journey' })).toBeNull()
 		expect(derive({ resetKey: 'journey' }, { error: null, shownFor: 'journey' })).toBeNull()
+	})
+})
+
+describe('the chart calls the same hooks whatever it is given', () => {
+	/**
+	 * A rules-of-hooks regression does not throw in static markup — it throws on the SECOND render,
+	 * when React compares hook counts. So this asserts the source order instead: every hook must
+	 * appear above the early return. It is a weaker check than a render, and it is the one that
+	 * catches the bug that would white-screen the whole Studio pane.
+	 */
+	const source = readFileSync(new URL('./CrossSourceTimeline.tsx', import.meta.url), 'utf8')
+	const body = source.slice(source.indexOf('export function CrossSourceTimeline('))
+	const guard = body.indexOf('if (dates.length < 3')
+
+	it('declares every hook before the early return', () => {
+		expect(guard).toBeGreaterThan(-1)
+		const after = body.slice(guard)
+		for (const hook of ['useState(', 'useMemo(', 'useCallback(', 'useLayoutEffect(', 'useRef(']) {
+			expect(after.includes(hook), `${hook} is called after the early return`).toBe(false)
+		}
+	})
+
+	it('renders nothing, without throwing, below three days', () => {
+		// The guard's own contract. Two days is not a span this chart can draw. Rendered directly
+		// rather than through the `render` helper, which asserts non-empty output — right for a
+		// panel, wrong for a component whose documented answer here is nothing at all.
+		const html = renderToStaticMarkup(
+			<CrossSourceTimeline
+				series={[{
+					key: 'a', label: 'A', source: 'Vercel', complete: true, unit: 'count',
+					points: [{ date: '2026-09-01', value: 1 }, { date: '2026-09-02', value: 2 }],
+				}]}
+				currency={null}
+			/>,
+		)
+		expect(html).toBe('')
+	})
+})
+
+describe('every tab renders its own panel', () => {
+	/**
+	 * The test that was missing.
+	 *
+	 * Nothing in this suite mounted the report panel, because it only reaches its ready markup after
+	 * a fetch resolves. In that blind spot, a reorder left the comparison sentence's <Text> unclosed
+	 * — so every panel body became its child, and the three tabs outside COMPARED_TABS rendered
+	 * nothing at all. It compiled, it type-checked, and 302 tests stayed green through two releases.
+	 */
+	const data = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.8,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		revenue: ok(910), currency: 'USD', orderStatuses: {},
+		audience: ok(4000), audienceGrowth: unavailable('not_applicable'), campaigns: [],
+		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
+		estimatedSessions: unavailable('not_applicable'), interpretation: 'x', daily: [],
+		crossSource: [], timelineEvents: [],
+		sources: [], totalSessions: ok(357), designIndustryShare: unavailable('not_applicable'),
+		unattributedShare: unavailable('not_applicable'),
+		steps: [], typefaces: [], licenceTiers: [], totalRevenue: ok(910),
+	}
+
+	const envelope = (report: string) => ({
+		report, range: { start: '2026-06-08', end: '2026-09-05', timezone: 'UTC' },
+		sources: {}, notices: [], data,
+	})
+
+	// Every tab, including the three that fail the comparison gate — which is the point.
+	for (const [tabId, report, marker] of [
+		['overview', 'measurement-health', 'Revenue'],
+		['acquisition', 'acquisition', 'Sessions'],
+		['journey', 'journey', 'per-step totals'],
+		['typeface-interest', 'typeface-interest', 'Sort by any column'],
+		['data-health', 'measurement-health', 'Vercel'],
+	] as const) {
+		it(`draws content on the ${tabId} tab`, () => {
+			const html = render(
+				<ReadyReport
+					envelope={envelope(report) as never}
+					tabId={tabId}
+					apiBaseUrl="https://x.test"
+					range="quarter"
+					custom={{ start: '2026-06-08', end: '2026-09-05' }}
+					revalidationError={null}
+					diagnostics={{ status: 'idle' } as never}
+				/>,
+			)
+			// More than the footer. The blank tabs still rendered "Figures cover …", so a length
+			// check against that alone would have passed while three tabs were empty.
+			expect(html).toContain(marker)
+			expect(html.length).toBeGreaterThan(600)
+		})
+	}
+
+	it('shows the comparison sentence only where a delta is drawn', () => {
+		const withComparison = {
+			...envelope('measurement-health'),
+			comparison: { range: { start: '2026-03-10', end: '2026-06-07' }, data, provisional: false },
+		}
+		const props = {
+			apiBaseUrl: 'https://x.test', range: 'quarter' as const,
+			custom: { start: '2026-06-08', end: '2026-09-05' },
+			revalidationError: null, diagnostics: { status: 'idle' } as never,
+		}
+		expect(render(<ReadyReport envelope={withComparison as never} tabId="overview" {...props} />))
+			.toContain('Changes are against')
+		// Journey draws no delta — but it must still draw its panel, which is exactly what the
+		// nesting bug got wrong.
+		const journey = render(<ReadyReport envelope={withComparison as never} tabId="journey" {...props} />)
+		expect(journey).not.toContain('Changes are against')
+		expect(journey).toContain('per-step totals')
 	})
 })

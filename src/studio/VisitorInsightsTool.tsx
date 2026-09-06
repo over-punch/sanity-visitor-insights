@@ -9,7 +9,8 @@
 import React, { useCallback, useRef, useState } from 'react'
 import { Box, Button, Card, Container, Flex, Heading, Spinner, Stack, Text } from '@liiift-studio/sanity-ui-compat'
 import type { RangeKey, ReportName, SourceName, SourceStatus } from '../types'
-import { knownShortfall, useReport } from './useReport'
+import { knownShortfall, useReport, type ReportState } from './useReport'
+import type { ReportEnvelope } from '../types'
 import { daysBetween, shiftDays } from '../core/ranges'
 import { NoticeList } from './Figure'
 import { Badge } from '@liiift-studio/sanity-ui-compat'
@@ -476,6 +477,114 @@ function CoverageRibbon({ ratio }: { ratio: number | null }): React.ReactElement
 	)
 }
 
+/**
+ * The ready state of a report panel: everything drawn once an envelope has arrived.
+ *
+ * Extracted as a PURE component, taking the resolved envelope rather than the fetch state, so it can
+ * be rendered in a test. Nothing in the suite mounted `ReportPanel` — it only reaches this markup
+ * after a fetch resolves, which needs effects and a DOM the tests do not have — and in that blind
+ * spot two structural bugs shipped, the second of which left this whole block nested inside a
+ * caption and blanked three of the five tabs. Type-checking cannot see JSX nesting; a render can.
+ */
+export function ReadyReport({
+	envelope,
+	tabId,
+	apiBaseUrl,
+	range,
+	custom,
+	revalidationError,
+	diagnostics,
+	onBrush,
+}: {
+	envelope: ReportEnvelope<unknown>
+	tabId: string
+	apiBaseUrl: string
+	range: RangeKey
+	custom: { start: string; end: string }
+	/** Message from a failed background refresh, or null. */
+	revalidationError: string | null
+	/** The configuration checks, shown only on Data health. */
+	diagnostics: ReportState<unknown>
+	onBrush?: (start: string, end: string) => void
+}): React.ReactElement {
+	return (
+				<Stack space={4}>
+					{/*
+					  * Above the figures, because each of these three changes how the figures are
+					  * READ. That is the axis, not instrument-versus-business — the sort used when
+					  * this last moved was wrong on exactly the cases where the blocks exist. The
+					  * source row renders only when a source failed, so when it is here at all it
+					  * explains why a panel below is empty; the revalidation card says the figures
+					  * are stale before they are read rather than after; and the comparison sentence
+					  * defines every delta underneath it, which makes it a legend, not a footnote.
+					  * The standing caveats stay below the answer: those do not change day to day,
+					  * and they were the boilerplate that used to be the peak of the page.
+					  */}
+					<SourceStatusRow sources={envelope.sources} />
+					{revalidationError && (
+						<Card padding={3} radius={2} tone="caution" border>
+							<Text size={1}>
+								These figures are the last ones that loaded. Refreshing them failed: {revalidationError}
+							</Text>
+						</Card>
+					)}
+					{/* Shown only on the panels that actually draw a delta, and gated on the TAB rather
+					    than the report — Data health's report is measurement-health, so gating on the
+					    report printed "Changes are against…" above a panel that draws not one delta.
+
+					    This <Text> is CLOSED here. It was not: an earlier reorder left it open, and
+					    every panel body, the coverage ribbon and the notices became children of it —
+					    so the three tabs outside COMPARED_TABS rendered nothing but the footer, and
+					    the two that did render drew the whole report inside a size-0 muted caption.
+					    It compiled, it type-checked, and no test mounted this component. */}
+					{envelope.comparison && COMPARED_TABS.includes(tabId) && (
+						<Text size={0} muted>
+							Changes are against {envelope.comparison.range.start} to {envelope.comparison.range.end},
+							the equivalent window immediately before this one.
+							{envelope.comparison.provisional && (
+								<> This window&rsquo;s last days are still being processed by GA4, so changes read low.</>
+							)}
+						</Text>
+					)}
+
+					{GA4_ONLY_TABS.includes(tabId) && (
+						<CoverageRibbon ratio={knownShortfall(apiBaseUrl, range, range === 'custom' ? custom : undefined)} />
+					)}
+
+					{tabId === 'overview' && <OverviewPanel data={envelope.data as never} previous={envelope.comparison?.data as never} onBrush={onBrush} />}
+					{tabId === 'data-health' && (
+						<Stack space={4}>
+							<DataHealthPanel
+								data={envelope.data as never}
+								diagnostics={diagnostics.status === 'ready' ? (diagnostics.envelope.data as never) : undefined}
+							/>
+							{/* Said, not silently absent. The configuration block rendered only on
+							    `ready`, so an in-flight fetch or a 500 showed nothing at all and the
+							    section popped in later with no explanation of where it had been. */}
+							{diagnostics.status === 'loading' && <Text size={1} muted>Checking configuration…</Text>}
+							{diagnostics.status === 'error' && (
+								<Card padding={3} radius={2} tone="caution" border>
+									<Text size={1}>Configuration checks could not run: {diagnostics.message}</Text>
+								</Card>
+							)}
+						</Stack>
+					)}
+					{tabId === 'acquisition' && <AcquisitionPanel data={envelope.data as never} previous={envelope.comparison?.data as never} />}
+					{tabId === 'journey' && <JourneyPanel data={envelope.data as never} />}
+					{tabId === 'typeface-interest' && <TypefaceInterestPanel data={envelope.data as never} />}
+
+					{/* The standing caveats, below the answer. These read the same most days — a
+					    source that is configured but lossy, an event with no cutover date — so at the
+					    top they were amber wallpaper above every figure in the tool. */}
+					<NoticeList notices={envelope.notices} />
+
+					<Text size={0} muted>
+						Figures cover {envelope.range.start} to {envelope.range.end}, in {envelope.range.timezone}
+					</Text>
+				</Stack>
+	)
+}
+
 /** Renders one report panel, including its loading, error and empty states. */
 function ReportPanel({
 	tabId,
@@ -563,85 +672,16 @@ function ReportPanel({
 			)}
 
 			{state.status === 'ready' && (
-				<Stack space={4}>
-					{/*
-					  * Above the figures, because each of these three changes how the figures are
-					  * READ. That is the axis, not instrument-versus-business — the sort used when
-					  * this last moved was wrong on exactly the cases where the blocks exist. The
-					  * source row renders only when a source failed, so when it is here at all it
-					  * explains why a panel below is empty; the revalidation card says the figures
-					  * are stale before they are read rather than after; and the comparison sentence
-					  * defines every delta underneath it, which makes it a legend, not a footnote.
-					  * The standing caveats stay below the answer: those do not change day to day,
-					  * and they were the boilerplate that used to be the peak of the page.
-					  */}
-					<SourceStatusRow sources={state.envelope.sources} />
-					{state.revalidationError && (
-						<Card padding={3} radius={2} tone="caution" border>
-							<Text size={1}>
-								These figures are the last ones that loaded. Refreshing them failed: {state.revalidationError}
-							</Text>
-						</Card>
-					)}
-				{state.envelope.comparison && COMPARED_TABS.includes(tabId) && (
-						<Text size={0} muted>
-							Changes are against {state.envelope.comparison.range.start} to {state.envelope.comparison.range.end},
-							the equivalent window immediately before this one.
-							{state.envelope.comparison.provisional && (
-								<> This window&rsquo;s last days are still being processed by GA4, so changes read low.</>
-							)}
-					{GA4_ONLY_TABS.includes(tabId) && (
-						<CoverageRibbon ratio={knownShortfall(apiBaseUrl, range, range === 'custom' ? custom : undefined)} />
-					)}
-
-					{tabId === 'overview' && <OverviewPanel data={state.envelope.data as never} previous={state.envelope.comparison?.data as never} onBrush={onBrush} />}
-					{tabId === 'data-health' && (
-						<Stack space={4}>
-							<DataHealthPanel
-								data={state.envelope.data as never}
-								diagnostics={diagnostics.status === 'ready' ? (diagnostics.envelope.data as never) : undefined}
-							/>
-							{/* Said, not silently absent. The configuration block rendered only on
-							    `ready`, so an in-flight fetch or a 500 showed nothing at all and the
-							    section popped in later with no explanation of where it had been. */}
-							{diagnostics.status === 'loading' && <Text size={1} muted>Checking configuration…</Text>}
-							{diagnostics.status === 'error' && (
-								<Card padding={3} radius={2} tone="caution" border>
-									<Text size={1}>Configuration checks could not run: {diagnostics.message}</Text>
-								</Card>
-							)}
-						</Stack>
-					)}
-					{tabId === 'acquisition' && <AcquisitionPanel data={state.envelope.data as never} previous={state.envelope.comparison?.data as never} />}
-					{tabId === 'journey' && <JourneyPanel data={state.envelope.data as never} />}
-					{tabId === 'typeface-interest' && <TypefaceInterestPanel data={state.envelope.data as never} />}
-
-					{/* The standing caveats, below the answer. These read the same most days — a
-					    source that is configured but lossy, an event with no cutover date — so at the
-					    top they were amber wallpaper above every figure in the tool. */}
-					{/*
-					  * Everything below this line is about the INSTRUMENT, not the business, and it
-					  * sits below the answer for that reason. It used to sit above: a reader opening
-					  * the tool met a source-status row, up to two amber caution cards and a
-					  * comparison sentence before reaching a single figure, so the visual peak of the
-					  * page was boilerplate that does not change from day to day. The verdict is what
-					  * changes, so the verdict goes first and the provenance follows it.
-					  */}
-					<NoticeList notices={state.envelope.notices} />
-
-					{/* Shown only on the panels that actually draw a delta. It used to render whenever
-					    `comparison` merely existed, which told the reader they were looking at
-					    period-over-period changes on two panels showing bare levels. */}
-					{/* Gated on the TAB. It was gated on the report, and the tab/report decoupling made those
-					    different things — Data health's report is measurement-health, so it printed
-					    "Changes are against…" above a panel that draws not one delta, which is
-					    verbatim the bug the comment here says was fixed. */}
-						</Text>
-					)}
-					<Text size={0} muted>
-						Figures cover {state.envelope.range.start} to {state.envelope.range.end}, in {state.envelope.range.timezone}
-					</Text>
-				</Stack>
+				<ReadyReport
+					envelope={state.envelope}
+					tabId={tabId}
+					apiBaseUrl={apiBaseUrl}
+					range={range}
+					custom={custom}
+					revalidationError={state.revalidationError ?? null}
+					diagnostics={diagnostics}
+					onBrush={onBrush}
+				/>
 			)}
 		</Stack>
 	)
@@ -814,17 +854,23 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 						    state the server already knows is unreachable. */}
 						<button
 							type="button"
-							style={inlineClear}
 							aria-label="Shift the window forward by its own length"
 							disabled={atPresent}
+							// `inlineClear` hard-sets colour, opacity and cursor, so the UA's disabled
+							// greying never applied: a disabled control was pixel-identical to the live
+							// one beside it and its only explanation was a title, which disabled elements
+							// suppress in several browsers and which does not exist on touch.
+							style={atPresent ? { ...inlineClear, opacity: 0.35, cursor: 'not-allowed' } : inlineClear}
 							title={atPresent ? 'This window already ends today' : undefined}
 							onClick={() => {
 								const span = daysBetween(custom.start, custom.end)
 								const today = isoDaysAgo(0)
-								const end = shiftDays(custom.end, span)
-								// Shifted by whatever room is left when a full step would overshoot, so
-								// the last press lands on today rather than doing nothing.
-								const allowed = end > today ? daysBetween(custom.end, today) : span
+								// `daysBetween` is INCLUSIVE — it adds one — so it is the wrong function
+								// for a delta. Using it for the remaining room shifted the window one day
+								// PAST today, producing exactly the future-dated 400 this clamp exists to
+								// prevent, and made the `<= 0` guard unreachable.
+								const room = daysBetween(custom.end, today) - 1
+								const allowed = Math.min(span, room)
 								if (allowed <= 0) return
 								setCustom({ start: shiftDays(custom.start, allowed), end: shiftDays(custom.end, allowed) })
 							}}
@@ -850,7 +896,7 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 						{/* Keyed on the tab, so a throw on one panel does not render the error card for
 						    every other. Without the key the boundary held `error` forever and its own
 						    copy — "The other panels are unaffected" — became false. */}
-						<PanelBoundary resetKey={activePanel}>
+						<PanelBoundary resetKey={`${activePanel}|${range}|${custom.start}|${custom.end}`}>
 							<ReportPanel
 								tabId={active?.id ?? 'overview'}
 								report={active?.report ?? 'measurement-health'}
