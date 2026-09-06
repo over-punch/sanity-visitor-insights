@@ -10,7 +10,7 @@ import React, { useCallback, useRef, useState } from 'react'
 import { Box, Button, Card, Container, Flex, Heading, Spinner, Stack, Text } from '@liiift-studio/sanity-ui-compat'
 import type { RangeKey, ReportName, SourceName, SourceStatus } from '../types'
 import { useReport } from './useReport'
-import { daysBetween } from '../core/ranges'
+import { daysBetween, shiftDays } from '../core/ranges'
 import { NoticeList } from './Figure'
 import { Badge } from '@liiift-studio/sanity-ui-compat'
 import { AcquisitionPanel, DataHealthPanel, JourneyPanel, OverviewPanel, TypefaceInterestPanel } from './panels'
@@ -211,6 +211,16 @@ function RangeSelector({
 }): React.ReactElement {
 	const refs = useRef<Array<HTMLButtonElement | null>>([])
 	const [pickerOpen, setPickerOpen] = useState(value === 'custom')
+	// The picker edits a DRAFT and lifts it only on Apply.
+	//
+	// The comment below promised apply-on-submit and delivered it only on first entry into custom
+	// mode, because Apply was what set the range. After a brush the range is ALREADY custom, so
+	// every keystroke in a date field updated the live range and fanned out to four upstreams —
+	// spinning the year field is several full fetches against a ten-concurrent ceiling.
+	const [draft, setDraft] = useState(custom)
+	// Re-seeded whenever the committed range changes from outside, e.g. by a brush, so opening the
+	// picker shows the window the reader is actually looking at.
+	React.useEffect(() => { setDraft(custom) }, [custom.start, custom.end])
 
 	const onKeyDown = useCallback(
 		(event: React.KeyboardEvent) => {
@@ -254,7 +264,12 @@ function RangeSelector({
 							role="radio"
 							aria-checked={selected}
 							// Only the selected option is in the tab order, so the group is one stop.
-							tabIndex={selected ? 0 : -1}
+							// Falls back to the first option when nothing is selected. A roving tabindex
+							// with no fallback dropped the whole group out of the tab order the moment
+							// the range became `custom` — which is exactly what brushing sets, so the
+							// reward for using the keyboard-reachable brush was a mouse-only range
+							// control.
+							tabIndex={selected || (!RANGES.some((r) => r.key === value) && index === 0) ? 0 : -1}
 							title={`Ending today, covering ${range.span}`}
 							style={rangeButton(selected)}
 							onClick={() => {
@@ -288,20 +303,20 @@ function RangeSelector({
 						<Text size={0} muted>From</Text>
 						<input
 							type="date"
-							value={custom.start}
-							max={custom.end || undefined}
+							value={draft.start}
+							max={draft.end || undefined}
 							style={dateInput}
-							onChange={(e) => onCustomChange({ ...custom, start: e.currentTarget.value })}
+							onChange={(e) => setDraft((d) => ({ ...d, start: e.currentTarget.value }))}
 						/>
 					</label>
 					<label style={pickerField}>
 						<Text size={0} muted>To</Text>
 						<input
 							type="date"
-							value={custom.end}
-							min={custom.start || undefined}
+							value={draft.end}
+							min={draft.start || undefined}
 							style={dateInput}
-							onChange={(e) => onCustomChange({ ...custom, end: e.currentTarget.value })}
+							onChange={(e) => setDraft((d) => ({ ...d, end: e.currentTarget.value }))}
 						/>
 					</label>
 					<button
@@ -309,8 +324,8 @@ function RangeSelector({
 						style={rangeButton(true)}
 						// Applied on submit, not on each keystroke: a half-typed year is a valid-looking
 						// date, and refetching per character would fire a run of requests nobody asked for.
-						disabled={!custom.start || !custom.end}
-						onClick={() => onChange('custom')}
+						disabled={!draft.start || !draft.end}
+						onClick={() => { onCustomChange(draft); onChange('custom') }}
 					>
 						Apply
 					</button>
@@ -443,11 +458,13 @@ function ReportPanel({
 	const { state, reload } = useReport<unknown>({ apiBaseUrl, report, range, custom })
 	// Data health additionally shows the configuration checks. Fetched only on that tab, so the
 	// four tabs that do not show them do not pay for them.
+	// A fixed range: runDiagnostics takes none — it probes the present configuration — so keying it
+	// on the selected range fired an identical set of live GA4, Vercel and Sanity probes on every
+	// Week→Month→Quarter switch and cached three copies of one answer.
 	const diagnostics = useReport<unknown>({
 		apiBaseUrl,
 		report: 'diagnostics',
-		range,
-		custom,
+		range: 'week',
 		enabled: tabId === 'data-health',
 	}).state
 
@@ -457,7 +474,7 @@ function ReportPanel({
 		state.status === 'loading'
 			? 'Loading report'
 			: state.status === 'ready'
-				? `${tabId} updated for ${range === 'custom' ? `${custom.start} to ${custom.end}` : `the selected ${range}`}`
+				? `${PANELS.find((p) => p.id === tabId)?.label ?? tabId} updated for ${range === 'custom' ? `${custom.start} to ${custom.end}` : `the selected ${range}`}`
 				: state.status === 'error'
 					? state.disabled
 						? 'Visitor insights is switched off for this site'
@@ -471,9 +488,19 @@ function ReportPanel({
 			</Box>
 
 			{state.status === 'ready' && state.stale && (
-				// A quiet marker rather than a spinner over a blank panel: the figures below are the
-				// previous window's until the new ones land, and saying so beats hiding them.
+				// A quiet marker, and nothing else. The panel used to render at 0.55 opacity while
+				// stale — but every cache hit and every range change sets that flag, so the dominant
+				// felt state of the tool was "slightly unreadable", and muted text at 55% is under
+				// 3:1 in both themes. The line says it; the figures stay legible.
 				<Text size={0} muted>Updating…</Text>
+			)}
+
+			{state.status === 'ready' && state.revalidationError && (
+				<Card padding={3} radius={2} tone="caution" border>
+					<Text size={1}>
+						These figures are the last ones that loaded. Refreshing them failed: {state.revalidationError}
+					</Text>
+				</Card>
 			)}
 
 			{state.status === 'loading' && (
@@ -506,14 +533,18 @@ function ReportPanel({
 			)}
 
 			{state.status === 'ready' && (
-				<Stack space={4} style={state.stale ? { opacity: 0.55, transition: 'opacity 120ms' } : undefined}>
+				<Stack space={4}>
 					<SourceStatusRow sources={state.envelope.sources} />
 					<NoticeList notices={state.envelope.notices} />
 
 					{/* Shown only on the panels that actually draw a delta. It used to render whenever
 					    `comparison` merely existed, which told the reader they were looking at
 					    period-over-period changes on two panels showing bare levels. */}
-					{state.envelope.comparison && COMPARED_REPORTS.includes(report) && (
+					{/* Gated on the TAB. It was gated on the report, and the tab/report decoupling made those
+					    different things — Data health's report is measurement-health, so it printed
+					    "Changes are against…" above a panel that draws not one delta, which is
+					    verbatim the bug the comment here says was fixed. */}
+				{state.envelope.comparison && COMPARED_TABS.includes(tabId) && (
 						<Text size={0} muted>
 							Changes are against {state.envelope.comparison.range.start} to {state.envelope.comparison.range.end},
 							the equivalent window immediately before this one.
@@ -524,7 +555,23 @@ function ReportPanel({
 					)}
 
 					{tabId === 'overview' && <OverviewPanel data={state.envelope.data as never} previous={state.envelope.comparison?.data as never} onBrush={onBrush} />}
-					{tabId === 'data-health' && <DataHealthPanel data={state.envelope.data as never} diagnostics={diagnostics.status === 'ready' ? (diagnostics.envelope.data as never) : undefined} />}
+					{tabId === 'data-health' && (
+						<Stack space={4}>
+							<DataHealthPanel
+								data={state.envelope.data as never}
+								diagnostics={diagnostics.status === 'ready' ? (diagnostics.envelope.data as never) : undefined}
+							/>
+							{/* Said, not silently absent. The configuration block rendered only on
+							    `ready`, so an in-flight fetch or a 500 showed nothing at all and the
+							    section popped in later with no explanation of where it had been. */}
+							{diagnostics.status === 'loading' && <Text size={1} muted>Checking configuration…</Text>}
+							{diagnostics.status === 'error' && (
+								<Card padding={3} radius={2} tone="caution" border>
+									<Text size={1}>Configuration checks could not run: {diagnostics.message}</Text>
+								</Card>
+							)}
+						</Stack>
+					)}
 					{tabId === 'acquisition' && <AcquisitionPanel data={state.envelope.data as never} previous={state.envelope.comparison?.data as never} />}
 					{tabId === 'journey' && <JourneyPanel data={state.envelope.data as never} />}
 					{tabId === 'typeface-interest' && <TypefaceInterestPanel data={state.envelope.data as never} />}
@@ -557,6 +604,9 @@ function isoDaysAgo(days: number): string {
  */
 const COMPARED_REPORTS: ReportName[] = ['acquisition', 'measurement-health']
 
+/** Tabs that actually draw a delta. Not the same as the reports that fetch a comparison window. */
+const COMPARED_TABS = ['overview', 'acquisition']
+
 /**
  * Catches a render error in one panel so it does not blank the whole tool.
  *
@@ -565,10 +615,10 @@ const COMPARED_REPORTS: ReportName[] = ['acquisition', 'measurement-health']
  * happened twice, and both times the reader lost four working panels to fix one.
  */
 class PanelBoundary extends React.Component<
-	{ children: React.ReactNode; onRetry: () => void },
+	{ children: React.ReactNode },
 	{ error: Error | null }
 > {
-	constructor(props: { children: React.ReactNode; onRetry: () => void }) {
+	constructor(props: { children: React.ReactNode }) {
 		super(props)
 		this.state = { error: null }
 	}
@@ -592,15 +642,13 @@ class PanelBoundary extends React.Component<
 						different version from this Studio — redeploying the site normally clears it.
 					</Text>
 					<Text size={0} muted>{this.state.error.message}</Text>
-					<Box>
-						<button
-							type="button"
-							style={rangeButton(false)}
-							onClick={() => { this.setState({ error: null }); this.props.onRetry() }}
-						>
-							Try again
-						</button>
-					</Box>
+					{/* No retry button. The crash class this catches is a version-skew field access,
+					    which is deterministic: clearing the error re-renders the identical subtree
+					    against the identical cached envelope and throws again immediately. The
+					    previous button called setActivePanel with the value it already had, so React
+					    bailed out and nothing refetched — it did nothing twice over. Switching tabs
+					    resets the boundary, which is the honest escape. */}
+					<Text size={0} muted>Switch tabs and back, or redeploy the site, to clear this.</Text>
 				</Stack>
 			</Card>
 		)
@@ -616,6 +664,10 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 	const siteLabel = props.tool?.options?.siteLabel ?? props.siteLabel ?? ''
 
 	const [range, setRange] = useState<RangeKey>('week')
+	// The range in force before a brush, so the escape hatch returns where the reader was rather
+	// than to a week they never chose. Brushing from Quarter and landing in Week loses 358 days,
+	// and the label said so — a stated wrong answer rather than a bug you could rationalise.
+	const [rangeBeforeBrush, setRangeBeforeBrush] = useState<RangeKey>('week')
 	// Seeded with the trailing month so the picker opens on a valid range rather than on two empty
 	// fields. Local dates, not the property's: this is only the form's starting value, and the
 	// server re-resolves whatever is submitted against the property timezone.
@@ -646,10 +698,43 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 				{range === 'custom' && (
 					<div style={contextRow}>
 						<Text size={0} muted>
-							Narrowed to {custom.start} to {custom.end} ({daysBetween(custom.start, custom.end)} days)
+							{/* Not always "narrowed": a custom range can be wider than a week, up to the
+							    two-year cap. */}
+							Showing {custom.start} to {custom.end} ({daysBetween(custom.start, custom.end)} days).
+							{daysBetween(custom.start, custom.end) < 14 && (
+								<> Short windows lose GA4&rsquo;s low-count rows, so the source and typeface
+								lists will be shorter than reality.</>
+							)}
 						</Text>
-						<button type="button" style={inlineClear} onClick={() => setRange('week')}>
-							Back to the week
+						{/* Stepping, because a brush only ever goes inward. Every selection is drawn on
+						    the current window, so successive brushes narrow and narrow again with no
+						    way to widen, pan, or ask the obvious follow-up — "was the week before
+						    like this?" The span shifts by its own length, which is the same window
+						    the server already computes for the comparison. */}
+						<button
+							type="button"
+							style={inlineClear}
+							aria-label="Shift the window back by its own length"
+							onClick={() => {
+								const span = daysBetween(custom.start, custom.end)
+								setCustom({ start: shiftDays(custom.start, -span), end: shiftDays(custom.end, -span) })
+							}}
+						>
+							← earlier
+						</button>
+						<button
+							type="button"
+							style={inlineClear}
+							aria-label="Shift the window forward by its own length"
+							onClick={() => {
+								const span = daysBetween(custom.start, custom.end)
+								setCustom({ start: shiftDays(custom.start, span), end: shiftDays(custom.end, span) })
+							}}
+						>
+							later →
+						</button>
+						<button type="button" style={inlineClear} onClick={() => setRange(rangeBeforeBrush)}>
+							Back to the {RANGES.find((r) => r.key === rangeBeforeBrush)?.label.toLowerCase() ?? 'week'}
 						</button>
 					</div>
 				)}
@@ -664,14 +749,17 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 				>
 					<Stack space={4}>
 						{active && <Text size={1} muted>{active.blurb}</Text>}
-						<PanelBoundary onRetry={() => setActivePanel(activePanel)}>
+						{/* Keyed on the tab, so a throw on one panel does not render the error card for
+						    every other. Without the key the boundary held `error` forever and its own
+						    copy — "The other panels are unaffected" — became false. */}
+						<PanelBoundary key={activePanel}>
 							<ReportPanel
 								tabId={active?.id ?? 'overview'}
 								report={active?.report ?? 'measurement-health'}
 								apiBaseUrl={apiBaseUrl}
 								range={range}
 								custom={custom}
-								onBrush={(start, end) => { setCustom({ start, end }); setRange('custom') }}
+								onBrush={(start, end) => { if (range !== 'custom') setRangeBeforeBrush(range); setCustom({ start, end }); setRange('custom') }}
 							/>
 						</PanelBoundary>
 					</Stack>

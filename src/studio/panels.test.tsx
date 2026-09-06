@@ -34,6 +34,7 @@ vi.mock('sanity', () => ({
 }))
 import visitorInsights from '../index'
 import { Delta, MetricFigure, NoticeList, ProportionChart, SortableTable, TrendChart } from './Figure'
+import { holdsPreviousAnswer } from './useReport'
 import { ok, partial, unavailable } from '../types'
 import { UI } from '@liiift-studio/sanity-ui-compat'
 
@@ -1034,8 +1035,15 @@ describe('CrossSourceTimeline', () => {
 	})
 
 	it('renders nothing rather than an empty frame below three days', () => {
-		const html = render(<DataHealthPanel data={{ ...base, crossSource: base.crossSource.slice(0, 2) } as never} />)
+		// Against OverviewPanel, which is the panel that actually draws the timeline. This asserted
+		// on DataHealthPanel, which never renders it under any input — so the assertion could not
+		// fail and the >= 3 guard was untested.
+		const html = render(<OverviewPanel data={{ ...base, crossSource: base.crossSource.slice(0, 2) } as never} />)
 		expect(html).not.toContain('Everything, on one time axis')
+	})
+
+	it('renders the timeline once there are three days', () => {
+		expect(render(<OverviewPanel data={base as never} />)).toContain('Everything, on one time axis')
 	})
 })
 
@@ -1142,9 +1150,10 @@ describe('panel structure', () => {
 		// Every input was already computed; the conclusion was left to be assembled by hand across
 		// four tabs by comparing arrows.
 		const previous = { ...base, revenue: ok(3800), vercelPageviews: ok(2300) }
-		const html = render(<OverviewPanel data={base as never} previous={previous as never} />)
+		// shortfallRatio 0 — GA4 is seeing everything, so the all-clear is earned.
+		const html = render(<OverviewPanel data={{ ...base, shortfallRatio: 0 } as never} previous={previous as never} />)
 		expect(html).toMatch(/Revenue up \d+%/)
-		expect(html).toContain('traffic flat')
+		expect(html).toContain('Traffic flat')
 		expect(html).toContain('1 campaign sent')
 		expect(html).toContain('nothing broken')
 	})
@@ -1154,7 +1163,7 @@ describe('panel structure', () => {
 		// two tabs from the figures it qualifies.
 		const html = render(
 			<OverviewPanel
-				data={{ ...base, capture: { ...base.capture, discrepancy: 'GA4 is capturing purchases far better than pageviews.' } } as never}
+				data={{ ...base, shortfallRatio: 0, capture: { ...base.capture, discrepancy: 'GA4 is capturing purchases far better than pageviews.' } } as never}
 				previous={base as never}
 			/>,
 		)
@@ -1227,5 +1236,105 @@ describe('brushing and details on demand', () => {
 	it('sets a col-resize cursor only when brushing is available', () => {
 		expect(render(<OverviewPanel data={base as never} onBrush={() => {}} />)).toContain('cursor:col-resize')
 		expect(render(<OverviewPanel data={base as never} />)).not.toContain('cursor:col-resize')
+	})
+})
+
+describe('stale-while-revalidate holds the right answer', () => {
+	const ready = (report: string) => ({
+		status: 'ready' as const,
+		envelope: { report, range: {}, sources: {}, notices: [], data: {} },
+	})
+
+	it('holds a previous answer across a RANGE change', () => {
+		// The whole point: a reader must be able to change one variable without losing their sort,
+		// their filter and their place.
+		expect(holdsPreviousAnswer(ready('acquisition') as never, 'acquisition')).toBe(true)
+	})
+
+	it('does NOT hold it across a REPORT change', () => {
+		// Switching tabs with nothing cached used to keep the old envelope and hand it to the new
+		// panel. Journey rendered with Acquisition's payload — no crash, because every field is
+		// guarded with `?? []`, so it silently drew an empty funnel. Wrong content is worse than a
+		// spinner, and unlike a spinner it looks like an answer.
+		expect(holdsPreviousAnswer(ready('acquisition') as never, 'journey')).toBe(false)
+	})
+
+	it('holds nothing when there is no previous answer', () => {
+		expect(holdsPreviousAnswer({ status: 'loading' } as never, 'journey')).toBe(false)
+		expect(holdsPreviousAnswer({ status: 'error', message: 'x' } as never, 'journey')).toBe(false)
+	})
+})
+
+describe('the verdict can name the failure it exists for', () => {
+	const base = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356),
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		revenue: ok(4820), currency: 'USD', orderStatuses: {},
+		audience: ok(4210), audienceGrowth: ok(108), campaigns: [],
+		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
+		estimatedSessions: unavailable('not_applicable'),
+		interpretation: 'x', daily: [], crossSource: [], timelineEvents: [],
+	}
+
+	it('calls a large shortfall broken, even when the capture model cannot triangulate', () => {
+		// The founding failure: an 86% shortfall running ten days. The verdict consulted only
+		// capture.discrepancy, which is null below two estimates — and at 7 orders a quarter the
+		// orders and email estimates are almost always under their minimum denominator on a Week.
+		// So that outage read, on a Monday: "Revenue flat · Traffic flat · nothing broken".
+		const html = render(<OverviewPanel data={{ ...base, shortfallRatio: 0.86 } as never} />)
+		expect(html).toContain('treat its figures as broken')
+		expect(html).not.toContain('nothing broken')
+	})
+
+	it('does not claim an all-clear when there is nothing to check', () => {
+		// An older route sends no shortfallRatio. Silence is not evidence of health.
+		const html = render(<OverviewPanel data={{ ...base, shortfallRatio: undefined } as never} />)
+		expect(html).not.toContain('nothing broken')
+	})
+
+	it('renders list growth as a change, not as a delta against zero', () => {
+		// audienceGrowth is already the net change; routing it through Delta printed "new from 0"
+		// on an established list of four thousand people.
+		const html = render(<OverviewPanel data={base as never} />)
+		expect(html).toContain('+108 this period')
+		expect(html).not.toContain('new from 0')
+	})
+})
+
+describe('Overview survives an older API route', () => {
+	// The default tab, and the one most dependent on `?? []` guards — and it had no skew case at
+	// all, while the case that did exist asserted against a panel that no longer reads the field
+	// it was written for.
+	it('renders with none of the fields added since 0.6.x', () => {
+		const legacy = {
+			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+			interpretation: 'Sources differ.', daily: [],
+		}
+		expect(() => render(<OverviewPanel data={legacy as never} />)).not.toThrow()
+		const html = render(<OverviewPanel data={legacy as never} />)
+		// The figures the old route does send still render.
+		expect(html).toContain('2,356')
+		// The ones it does not degrade to a dash that says why, rather than to a zero or a NaN.
+		expect(html).toContain('predates this figure')
+		expect(html).not.toContain('NaN')
+		expect(html).not.toContain('undefined')
+	})
+
+	it('explains an empty pageview row rather than drawing a blank band', () => {
+		// Vercel caps at 62 day-buckets, so Quarter and Year have no daily pageviews at all.
+		const html = render(<OverviewPanel data={{
+			ga4Pageviews: ok(1), vercelPageviews: ok(1), shortfallRatio: 0, ga4Sessions: ok(1), orders: ok(1),
+			consentRate: unavailable('not_instrumented'), vercelVisitors: ok(1), vercelDailyUnavailable: true,
+			revenue: ok(1), currency: 'USD', orderStatuses: {}, audience: ok(1), audienceGrowth: ok(0),
+			campaigns: [], capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
+			estimatedSessions: unavailable('not_applicable'), interpretation: 'x', daily: [],
+			crossSource: ['2026-09-01', '2026-09-02', '2026-09-03'].map((date) => ({
+				date, vercelPageviews: null, ga4Pageviews: 10, ga4Sessions: 8, orders: 0, revenue: 0,
+			})),
+			timelineEvents: [],
+		} as never} />)
+		expect(html).toContain('weekly buckets')
 	})
 })

@@ -86,9 +86,17 @@ export {
 	AcquisitionPanel,
 	DiagnosticsPanel,
 	JourneyPanel,
-	OverviewPanel, DataHealthPanel,
+	OverviewPanel,
+	DataHealthPanel,
 	TypefaceInterestPanel,
 } from './studio/panels'
+
+/**
+ * @deprecated Renamed to `DataHealthPanel` in 0.22.0, when the panel was split into a business half
+ * (`OverviewPanel`) and an instrument half. Kept as an alias because removing a public export in a
+ * minor is a breaking change, and three sites upgrade this package separately.
+ */
+export { DataHealthPanel as MeasurementHealthPanel } from './studio/panels'
 
 // Shared contract types, safe in the browser — no server code reachable from here.
 export * from './types'

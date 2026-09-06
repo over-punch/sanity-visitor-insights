@@ -25,8 +25,28 @@ import type { RangeKey, ReportEnvelope, ReportName } from '../types'
 const envelopeCache = new Map<string, ReportEnvelope<unknown>>()
 
 /** Identity of a request: everything that changes the answer. */
-function cacheKey(report: string, range: string, custom?: { start: string; end: string }): string {
-	return [report, range, custom?.start ?? '', custom?.end ?? ''].join('|')
+function cacheKey(base: string, report: string, range: string, custom?: { start: string; end: string }): string {
+	// apiBaseUrl included: the plugin takes a `name` so it can be registered twice in one Studio,
+	// and without the base those two registrations would serve each other's envelopes.
+	return [base, report, range, custom?.start ?? '', custom?.end ?? ''].join('|')
+}
+
+/**
+ * Whether a previous answer may stay on screen while the next one loads.
+ *
+ * Only for the same report. Held across a RANGE change, which is the point — a reader must be able
+ * to change one variable without losing their sort, their filter and their place. NOT held across
+ * a REPORT change: that handed one panel another's payload, which does not crash, because every
+ * field is guarded with `?? []`, and therefore silently drew an empty funnel. Wrong content is
+ * worse than a spinner, and unlike a spinner it looks like an answer.
+ *
+ * Exported as a pure predicate so it can be tested without a DOM, which this package does not have.
+ *
+ * @param current - the state on screen right now
+ * @param nextReport - the report about to be fetched
+ */
+export function holdsPreviousAnswer<T>(current: ReportState<T>, nextReport: ReportName): boolean {
+	return current.status === 'ready' && current.envelope.report === nextReport
 }
 
 /** Sanity API version this tool pins. Fixed rather than "latest" so behaviour cannot drift. */
@@ -36,7 +56,7 @@ const API_VERSION = '2024-03-01'
 export type ReportState<T> =
 	| { status: 'idle' }
 	| { status: 'loading' }
-	| { status: 'ready'; envelope: ReportEnvelope<T>; stale?: boolean }
+	| { status: 'ready'; envelope: ReportEnvelope<T>; stale?: boolean; revalidationError?: string }
 	// `disabled` separates "this site has visitor insights switched off" from "something broke".
 	// They are both non-200s, but only one of them is worth a retry button.
 	| { status: 'error'; message: string; disabled?: boolean }
@@ -82,7 +102,7 @@ export function useReport<T>({ apiBaseUrl, report, range, custom, enabled = true
 		requestIdRef.current = requestId
 
 		const controller = new AbortController()
-		const key = cacheKey(report, range, custom)
+		const key = cacheKey(apiBaseUrl, report, range, custom)
 		const cached = envelopeCache.get(key)
 
 		// A cached answer for THIS key is shown at once and still revalidated. Marked stale so the
@@ -96,7 +116,16 @@ export function useReport<T>({ apiBaseUrl, report, range, custom, enabled = true
 		// whether a ranking holds and the ranking is gone, after the screen went blank — so a reader
 		// could never hold a question steady while changing one variable, which is the whole of
 		// what "explorable" means. It also dumped keyboard focus to the body on every range change.
-		else setState((current) => (current.status === 'ready' ? { ...current, stale: true } : { status: 'loading' }))
+		// Only a previous answer FOR THE SAME REPORT may be held over. Without that check, switching
+		// tabs with nothing cached kept the old envelope and handed it to the new panel — Journey
+		// rendered with Acquisition's payload, which does not crash (every field is guarded with
+		// `?? []`) and therefore silently drew an empty funnel instead. Wrong content is worse than
+		// a spinner, and unlike a spinner it looks like an answer.
+		else {
+			setState((current) => (
+				holdsPreviousAnswer(current, report) ? { ...current, stale: true } : { status: 'loading' }
+			))
+		}
 
 		async function run() {
 			// The Studio client carries the session token under token-based auth. Under cookie-based
@@ -159,7 +188,15 @@ export function useReport<T>({ apiBaseUrl, report, range, custom, enabled = true
 				setState({ status: 'ready', envelope })
 			} catch (e) {
 				if (controller.signal.aborted || requestIdRef.current !== requestId) return
-				setState({ status: 'error', message: (e as Error).message })
+				// A failed REVALIDATION must not destroy the figures already on screen. It used to
+				// replace a readable panel with a red card, and "Try again" flashed the data back
+				// and then the error again. The last good answer stays; the failure is reported
+				// beside it.
+				setState((current) => (
+					current.status === 'ready'
+						? { ...current, stale: false, revalidationError: (e as Error).message }
+						: { status: 'error', message: (e as Error).message }
+				))
 			}
 		}
 

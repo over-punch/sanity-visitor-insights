@@ -255,8 +255,15 @@ export interface ComparisonBarProps {
 	metric: MetricValue
 	/** Largest value across the sibling bars, used to scale width. */
 	max: number
-	/** Tone conveys category, but never carries meaning on its own. */
-	tone?: 'primary' | 'positive' | 'caution' | 'default'
+	/**
+	 * What full width means, named.
+	 *
+	 * A ComparisonBar scales to the largest sibling, so a full bar means only "biggest of these" —
+	 * and unlike the other two bar idioms, which print their share and their total, this one said
+	 * nothing at all. There was a `tone` prop instead, which both call sites passed different
+	 * values to and which the component destructured and never used.
+	 */
+	outOf?: string
 }
 
 /**
@@ -266,7 +273,7 @@ export interface ComparisonBarProps {
  * values, which a labelled bar does as well as a chart while avoiding a large dependency in the
  * Studio bundle and the theme-token bridging that a chart library would need for light and dark.
  */
-export function ComparisonBar({ label, metric, max, tone = 'default' }: ComparisonBarProps): React.ReactElement {
+export function ComparisonBar({ label, metric, max, outOf }: ComparisonBarProps): React.ReactElement {
 	const value = metric.status === 'unavailable' ? null : metric.value
 	const width = value !== null && max > 0 ? Math.max(2, (value / max) * 100) : 0
 
@@ -287,12 +294,11 @@ export function ComparisonBar({ label, metric, max, tone = 'default' }: Comparis
 					style={{ height: 8, borderStyle: 'dashed' }}
 				/>
 			) : (
-				// Track and fill are both Cards so the palette comes from the Studio theme tokens
-				// rather than hand-picked CSS variables, and follows light/dark without extra work.
 				<div aria-hidden="true" style={barTrack}>
 					<div style={{ ...barFill, width: `${width}%` }} />
 				</div>
 			)}
+			{outOf && <Text size={0} muted>{outOf}</Text>}
 		</Stack>
 	)
 }
@@ -1003,6 +1009,8 @@ export interface SortableTableProps<Row> {
 	exportName?: string
 	/** Shown under the table when the server truncated the row set. */
 	truncatedNote?: string
+	/** Allow per-row exclusion even without a filter box. */
+	onExclude?: boolean
 }
 
 /**
@@ -1027,6 +1035,7 @@ export function SortableTable<Row>({
 	filterOn,
 	exportName,
 	truncatedNote,
+	onExclude,
 }: SortableTableProps<Row>): React.ReactElement {
 	const [sort, setSort] = React.useState<{ key: string; desc: boolean } | null>(
 		initialSort ? { key: initialSort, desc: true } : null,
@@ -1117,6 +1126,11 @@ export function SortableTable<Row>({
 	}
 
 	const hiddenCount = rows.length - visible.length
+	// Counted independently of whether the excluded rows exist in THIS window. Exclusions now
+	// survive a refetch, so excluding a bot referrer on Quarter and then narrowing to a week where
+	// it has no sessions left the exclusion armed and the control gone — silently hiding rows on
+	// the way back out.
+	const excludedCount = excluded.size
 
 	return (
 		<Stack space={2}>
@@ -1132,14 +1146,15 @@ export function SortableTable<Row>({
 							onChange={(e) => setQuery(e.currentTarget.value)}
 						/>
 					)}
-					{hiddenCount > 0 && (
+					{(hiddenCount > 0 || excludedCount > 0) && (
 						<Text size={0} muted>
-							{hiddenCount} row{hiddenCount === 1 ? '' : 's'} hidden
-							{excluded.size > 0 && (
+							{hiddenCount > 0 && <>{hiddenCount} row{hiddenCount === 1 ? '' : 's'} hidden</>}
+							{excludedCount > 0 && (
 								<>
-									{' · '}
+									{hiddenCount > 0 ? ' · ' : ''}
+									{excludedCount} excluded{' '}
 									<button type="button" style={inlineLink} onClick={() => setExcluded(new Set())}>
-										restore excluded
+										restore
 									</button>
 								</>
 							)}
@@ -1192,10 +1207,11 @@ export function SortableTable<Row>({
 										<th key={column.key} scope="row" style={bodyCell}>
 											<span style={firstCell}>
 												{content}
-												{/* Not gated on `filterOn`. Filtering and excluding are
-												    independent affordances, and coupling them meant a table
-												    without a filter silently lost per-row exclusion too. */}
-												{exportName || filterOn ? (
+												{/* Offered where the row set is the reader's to shape. A chart's
+												    data table passes neither, because excluding a date there
+												    would visibly do nothing to the chart above it — an
+												    affordance that does nothing is worse than none. */}
+												{filterOn || onExclude ? (
 													// Per-row exclusion, because the fix for a contaminated
 													// table is to take the bad row out and see what the
 													// rest looks like. Rendered on every row rather than

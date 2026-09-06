@@ -123,6 +123,13 @@ const RIGHT_PAD = 12
 const TOP_PAD = 22
 /** Type size inside the plot. A real value now that the scale is uniform. */
 const AXIS_TYPE = 11
+/**
+ * Shortest span a brush may apply.
+ *
+ * Matches the chart's own render floor. Anything shorter narrows the range to a window the chart
+ * cannot draw, which removes the control the reader would use to get back out.
+ */
+const MIN_BRUSH_DAYS = 3
 
 /** Format a value in its series' unit. */
 function formatValue(value: number, unit: SeriesUnit, currency: string | null | undefined): string {
@@ -186,6 +193,24 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 		[dates.length, plotWidth],
 	)
 
+	/**
+	 * Apply a span, if it is long enough to draw.
+	 *
+	 * The floor is three days because that is what the chart itself needs — it returns null below
+	 * three dates, and the panel gates the whole section the same way. A two-day brush was legal
+	 * and produced a window in which the timeline, its heading, its data table and the brush
+	 * affordance all disappeared: the instrument removed itself, leaving no way to widen back.
+	 */
+	const commit = useCallback(
+		(from: number, to: number) => {
+			if (!onBrush || to - from < MIN_BRUSH_DAYS - 1) return
+			const start = dates[from]
+			const end = dates[to]
+			if (start && end) onBrush(start, end)
+		},
+		[onBrush, dates],
+	)
+
 	const onMove = useCallback(
 		(event: React.MouseEvent<SVGSVGElement>) => {
 			const index = indexAt(event.clientX)
@@ -247,25 +272,34 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 					// height:auto lets the intrinsic aspect ratio drive it, which also means the
 					// rendered box matches the viewBox exactly and the pointer maths is exact.
 					onMouseMove={onMove}
-					onMouseLeave={() => { setHoverIndex(null); setBrushAnchor(null) }}
-					onMouseDown={(event) => {
+					// A selection in flight is abandoned when the pointer leaves, but nothing is left
+					// drawn: a selection still on screen that never applied is a silent no-op that
+					// looks like success.
+					onMouseLeave={() => { setHoverIndex(null); setBrushAnchor(null); setBrushed(null) }}
+					onPointerDown={(event) => {
 						if (!onBrush) return
 						const index = indexAt(event.clientX)
 						if (index === null) return
 						event.preventDefault()
+						// Captured, so a drag that ends outside the chart still commits. "From the
+						// campaign send to today" is the most natural gesture here and it finishes at
+						// the right edge — without capture the pointer left, the anchor was dropped,
+						// and nothing happened.
+						event.currentTarget.setPointerCapture(event.pointerId)
 						setBrushAnchor(index)
 						setBrushed([index, index])
 					}}
-					onMouseUp={() => {
+					onPointerUp={(event) => {
 						if (!onBrush || brushAnchor === null) return
-						const index = hoverIndex ?? brushAnchor
+						if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+							event.currentTarget.releasePointerCapture(event.pointerId)
+						}
+						const index = indexAt(event.clientX) ?? hoverIndex ?? brushAnchor
 						const from = Math.min(brushAnchor, index)
 						const to = Math.max(brushAnchor, index)
 						setBrushAnchor(null)
-						// A click is not a drag. Selecting one day would hand every panel a
-						// single-day range, which at these volumes is mostly withheld rows.
-						if (to - from < 1) { setBrushed(null); return }
-						onBrush(dates[from] as string, dates[to] as string)
+						setBrushed(null)
+						commit(from, to)
 					}}
 					style={{ width: '100%', height: 'auto', display: 'block', cursor: onBrush ? 'col-resize' : 'default' }}
 					tabIndex={0}
@@ -287,9 +321,10 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						if (event.key === 'Home') next = 0
 						if (event.key === 'End') next = dates.length - 1
 						if (event.key === 'Escape') { setHoverIndex(null); setBrushed(null); return }
-						if (event.key === 'Enter' && brushed && brushed[1] > brushed[0] && onBrush) {
+						if (event.key === 'Enter' && brushed && onBrush) {
 							event.preventDefault()
-							onBrush(dates[brushed[0]] as string, dates[brushed[1]] as string)
+							commit(brushed[0], brushed[1])
+							setBrushed(null)
 							return
 						}
 						if (next === null) return
@@ -350,10 +385,15 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 								    scanning down the stack and knowing what each band is. The label
 								    used to live only in a wrapping legend whose order was not tied to
 								    vertical position. */}
-								<text x={GUTTER} y={top - 6} fontSize={AXIS_TYPE} fill="currentColor" opacity={0.75} fontWeight={500}>
+								{/* Inside the band, not in the gutter above it. At `top - 6` the label's
+								    ascender sat four units below the PREVIOUS row's baseline and six
+								    above its own — bound by proximity to the wrong band, which is the
+								    one thing small multiples exist to get right. On row 0 it also ran
+								    straight through the campaign marker dots. */}
+								<text x={GUTTER + 4} y={top + 12} fontSize={AXIS_TYPE} fill="currentColor" opacity={0.7} fontWeight={500}>
 									{row.label}
 								</text>
-								<text x={GUTTER + plotWidth} y={top - 6} textAnchor="end" fontSize={AXIS_TYPE} fill="currentColor" opacity={0.55}>
+								<text x={GUTTER + plotWidth} y={top + 12} textAnchor="end" fontSize={AXIS_TYPE} fill="currentColor" opacity={0.5}>
 									{row.source}{row.complete ? '' : ' · partial'}
 								</text>
 
@@ -366,11 +406,13 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 								</text>
 								<text x={GUTTER - 6} y={bottom + 4} textAnchor="end" fontSize={AXIS_TYPE} fill="currentColor" opacity={0.7}>0</text>
 
-								{/* Raised from 0.09/0.16, which measured 1.2:1 and 1.4:1 against the card in both
-								    themes where 3:1 is the floor — the mark this file calls the point of the
-								    chart was, on half the installs, not perceptible. Its upper edge is
-								    stroked too, so the boundary survives even where the fill does not. */}
-								{gap && <path d={gap} fill="currentColor" opacity={revealed ? 0.34 : 0.26} />}
+								{/* One alpha, measured, not tied to hover.
+								    A previous comment claimed 0.26/0.34 cleared 3:1 and it did not —
+								    computing the composite against the card gives 1.80:1 and 2.22:1 in
+								    light. 0.48 gives 3.33:1 light and 4.16:1 dark, so one number serves
+								    both themes. It is constant because a quantity that brightens when
+								    the pointer enters the chart is jitter, not information. */}
+								{gap && <path d={gap} fill="currentColor" opacity={0.48} />}
 
 								{shortfallLine && (
 									<path d={shortfallLine} fill="none" stroke="currentColor" strokeWidth={1.5} strokeDasharray="6 4" opacity={0.8} />
@@ -415,23 +457,31 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 					{/* The selection. Drawn as two dimmed flanks rather than a tinted middle, so the
 					    chosen span keeps the card's own background and stays the most legible part of
 					    the chart — a tint over the data would fight the marks it is meant to frame. */}
-					{brushed && brushed[1] > brushed[0] && (
+					{/* Bounds-checked against the CURRENT dates. `brushed` holds indices, and a commit
+					    changes the range underneath it — so after narrowing, indices from the old
+					    window pointed past the end of the new one, `dates[i]` was undefined, and both
+					    rects rendered width="NaN". */}
+					{brushed && brushed[1] > brushed[0] && brushed[1] < dates.length && (
 						<g aria-hidden="true">
+							{/* Scrimmed toward the CARD, not with currentColor. currentColor is near-white
+							    on a dark card, so the "dimmed" flanks became the brightest part of the
+							    chart and the selection the darkest — the inverse of the intent, in half
+							    the installs. */}
 							<rect
 								x={GUTTER}
 								y={TOP_PAD - 8}
 								width={Math.max(0, x(new Date(`${dates[brushed[0]]}T00:00:00Z`)) - GUTTER)}
 								height={series.length * ROW_HEIGHT - 10}
-								fill="currentColor"
-								opacity={0.12}
+								fill="var(--card-bg-color, #ffffff)"
+								opacity={0.72}
 							/>
 							<rect
 								x={x(new Date(`${dates[brushed[1]]}T00:00:00Z`))}
 								y={TOP_PAD - 8}
 								width={Math.max(0, GUTTER + plotWidth - x(new Date(`${dates[brushed[1]]}T00:00:00Z`)))}
 								height={series.length * ROW_HEIGHT - 10}
-								fill="currentColor"
-								opacity={0.12}
+								fill="var(--card-bg-color, #ffffff)"
+								opacity={0.72}
 							/>
 						</g>
 					)}
@@ -474,7 +524,13 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 			    in numbers as well as in shape. */}
 			<div style={readoutRow} aria-live="polite">
 				<Text size={0} weight="medium">
-					{hoveredDate ? tickLabel(new Date(`${hoveredDate}T00:00:00Z`)) : 'Hover the chart to read a day'}
+					{/* The selection is confirmed where the gesture happens. The only confirmation was
+					    a line above the tab strip, the full height of the panel away from the drag. */}
+					{brushed && brushed[1] > brushed[0] && brushed[1] < dates.length
+						? `${tickLabel(new Date(`${dates[brushed[0]]}T00:00:00Z`))} – ${tickLabel(new Date(`${dates[brushed[1]]}T00:00:00Z`))} · ${brushed[1] - brushed[0] + 1} days`
+						: hoveredDate
+							? tickLabel(new Date(`${hoveredDate}T00:00:00Z`))
+							: 'Hover the chart to read a day'}
 				</Text>
 				{hoveredDate && series.map((row) => {
 					const point = row.points.find((p) => p.date === hoveredDate)
@@ -528,8 +584,8 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 				{markers.length > 0 && <Text size={0} muted>Vertical rules mark campaign sends.</Text>}
 				{onBrush && (
 					<Text size={0} muted>
-						Drag across the chart — or hold shift and use the arrow keys, then Enter — to narrow
-						every panel to that span.
+						Drag across at least three days — or hold shift and use the arrow keys, then Enter — to
+						narrow every panel to that span.
 					</Text>
 				)}
 			</div>

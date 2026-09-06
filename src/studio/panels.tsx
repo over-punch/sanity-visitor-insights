@@ -1,5 +1,5 @@
 /**
- * The four report panels.
+ * The report panels.
  *
  * Every panel renders a table or labelled bars rather than a chart, and every one surfaces its own
  * caveats inline. Tables are the accessible representation as well as the visual one, so there is
@@ -14,8 +14,8 @@
  */
 
 import React from 'react'
-import { Badge, Box, Card, Flex, Grid, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ChartData, ComparisonBar, Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, SortableTable, TrendChart, formatCount, formatMoney, formatPercent } from './Figure'
+import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
+import { ChartData, ComparisonBar, Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, SortableTable, formatCount, formatMoney, formatPercent } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import type {
 	AcquisitionData,
@@ -72,8 +72,6 @@ function maxOf(metrics: MetricValue[]): number {
 	return metrics.reduce((max, metric) => (metric.status === 'unavailable' ? max : Math.max(max, metric.value)), 0)
 }
 
-/** Shared table styling — scrolls inside its own container so the panel never scrolls sideways. */
-const tableWrap: React.CSSProperties = { overflowX: 'auto', width: '100%' }
 
 /**
  * Section headings.
@@ -141,17 +139,7 @@ const cardGrid: React.CSSProperties = {
 	gridTemplateColumns: 'repeat(auto-fit, minmax(min(14rem, 100%), 1fr))',
 	gap: 16,
 }
-const table: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', minWidth: 420 }
-const cell: React.CSSProperties = { padding: '8px 12px', textAlign: 'left', borderBottom: '1px solid var(--card-border-color)' }
-// @sanity/ui ships no Table primitive, so the element is native — but every cell's content is a
-// Sanity UI component, and the table sits inside a Card, so it themes with the rest of the Studio.
-const numericCell: React.CSSProperties = { ...cell, textAlign: 'right' }
 
-/**
- * Measurement Health — how much of reality each source sees.
- * Compares pageviews to pageviews. Sessions and orders sit alongside as context and are never
- * subtracted from a pageview count.
- */
 /**
  * Overview — the five-minute read.
  *
@@ -194,11 +182,43 @@ export function OverviewPanel({ data, previous, onBrush }: {
 				</Card>
 				<Card padding={3} radius={2} tone="transparent" border>
 					<Stack space={3}>
+						<Label size={1} muted>Traffic</Label>
+						{/* The verdict asserts a traffic move; without this card the reader was told a
+						    number changed and shown no number. Vercel's, because it is the complete
+						    one — GA4's sessions differ from it by 86% on Darden. */}
+						<div style={figureRow}>
+							<MetricFigure metric={metricOr(data.vercelPageviews, OLDER_ROUTE)} label="Pageviews" />
+							<Delta current={metricSortValue(data.vercelPageviews)} previous={metricSortValue(previous?.vercelPageviews)} />
+						</div>
+						<Text size={0} muted>Pageviews, counted server-side.</Text>
+					</Stack>
+				</Card>
+				<Card padding={3} radius={2} tone="transparent" border>
+					<Stack space={3}>
 						<Label size={1} muted>Mailing list</Label>
 						<div style={figureRow}>
 							<MetricFigure metric={metricOr(data.audience, OLDER_ROUTE)} label="Mailing list members" />
-							<Delta current={metricSortValue(data.audience)} previous={metricSortValue(previous?.audience)} />
+							{/* audienceGrowth, not a delta between windows. `member_count` is Mailchimp's
+							    CURRENT total and carries no date filter, so it is identical in this
+							    envelope and the comparison one — the delta was structurally always
+							    "no change", teaching the reader their list never moves, while the real
+							    net change was computed server-side and rendered nowhere. */}
+							{(() => {
+								// Rendered directly. audienceGrowth is ALREADY the net change, so passing
+								// it to Delta with a baseline of 0 printed "new from 0" on an established
+								// list of four thousand people.
+								const growth = metricSortValue(data.audienceGrowth)
+								if (growth === null) return null
+								return (
+									<Text size={1} muted>
+										{growth > 0 ? '+' : ''}{formatCount(growth)} this period
+									</Text>
+								)
+							})()}
 						</div>
+						<Text size={0} muted>
+							Mailchimp&rsquo;s own count — not consent-gated or blockable.
+						</Text>
 					</Stack>
 				</Card>
 			</div>
@@ -213,37 +233,6 @@ export function OverviewPanel({ data, previous, onBrush }: {
 						Each row has its own scale. Hover a day, or use the control below, to see what each
 						source saw of it.
 					</Text>
-					<ChartData<CrossSourceDay>
-						label="Show these figures as a table"
-						rows={data.crossSource ?? []}
-						rowKey={(d) => d.date}
-						exportName="timeline"
-						columns={[
-							{ key: 'date', label: 'Date', sortValue: (d) => d.date, render: (d) => <Text size={1}>{d.date}</Text> },
-							{
-								key: 'vercel', label: 'Pageviews', numeric: true,
-								sortValue: (d) => d.vercelPageviews,
-								render: (d) => <Text size={1}>{d.vercelPageviews === null ? '—' : formatCount(d.vercelPageviews)}</Text>,
-							},
-							{
-								key: 'ga4', label: 'Seen by GA4', numeric: true,
-								sortValue: (d) => d.ga4Pageviews,
-								render: (d) => <Text size={1}>{d.ga4Pageviews === null ? '—' : formatCount(d.ga4Pageviews)}</Text>,
-							},
-							{
-								key: 'orders', label: 'Orders', numeric: true,
-								sortValue: (d) => d.orders,
-								render: (d) => <Text size={1}>{d.orders === null ? '—' : formatCount(d.orders)}</Text>,
-							},
-							{
-								key: 'revenue', label: 'Revenue', numeric: true,
-								sortValue: (d) => d.revenue,
-								exportValue: (d) => (d.revenue === null ? null : formatMoney(d.revenue, data.currency ?? null)),
-								render: (d) => <Text size={1}>{d.revenue === null ? '—' : formatMoney(d.revenue, data.currency ?? null)}</Text>,
-							},
-						]}
-					/>
-
 					<CrossSourceTimeline
 						onBrush={onBrush}
 						currency={data.currency ?? null}
@@ -289,12 +278,52 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								}]),
 						]}
 					/>
+
+					{data.vercelDailyUnavailable && (
+						// Restored. Vercel's aggregate endpoint caps at 62 day-buckets, so on Quarter and
+						// Year the pageview row has no data at all — and the sentence explaining that was
+						// deleted along with the "Day by day" section when this panel was split, leaving
+						// two of the four ranges drawing an empty band under "Everything, on one time
+						// axis" on the default tab with nothing to say why.
+						<Text size={1} muted>
+							Vercel reports a range this long in weekly buckets, so the pageview row is empty
+							here. Choose Week or Month to see it.
+						</Text>
+					)}
+
+					<ChartData<CrossSourceDay>
+						label="Show these figures as a table"
+						rows={data.crossSource ?? []}
+						rowKey={(d) => d.date}
+						exportName="timeline"
+						columns={[
+							{ key: 'date', label: 'Date', sortValue: (d) => d.date, render: (d) => <Text size={1}>{d.date}</Text> },
+							{
+								key: 'vercel', label: 'Pageviews', numeric: true,
+								sortValue: (d) => d.vercelPageviews,
+								render: (d) => <Text size={1}>{d.vercelPageviews === null ? '—' : formatCount(d.vercelPageviews)}</Text>,
+							},
+							{
+								key: 'ga4', label: 'Seen by GA4', numeric: true,
+								sortValue: (d) => d.ga4Pageviews,
+								render: (d) => <Text size={1}>{d.ga4Pageviews === null ? '—' : formatCount(d.ga4Pageviews)}</Text>,
+							},
+							{
+								key: 'orders', label: 'Orders', numeric: true,
+								sortValue: (d) => d.orders,
+								render: (d) => <Text size={1}>{d.orders === null ? '—' : formatCount(d.orders)}</Text>,
+							},
+							{
+								key: 'revenue', label: 'Revenue', numeric: true,
+								sortValue: (d) => d.revenue,
+								exportValue: (d) => (d.revenue === null ? null : formatMoney(d.revenue, data.currency ?? null)),
+								render: (d) => <Text size={1}>{d.revenue === null ? '—' : formatMoney(d.revenue, data.currency ?? null)}</Text>,
+							},
+						]}
+					/>
 				</Stack>
 			)}
 
-			{/* What GA4 is actually seeing, measured against the sources that are not lossy.
-			    Three ratios of the same quantity: agreement makes it a measurement, and
-			    disagreement says where the fault is rather than merely that there is one. */}
 
 			{(data.campaigns?.length ?? 0) > 0 && (
 				<Stack space={3}>
@@ -368,21 +397,50 @@ function Verdict({ data, previous }: { data: MeasurementHealthData; previous?: M
 	}
 
 	say('Revenue', data.revenue, previous?.revenue, 'money')
-	say('traffic', data.vercelPageviews, previous?.vercelPageviews, 'count')
+	say('Traffic', data.vercelPageviews, previous?.vercelPageviews, 'count')
 
 	const sends = data.campaigns?.length ?? 0
 	if (sends > 0) parts.push(`${sends} campaign${sends === 1 ? '' : 's'} sent`)
 
-	// The measurement caveat belongs in the verdict, not two tabs away: a healthy-looking week
-	// measured badly is not a healthy week.
-	const broken = data.capture?.discrepancy ? 'measurement disagrees between sources' : null
+	// What "broken" means, in priority order.
+	//
+	// This used to consult `capture.discrepancy` alone — which is null whenever fewer than two
+	// capture estimates exist, and at seven orders a quarter the orders and email estimates are
+	// almost always below their minimum denominator on a Week range. So the only surviving estimate
+	// was pageviews, the discrepancy was null, and the line appended "nothing broken".
+	//
+	// The 24 August collapse — an 86% shortfall running ten days, the founding failure this whole
+	// package cites — would therefore have read, on a Monday: "Revenue flat · traffic flat ·
+	// nothing broken". The figure that names it was computed and rendered two tabs away.
+	const shortfall = data.shortfallRatio
+	const broken = shortfall !== null && shortfall !== undefined && shortfall > 0.6
+		? `GA4 is seeing ${formatPercent(1 - shortfall, 0)} of your traffic — treat its figures as broken`
+		: data.capture?.discrepancy
+			? 'measurement disagrees between sources'
+			: null
 	if (broken) parts.push(broken)
 
 	if (parts.length === 0) return null
 
+	// "Nothing broken" needs a positive test, not the absence of a warning. It used to be appended
+	// whenever `capture.discrepancy` was falsy — which includes capture being absent entirely, so an
+	// older route or an unconfigured site printed a confident all-clear on no evidence at all.
+	const checked = shortfall !== null && shortfall !== undefined
+	const closing = broken ? '' : checked ? ' · nothing broken' : ''
+
 	return (
-		<Card padding={3} radius={2} tone={broken ? 'caution' : 'transparent'} border>
-			<Text size={2}>{parts.join(' · ')}{broken ? '' : ' · nothing broken'}</Text>
+		<Card
+			padding={3}
+			radius={2}
+			tone={broken ? 'caution' : 'transparent'}
+			border
+			// An explicit border alongside the tone: the compat shim's fallback drops `tone`, and
+			// this card is the tool's only alarm. Losing its colour must not lose the signal.
+			style={broken ? { borderLeftWidth: 3, borderLeftStyle: 'solid' } : undefined}
+		>
+			{/* size={3}, not size={2}. It was set one step above body and SMALLER than the figures
+			    beneath it, so the panel's thesis read as a caption for the cards. */}
+			<Text size={3} weight={broken ? 'semibold' : 'medium'}>{parts.join(' · ')}{closing}</Text>
 		</Card>
 	)
 }
@@ -404,8 +462,8 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 					The same unit on both sides. Vercel is cookieless and ungated; GA4 is consent-gated and
 					blockable, so GA4 seeing fewer is expected.
 				</Text>
-				<ComparisonBar label="Vercel pageviews" metric={data.vercelPageviews} max={pageviewMax} tone="primary" />
-				<ComparisonBar label="GA4 pageviews" metric={data.ga4Pageviews} max={pageviewMax} tone="default" />
+				<ComparisonBar label="Vercel pageviews" metric={data.vercelPageviews} max={pageviewMax} outOf="Complete: counted server-side." />
+				<ComparisonBar label="GA4 pageviews" metric={data.ga4Pageviews} max={pageviewMax} outOf="A subset of the bar above, not a rival measurement." />
 			</Stack>
 
 			{/* The reading is always shown. It used to be nested inside the shortfall block, so a
@@ -472,9 +530,6 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 				</Stack>
 			)}
 
-			{/* The daily series. A scalar gap cannot tell a stable difference from one that opened
-			    overnight, and those need opposite responses. Rendered only when there are enough
-			    points to show a shape, and only when both sources reported by day. */}
 
 			{Object.keys(data.orderStatuses ?? {}).length > 0 && (
 				<Stack space={3}>
