@@ -329,7 +329,7 @@ export function OverviewPanel({ data, previous, onBrush }: {
 					)}
 
 					<ChartData<CrossSourceDay>
-						note="A negative miss means GA4 counted MORE than Vercel that day — usually a tag firing twice, not extra traffic."
+						note="A negative miss means GA4 counted more than Vercel that day — usually a tag firing twice, not extra traffic."
 						label="Show these figures as a table"
 						rows={data.crossSource ?? []}
 						rowKey={(d) => d.date}
@@ -853,7 +853,9 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 							 * total and the money column is empty.
 							 */
 							key: 'brought',
-							label: 'Revenue (est.)',
+							// The hedge belongs on the SPLIT, not on the money: the total is exact and the
+							// division of it is the estimate. "(est.)" on a revenue header implied the reverse.
+							label: 'Revenue, split',
 							numeric: true,
 							sortValue: (row) => finiteOrNull(row.revenueShare),
 							exportValue: (row) => {
@@ -867,7 +869,12 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 								// this package and deploying the sites. That window is the normal state
 								// of this repo, not an edge case.
 								const share = finiteOrNull(row.revenueShare)
-								if (share === null) return <Text size={1} muted>—</Text>
+								// Zero is not a measurement here. At a fifth of traffic captured, a channel
+								// with four real sales and no tracked one is the ordinary case, and it was
+								// rendering a currency-formatted "$0.00 · 0% of tracked sales" — a measured
+								// zero manufactured from lossy data, which is the one thing the metric types
+								// in this package exist to forbid.
+								if (share === null || share === 0) return <Text size={1} muted>—</Text>
 								const money = finiteOrNull(row.apportionedRevenue)
 								return (
 									<Stack space={1}>
@@ -880,7 +887,7 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 					]}
 				/>
 
-				{(data.trackedPurchases ?? 0) > 0 && finiteOrNull(data.actualRevenue) !== null && (
+				{data.splitIsSound === true && finiteOrNull(data.actualRevenue) !== null && (
 					// Says exactly what was combined and what was estimated. The money in that column
 					// is Sanity's real total spread across GA4's split — right in scale, and derived,
 					// which is a different claim from measured. Saying so here is what makes the
@@ -888,11 +895,20 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 					<Text size={0} muted>
 						Revenue is {formatMoney(finiteOrNull(data.actualRevenue) ?? 0, data.currency ?? null)} from{' '}
 						{finiteOrNull(data.actualOrders) === null ? 'your orders' : `${formatCount(data.actualOrders as number)} orders`} in Sanity,
-						split across the {formatCount(data.trackedPurchases)} purchase
+						split across the {formatCount(data.trackedPurchases ?? 0)} purchase
 						{data.trackedPurchases === 1 ? '' : 's'} Google Analytics attributed to a source. Google
-						Analytics sees a fraction of your traffic, but it loses it fairly evenly across channels —
-						so the split is far more trustworthy than its own totals. Treat these as proportions with a
-						real total behind them, not as measured takings per channel.
+						Analytics sees a fraction of your traffic, so treat this as a proportion with a real total
+						behind it rather than measured takings per channel. Two things to hold in mind: it credits
+						whichever source a buyer arrived from on the visit they bought, which for a considered
+						purchase is often a bookmark rather than the blog that first sent them; and its loss is not
+						perfectly even across channels — ad-blocking runs high among designers, so earned referrals
+						and direct visits are likelier to be under-credited than paid clicks.
+						{finiteOrNull(data.shownPurchases) !== null && (data.shownPurchases ?? 0) < (data.trackedPurchases ?? 0) && (
+							<>
+								{' '}The rows above account for {formatCount(data.shownPurchases ?? 0)} of those sales; the rest
+								came from sources outside this list, so this column does not add up to the whole.
+							</>
+						)}
 					</Text>
 				)}
 			</Stack>
@@ -1024,38 +1040,59 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 }
 
 /**
- * The median of the values that exist, or null when fewer than three do.
+ * The catalogue's own orders-per-view: every family's sales over every family's views.
  *
- * Three, because a "median" of one or two families is not a catalogue to compare against — it is
- * the family itself, or an average of a pair, and an index computed from it would say nothing.
+ * The benchmark was the MEDIAN FAMILY's rate, and that was wrong twice over. It filtered to rates
+ * above zero, so a family viewed four hundred times that has never sold — the single most useful
+ * row, and the one the column was built to surface — was excluded from the benchmark AND rendered
+ * as a dash. And at seven orders a quarter more than half the catalogue sells nothing in a window,
+ * so the median is zero and an index against it is undefined for everyone.
  *
- * @param values - one entry per row, null where the row has no usable figure
+ * A pooled rate has neither problem: it is positive whenever anything sold at all, a family with no
+ * sales scores an honest zero against it, and it is the benchmark the reader would name themselves
+ * — "against how the catalogue as a whole converts".
+ *
+ * Returns null when nothing sold or nothing was viewed, because there is then no catalogue rate to
+ * compare against and an index would be invented.
+ *
+ * @param rows - every family in the window
  */
-export function medianOf(values: Array<number | null>): number | null {
-	const usable = values.filter((v): v is number => v !== null && Number.isFinite(v) && v > 0).sort((a, b) => a - b)
-	if (usable.length < 3) return null
-	const middle = Math.floor(usable.length / 2)
-	return usable.length % 2 === 0 ? ((usable[middle - 1]! + usable[middle]!) / 2) : usable[middle]!
+export function catalogueRate(rows: Array<{ viewed?: MetricValue; bought?: MetricValue }>): number | null {
+	let views = 0
+	let sales = 0
+	for (const row of rows) {
+		const viewed = metricSortValue(row.viewed)
+		const bought = metricSortValue(row.bought)
+		// Both sides or neither: a family GA4 has no view count for cannot contribute its sales to a
+		// rate, or the pooled figure would be sales from families whose views are missing.
+		if (viewed === null || bought === null) continue
+		views += viewed
+		sales += bought
+	}
+	return views > 0 && sales > 0 ? sales / views : null
 }
 
 /**
- * A family's orders-per-view against the catalogue median, or null when not comparable.
+ * A family's orders-per-view against the catalogue's, or null when not comparable.
+ *
+ * Zero is a RESULT, not an absence: a family that was viewed and never bought scores 0 and belongs
+ * at the bottom of the sort, which is where a reader looking for a pricing or specimen problem
+ * starts. Only a family with no usable rate at all returns null.
  *
  * @param row - the family's row
- * @param median - the catalogue median, or null when there were too few families
+ * @param benchmark - the catalogue rate, or null when there was none
  */
-export function buyRateIndex(row: { buyRate?: number | null }, median: number | null): number | null {
+export function buyRateIndex(row: { buyRate?: number | null }, benchmark: number | null): number | null {
 	const rate = row.buyRate
-	if (median === null || median <= 0 || rate === null || rate === undefined || !Number.isFinite(rate)) return null
-	return rate / median
+	if (benchmark === null || benchmark <= 0) return null
+	if (rate === null || rate === undefined || !Number.isFinite(rate) || rate < 0) return null
+	return rate / benchmark
 }
 
 /** Typeface interest — viewed, tested and bought per family. */
 export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }): React.ReactElement {
-	// The middle family, by orders-per-view. Median rather than mean: at seven orders a quarter one
-	// family with a single sale and few views produces an outlier that would drag a mean and make
-	// every other family look weak against it.
-	const medianBuyRate = medianOf((data.rows ?? []).map((row) => finiteOrNull(row.buyRate)))
+	// The whole catalogue's orders-per-view, which every family is measured against.
+	const benchmark = catalogueRate(data.rows ?? [])
 
 	return (
 		<Stack space={4}>
@@ -1066,11 +1103,12 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 			<Stack space={3}>
 				<Heading size={1} style={sectionHeading}>Engagement by typeface</Heading>
 				<Text size={1} muted>
-					Sort by any column. &ldquo;Sells vs catalogue&rdquo; compares each family&rsquo;s orders-per-view
-					against the median family, which is the part of that ratio that holds even though Google
-					Analytics only sees a fraction of the views. It ranks families against each other; it is not
-					the share of visitors who buy, and at these order volumes a family with one or two sales
-					will swing a long way.
+					Sort by any column. &ldquo;Sells vs catalogue&rdquo; compares each family&rsquo;s sales-per-view
+					against the catalogue as a whole — 1.0× is average, and sorting up finds the families that
+					are looked at and do not sell. It is a comparison between your families, not the share of
+					visitors who buy: Google Analytics sees only a fraction of the views, which moves every
+					family together and so cancels out here. With one or two sales a family will still swing a
+					long way, so read it alongside the order counts beside it.
 				</Text>
 				<SortableTable<TypefaceInterestRow>
 					caption="Engagement by typeface"
@@ -1154,22 +1192,28 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 							key: 'buyRate',
 							label: 'Sells vs catalogue',
 							numeric: true,
-							sortValue: (row) => finiteOrNull(row.buyRate),
+							// The INDEX, so a row rendered as a dash cannot sort above a row with a value.
+							// Sorting on the raw rate returned 0 — a real number — for a family whose
+							// cell showed "—", so ascending put a block of dashes at the top of the
+							// table, which is the one thing this file's header forbids.
+							sortValue: (row) => buyRateIndex(row, benchmark),
 							exportValue: (row) => {
-								const index = buyRateIndex(row, medianBuyRate)
-								return index === null ? null : `${index.toFixed(1)}x`
+								const index = buyRateIndex(row, benchmark)
+								return index === null ? null : `${index.toFixed(1)}x catalogue`
 							},
 							render: (row) => {
-								const index = buyRateIndex(row, medianBuyRate)
+								const index = buyRateIndex(row, benchmark)
 								if (index === null) {
 									return <Text size={1} muted aria-label={`${row.typeface} not comparable`}>—</Text>
 								}
+								if (index === 0) {
+									// Named, not left as "0.0×". A family with views and no sales is the
+									// row this column exists to surface.
+									return <Text size={1}>No sales</Text>
+								}
 								return (
 									<Text size={1}>
-										{index.toFixed(1)}×{' '}
-										<span style={{ opacity: 0.6, fontSize: '0.85em' }}>
-											{index >= 1.15 ? 'above' : index <= 0.85 ? 'below' : 'at'} median
-										</span>
+										{index.toFixed(1)}× catalogue
 									</Text>
 								)
 							},

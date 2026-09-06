@@ -454,7 +454,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 		// defect happened to be larger.
 		const sentences: string[] = []
 		if (excess > 0) {
-			sentences.push(`${row.shortfall.source} counted ${formatValue(Math.round(excess), row.unit, currency)} MORE `
+			sentences.push(`${row.shortfall.source} counted ${formatValue(Math.round(excess), row.unit, currency)} more `
 				+ `${row.label.toLowerCase()} than ${row.source} on some days, which usually means a tag firing twice `
 				+ `rather than extra traffic.`)
 		}
@@ -501,7 +501,10 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 					// A selection in flight is abandoned when the pointer leaves, but nothing is left
 					// drawn: a selection still on screen that never applied is a silent no-op that
 					// looks like success.
-					onPointerLeave={() => { setHoverIndex(null); setBrushAnchor(null); setBrushed(null); setTooShort(false) }}
+					// tooShort is NOT cleared here. The message renders below the chart, so a reader who
+					// mis-drags and then moves down to read the explanation crosses the boundary and
+					// used to destroy it on the way. It clears on the next drag instead.
+					onPointerLeave={() => { setHoverIndex(null); setBrushAnchor(null); setBrushed(null) }}
 					onPointerDown={(event) => {
 						if (!onBrush) return
 						setTooShort(false)
@@ -561,7 +564,13 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						// which matters more here than usual, since this is the tool's one
 						// cross-filter and the pane is often narrow.
 						if (event.shiftKey && onBrush) {
-							const anchor = brushed ? brushed[0] : current
+							// A FIXED anchor, held in its own state. Re-reading it as `brushed[0]` — the
+							// minimum — meant extending leftward moved both ends together: [88,89] became
+							// [87,88] became [86,87], stuck at two days forever. Since focus seeds the
+							// cursor at the last day, shift+ArrowLeft is the natural keyboard gesture, so
+							// the only cross-filter in the tool always failed and always scolded.
+							const anchor = brushAnchor ?? current
+							if (brushAnchor === null) setBrushAnchor(current)
 							setBrushed([Math.min(anchor, next), Math.max(anchor, next)])
 						}
 					}}
@@ -625,7 +634,12 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						// day with no sales identical to a day Sanity never reported — the one
 						// distinction this package exists to keep (see the header of Figure.tsx). The
 						// tick is at the axis, so it reads as "measured, and it was nothing".
-						const zeroes = row.mark === 'events'
+						// Only where they can read as SEPARATE marks. At ninety days in a narrow pane the
+						// pitch is under four pixels, so eighty-odd abutting ticks merge into a slightly
+						// darker baseline — a thicker axis, not a row of measurements — and now that the
+						// series is a complete calendar that is the normal case rather than the rare one.
+						// Below the threshold the row being drawn at all is what says it was measured.
+						const zeroes = row.mark === 'events' && pitch >= 6
 							? row.points.filter((p) => p.value === 0)
 							: []
 						const gap = row.shortfall ? gapGen(row.points) ?? '' : ''

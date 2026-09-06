@@ -108,6 +108,30 @@ function interpret(ga4Views: MetricValue, vercelViews: MetricValue, shortfall: n
 }
 
 /**
+ * Every date from start to end inclusive, as ISO days.
+ *
+ * Stepped in UTC. Doing it in local time shifts a day either side of a DST boundary, which would
+ * put two identical dates in the series or skip one — on a chart whose whole subject is whether two
+ * sources agree about what happened on a given day.
+ *
+ * @param start - first day, ISO
+ * @param end - last day, ISO, included
+ */
+export function calendarDays(start: string, end: string): string[] {
+	const first = Date.parse(`${start}T00:00:00Z`)
+	const last = Date.parse(`${end}T00:00:00Z`)
+	if (!Number.isFinite(first) || !Number.isFinite(last) || last < first) return []
+	// Bounded. A malformed range should not spin: no window this tool offers is longer than a year,
+	// and a couple of years of slack is still a chart, not a hang.
+	const MAX_DAYS = 800
+	const days: string[] = []
+	for (let t = first; t <= last && days.length < MAX_DAYS; t += 86_400_000) {
+		days.push(new Date(t).toISOString().slice(0, 10))
+	}
+	return days
+}
+
+/**
  * Run the measurement-health report.
  *
  * Each source is queried independently and a failure in one degrades only its own figures, so the
@@ -424,16 +448,23 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		)
 		: unavailable('not_applicable', 'Not enough overlap between sources to estimate a true figure')
 
-	// The cross-source timeline. Built from the union of every source's dates so the rows share a
-	// span; a row that silently ended earlier than its neighbours would read as a fall rather than
-	// as an absence.
-	const crossDates = [...new Set([
-		...ga4ByDate.keys(),
-		...ga4SessionsByDate.keys(),
-		...(vercelIsDaily ? Object.keys(vercelByDate) : []),
-		...Object.keys(ordersByDate),
-		...Object.keys(revenueByDate ?? {}),
-	])].sort()
+	/*
+	 * The cross-source timeline, on a CONTIGUOUS CALENDAR — every day in the range, whether or not
+	 * any source reported one.
+	 *
+	 * It was the union of the dates sources actually returned, which deletes an outage from the
+	 * chart: on a day where GA4 reported nothing, Vercel was in weekly buckets and no order landed,
+	 * the day simply was not in the array, and the line was drawn smoothly from the day before to
+	 * the day after. The 24 August collapse — the founding case for this whole package — would
+	 * compress itself out of the axis on exactly the ranges you would open to look for it.
+	 *
+	 * It also silently broke the chart's arithmetic. The pointer maps a position to an index by
+	 * dividing the plot width evenly, while the x scale is a time scale over real dates — those two
+	 * agree only when the days are evenly spaced. With any gap the crosshair stopped landing under
+	 * the cursor, a brush selected a span nobody dragged, and the stem pitch was computed from the
+	 * wrong count. A complete calendar makes index and position the same thing again.
+	 */
+	const crossDates = calendarDays(range.start, range.end)
 
 	const crossSource: CrossSourceDay[] = crossDates.map((date) => ({
 		date,

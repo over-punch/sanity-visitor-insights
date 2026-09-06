@@ -14,6 +14,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { readFileSync } from 'node:fs'
+import { calendarDays } from '../server/reports/measurementHealth'
+import { formatCount, formatMoney } from './Figure'
 import { captureModel, fromOrders } from '../core/capture'
 import { forgetShortfalls, knownShortfall, rememberShortfall } from './useReport'
 import { CrossSourceTimeline, dayIndexAt } from './CrossSourceTimeline'
@@ -26,9 +28,9 @@ import {
 	DataHealthPanel,
 	TypefaceInterestPanel,
 	buyRateIndex,
+	catalogueRate,
 	coverageOf,
 	gapOf,
-	medianOf,
 } from './panels'
 import { PanelBoundary, ReadyReport, VisitorInsightsTool } from './VisitorInsightsTool'
 
@@ -1638,7 +1640,7 @@ describe('a table says accurately what it is showing', () => {
 		// GA4 — was told it had filtered its own data away, and went hunting for a control it had
 		// never touched.
 		const html = render(
-			<SortableTable rows={[]} columns={columns as never} rowKey={(r: never) => String(r)} caption="Sources" initialSort="sessions" />,
+			<SortableTable rows={[] as typeof rows} columns={columns as never} rowKey={(r: { name: string }) => r.name} caption="Sources" initialSort="sessions" />,
 		)
 		expect(html).toContain('Nothing to show for this period')
 		expect(html).not.toContain('No rows match this filter')
@@ -1648,7 +1650,7 @@ describe('a table says accurately what it is showing', () => {
 		// With nothing typed and nothing excluded, neither count applies — and the old arithmetic
 		// double-counted, because `visible` filters on exclusion as well as on the query.
 		const html = render(
-			<SortableTable rows={rows} columns={columns as never} rowKey={(r: never) => (r as { name: string }).name} caption="Sources" initialSort="sessions" />,
+			<SortableTable rows={rows} columns={columns as never} rowKey={(r: { name: string }) => r.name} caption="Sources" initialSort="sessions" />,
 		)
 		// Matching the status line's own phrasing — the word "excluded" also appears in each row's
 		// exclude control, which is not what this is about.
@@ -1840,32 +1842,57 @@ describe('every tab renders its own panel', () => {
 })
 
 describe('a lossy denominator is presented as a ranking, not a rate', () => {
-	it('needs at least three families before it claims a catalogue median', () => {
-		// A "median" of one or two families is the family itself, or an average of a pair — an index
-		// against it would say nothing about the catalogue.
-		expect(medianOf([0.01, 0.02])).toBeNull()
-		expect(medianOf([0.01, 0.02, 0.03])).toBe(0.02)
+	const family = (viewed: number | null, bought: number | null) => ({
+		viewed: viewed === null ? unavailable('not_instrumented') : ok(viewed),
+		bought: bought === null ? unavailable('not_instrumented') : ok(bought),
+		buyRate: viewed !== null && bought !== null && viewed > 0 ? bought / viewed : null,
 	})
 
-	it('ignores absent and zero rates when finding the middle', () => {
-		// A family GA4 reported no views for has no rate; treating that as zero would drag the
-		// median down and make every other family look strong.
-		expect(medianOf([null, 0, 0.02, 0.04, 0.06])).toBe(0.04)
+	it('pools every family rather than picking the middle one', () => {
+		// 3 sales across 600 views.
+		expect(catalogueRate([family(400, 1), family(200, 2)])).toBeCloseTo(3 / 600)
+	})
+
+	it('counts a family that was viewed and never sold', () => {
+		// The row the column exists to surface. Excluding it from the benchmark — as filtering to
+		// positive rates did — both removed the most informative row and biased the benchmark up.
+		const withZero = catalogueRate([family(400, 0), family(200, 2)])
+		expect(withZero).toBeCloseTo(2 / 600)
+		expect(buyRateIndex(family(400, 0), withZero)).toBe(0)
+	})
+
+	it('has no benchmark when nothing sold or nothing was viewed', () => {
+		expect(catalogueRate([family(400, 0), family(200, 0)])).toBeNull()
+		expect(catalogueRate([])).toBeNull()
+		expect(buyRateIndex(family(400, 1), null)).toBeNull()
+	})
+
+	it('ignores a family missing either side, rather than pooling half of it', () => {
+		// Counting its sales without its views would inflate the catalogue rate.
+		expect(catalogueRate([family(400, 1), family(null, 5)])).toBeCloseTo(1 / 400)
 	})
 
 	it('is unmoved when the tag breaks and every view count falls together', () => {
 		// The whole reason for the change. When Darden's GA4 count fell from 471/day to 70, every
 		// family's printed rate multiplied by about seven and the families that looked best were the
 		// ones GA4 had stopped seeing. A comparison between families survives that; a rate does not.
-		const healthy = [0.01, 0.02, 0.04]
-		const collapsed = healthy.map((r) => r * 6.7)
-		const index = (rates: number[]) => rates.map((r) => buyRateIndex({ buyRate: r }, medianOf(rates)))
-		expect(index(collapsed)).toEqual(index(healthy))
+		const healthy = [family(400, 1), family(200, 2), family(300, 0)]
+		const collapsed = [family(60, 1), family(30, 2), family(45, 0)]
+		const index = (rows: ReturnType<typeof family>[]) => {
+			const benchmark = catalogueRate(rows)
+			return rows.map((r) => buyRateIndex(r, benchmark))
+		}
+		const a = index(healthy)
+		const b = index(collapsed)
+		a.forEach((value, i) => expect(b[i]).toBeCloseTo(value as number, 6))
 	})
 
-	it('has no comparison for a family with no usable rate', () => {
-		expect(buyRateIndex({ buyRate: null }, 0.02)).toBeNull()
-		expect(buyRateIndex({ buyRate: 0.02 }, null)).toBeNull()
+	it('sorts a family with no comparable figure below one that has zero sales', () => {
+		// Sorting on the raw rate returned 0 for a family whose cell reads "—", so ascending put a
+		// block of dashes above the real answers.
+		const benchmark = catalogueRate([family(400, 1), family(200, 2)])
+		expect(buyRateIndex(family(400, 0), benchmark)).toBe(0)
+		expect(buyRateIndex(family(null, null), benchmark)).toBeNull()
 	})
 })
 
@@ -1905,7 +1932,7 @@ describe('the new revenue attribution survives an older API route', () => {
 
 	it('renders the column as unavailable rather than as no revenue', () => {
 		const html = render(<AcquisitionPanel data={legacy as never} />)
-		expect(html).toContain('Revenue (est.)')
+		expect(html).toContain('Revenue, split')
 		// Not a zero, and not a currency symbol with nothing behind it.
 		expect(html).not.toContain('of tracked sales')
 	})
@@ -1917,5 +1944,84 @@ describe('the new revenue attribution survives an older API route', () => {
 
 	it('still shows the sessions the older route did return', () => {
 		expect(render(<AcquisitionPanel data={legacy as never} />)).toContain('120')
+	})
+})
+
+describe('the revenue split divides by the whole, and says when the rows do not', () => {
+	const base = {
+		totalSessions: 357, designIndustryShare: null, unattributedShare: null,
+		rowsWithheld: false, rowsTruncated: false, currency: 'USD',
+		actualRevenue: 10000, actualOrders: 20,
+	}
+	const row = (source: string, sessions: number, purchases: number, share: number) => ({
+		source, channel: 'Referral', medium: 'referral', campaign: null,
+		sessions, engagedSessions: sessions, engagementRate: 1,
+		designIndustry: false, unattributed: false,
+		purchases, revenueShare: share, apportionedRevenue: 10000 * share,
+	})
+
+	it('says so when the visible rows account for only part of the split', () => {
+		// The shares are against every attributed purchase, so when a selling source falls outside
+		// the top rows by sessions the visible shares correctly do not sum to 100 — and a reader
+		// adding up the column deserves to know why rather than assume the arithmetic is broken.
+		const html = render(<AcquisitionPanel data={{
+			...base, trackedPurchases: 20, shownPurchases: 12, splitIsSound: true,
+			rows: [row('a.test', 300, 8, 0.4), row('b.test', 200, 4, 0.2)],
+		} as never} />)
+		expect(html).toContain('does not add up to the whole')
+		expect(html).toContain('12 of those sales')
+	})
+
+	it('stays quiet when every attributed sale is on screen', () => {
+		const html = render(<AcquisitionPanel data={{
+			...base, trackedPurchases: 12, shownPurchases: 12, splitIsSound: true,
+			rows: [row('a.test', 300, 8, 0.667), row('b.test', 200, 4, 0.333)],
+		} as never} />)
+		expect(html).not.toContain('does not add up to the whole')
+	})
+})
+
+describe('the timeline runs on a calendar, not on the days sources happened to report', () => {
+	it('fills every day between the bounds', () => {
+		expect(calendarDays('2026-09-01', '2026-09-05')).toEqual([
+			'2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-05',
+		])
+	})
+
+	it('crosses a month and a DST boundary without repeating or skipping a day', () => {
+		// Stepped in UTC. In local time a DST shift puts two identical dates in the series or drops
+		// one — on a chart whose whole subject is whether two sources agree about a given day.
+		const days = calendarDays('2026-10-24', '2026-11-02')
+		expect(new Set(days).size).toBe(days.length)
+		expect(days.length).toBe(10)
+		expect(days[7]).toBe('2026-10-31')
+	})
+
+	it('returns nothing for an inverted or malformed range', () => {
+		expect(calendarDays('2026-09-05', '2026-09-01')).toEqual([])
+		expect(calendarDays('not-a-date', '2026-09-01')).toEqual([])
+	})
+
+	it('is bounded, so a malformed range cannot spin', () => {
+		expect(calendarDays('1990-01-01', '2026-01-01').length).toBeLessThanOrEqual(800)
+	})
+})
+
+describe('money keeps one precision down a column', () => {
+	it('does not switch precision at a thousand', () => {
+		// "$850.00" and "$1,200" sat in adjacent rows, and an axis top read "$1,000" over a baseline
+		// reading "$0.00" — the mismatch the chart's own comment claims to have fixed.
+		expect(formatMoney(850, 'USD')).toBe(formatMoney(850, 'USD'))
+		const small = formatMoney(850, 'USD')
+		const large = formatMoney(1200, 'USD')
+		const decimals = (s: string) => (s.split('.')[1] ?? '').replace(/\D+$/, '').length
+		expect(decimals(small)).toBe(decimals(large))
+	})
+
+	it('uses the same separators as the counts beside it', () => {
+		// Counts were hard-coded to en-GB while money took the viewer's locale, so one row could
+		// carry two separator conventions.
+		expect(formatMoney(1200, 'USD')).toContain('1,200')
+		expect(formatCount(1200)).toBe('1,200')
 	})
 })

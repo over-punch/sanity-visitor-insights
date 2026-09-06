@@ -23,9 +23,19 @@ const REASON_TEXT: Record<UnavailableReason, string> = {
 	not_applicable: 'Does not apply to this site',
 }
 
+/**
+ * One locale for every number the tool prints.
+ *
+ * Counts were hard-coded to en-GB while money passed `undefined` and took the viewer's locale, so
+ * on a non-en-GB Studio a single table row read "1,234" sessions beside "1.234,00 $" — two
+ * separator conventions in the same row. Whichever convention is chosen, it has to be the same one
+ * on both sides of a comparison.
+ */
+const LOCALE = 'en-GB'
+
 /** Format a number with thousands separators. */
 export function formatCount(value: number): string {
-	return new Intl.NumberFormat('en-GB').format(Math.round(value))
+	return new Intl.NumberFormat(LOCALE).format(Math.round(value))
 }
 
 /** Format a 0–1 ratio as a percentage. */
@@ -35,13 +45,18 @@ export function formatPercent(ratio: number, digits = 0): string {
 
 /** Props for MetricFigure. */
 /** Format a money value in the site's currency, falling back to a plain number. */
-export function formatMoney(value: number, currency: string | null): string {
+export function formatMoney(value: number, currency: string | null, fractionDigits: 0 | 2 = 0): string {
 	if (!currency) return formatCount(Math.round(value))
 	try {
-		return new Intl.NumberFormat(undefined, {
+		return new Intl.NumberFormat(LOCALE, {
 			style: 'currency',
 			currency,
-			maximumFractionDigits: value >= 1000 ? 0 : 2,
+			// One precision for the whole column, chosen by the caller, not by each value's own size.
+			// Switching at 1,000 put "$850.00" and "$1,200" in adjacent rows, and printed an axis
+			// reading "$1,000" over a baseline reading "$0.00" — the mismatch the timeline's own
+			// comment claims to have fixed by routing both ends through this function.
+			maximumFractionDigits: fractionDigits,
+			minimumFractionDigits: fractionDigits,
 		}).format(value)
 	} catch {
 		// An unrecognised ISO code must not blank the figure.

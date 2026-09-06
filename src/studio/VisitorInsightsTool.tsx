@@ -469,9 +469,9 @@ function CoverageRibbon({ ratio }: { ratio: number | null }): React.ReactElement
 	return (
 		<Card padding={3} radius={2} tone={ratio > 0.6 ? 'critical' : 'caution'} border>
 			<Text size={1}>
-				Every figure on this tab comes from Google Analytics, which is seeing about {seen}% of
-				this site&rsquo;s traffic in this window. Read them as at least {seen === 0 ? 'undercounts' : `${seen}% of the real numbers`}, not as
-				what happened. Data health explains why.
+				Every figure on this tab comes from Google Analytics, which is seeing about {seen}% of this
+				site&rsquo;s traffic in this window — so the real numbers are roughly{' '}
+				{seen > 0 ? `${(100 / seen).toFixed(1)}×` : 'many times'} these. Data health explains why.
 			</Text>
 		</Card>
 	)

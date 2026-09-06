@@ -405,7 +405,11 @@ describe('data-quality flags reach the surface', () => {
 		})
 
 		const data = await acquisition({ config: siteConfig(), range, ga4, notices })
-		expect(notices).toEqual([])
+		// Specifically about quality flags. The fake answers both the session and the purchase query
+		// with the same report, so it also exercises the purchase path — which legitimately reports
+		// that GA4 attributed sales with no revenue against them. That is a real finding, not noise,
+		// and it is not what this test is about.
+		expect(notices.filter((n) => /sample|withheld|truncated/i.test(n))).toEqual([])
 		expect(data.rowsWithheld).toBe(false)
 	})
 })

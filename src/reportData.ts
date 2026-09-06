@@ -213,8 +213,15 @@ export interface SourceRow {
 	designIndustry: boolean
 	/** True for GA4's `(not set)` / `(direct)` style buckets, which are not real sources. */
 	unattributed: boolean
-	/** Purchases GA4 attributed to this source, or null when it reported none. */
-	purchases: number | null
+	/**
+	 * Purchases GA4 attributed to this source, or null when it reported none.
+	 *
+	 * OPTIONAL, like the two below it: a site whose API route predates this field omits it entirely,
+	 * and the Studio ships separately from the sites, so that skew is the normal state of this repo
+	 * rather than an edge case. Marking it optional makes the compiler enforce what the panel has to
+	 * handle at runtime anyway.
+	 */
+	purchases?: number | null
 	/**
 	 * This source's share of every purchase GA4 attributed, or null when too few to divide.
 	 *
@@ -222,9 +229,11 @@ export interface SourceRow {
 	 * roughly uniform loss cancels in a ratio — so the split between channels survives where the
 	 * totals do not.
 	 */
-	revenueShare: number | null
+	revenueShare?: number | null
+	/** GA4's own revenue for this row. Read for its SHAPE only — the unit cancels in a share. */
+	trackedRevenue?: number | null
 	/** Sanity's exact revenue apportioned by `revenueShare`, or null. Estimated, never measured. */
-	apportionedRevenue: number | null
+	apportionedRevenue?: number | null
 }
 
 /** Where visitors came from. */
@@ -242,14 +251,29 @@ export interface AcquisitionData {
 	 * The shares above are null in that case rather than divided by a partial total.
 	 */
 	rowsTruncated: boolean
-	/** Purchases GA4 attributed to any source at all, across every row. */
-	trackedPurchases: number
+	/** Purchases GA4 attributed to any source at all, across every row it returned. */
+	trackedPurchases?: number
+	/**
+	 * Purchases belonging to the rows actually shown.
+	 *
+	 * Below `trackedPurchases` whenever a selling source fell outside the top rows by sessions, in
+	 * which case the visible shares correctly do not sum to 100.
+	 */
+	shownPurchases?: number
+	/**
+	 * Whether the revenue split met its floors and was actually computed.
+	 *
+	 * The panel gates its explanation on this rather than on purchases existing: with a few tracked
+	 * purchases the column is all dashes while a paragraph beneath described how the money had been
+	 * split, which is a caption for a thing that is not on screen.
+	 */
+	splitIsSound?: boolean
 	/** Sanity's exact revenue for the window, which the shares are applied to. Null when absent. */
-	actualRevenue: number | null
+	actualRevenue?: number | null
 	/** Sanity's exact order count for the window. Null when absent. */
-	actualOrders: number | null
+	actualOrders?: number | null
 	/** ISO currency for the apportioned figures, from site config. Null when the site names none. */
-	currency: string | null
+	currency?: string | null
 }
 
 // ---------------------------------------------------------------------------
