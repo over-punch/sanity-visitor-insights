@@ -22,6 +22,11 @@ export type UnavailableReason =
 	| 'source_error'
 	/** The metric is not defined for this site at all (e.g. a flow that does not exist there). */
 	| 'not_applicable'
+	/**
+	 * The site's API route is older than this figure — the data exists, this deployment cannot
+	 * return it. Distinct from `not_applicable`, which says the figure never applies here.
+	 */
+	| 'route_outdated'
 
 /**
  * A metric that may legitimately have no value.

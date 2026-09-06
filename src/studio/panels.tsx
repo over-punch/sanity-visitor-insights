@@ -61,11 +61,14 @@ function metricSortValue(metric: MetricValue | undefined): number | null {
  */
 function metricOr(metric: MetricValue | undefined, detail: string): MetricValue {
 	if (metric) return metric
-	return { status: 'unavailable', reason: 'not_applicable', detail }
+	return { status: 'unavailable', reason: 'route_outdated', detail }
 }
 
 /** What an absent field means: the route predates the field, not the site lacking the data. */
-const OLDER_ROUTE = 'This site\u2019s API route predates this figure. Redeploy the site to see it.'
+// Phrased for the reader, who does not deploy anything. The action belongs to whoever maintains
+// the site, and naming it as theirs rather than issuing it as an instruction is the difference
+// between information and a task nobody in the room can do.
+const OLDER_ROUTE = 'This site\u2019s analytics route is older than this figure — it will appear after the site is next deployed.'
 
 /** Largest available value across metrics, for scaling bars. */
 function maxOf(metrics: MetricValue[]): number {
@@ -526,7 +529,9 @@ function Verdict({ data, previous }: { data: MeasurementHealthData; previous?: M
 	say('Traffic', data.vercelPageviews, previous?.vercelPageviews, 'count')
 
 	const sends = data.campaigns?.length ?? 0
-	if (sends > 0) parts.push(`${sends} campaign${sends === 1 ? '' : 's'} sent`)
+	// Not a verdict clause. That you sent an email is not a finding — you sent it — and it was
+	// occupying a slot in the one line the reader is meant to act on. The campaigns table below
+	// says how many, and the timeline marks when.
 
 	// What "broken" means, in priority order.
 	//
@@ -734,7 +739,7 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 					<Card padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
 							<Label size={1} muted>Consent granted</Label>
-							<MetricFigure metric={data.consentRate} label="Consent granted, percent of sessions" unit="percent" />
+							<MetricFigure metric={data.consentRate} label="Consent granted, share of visitors GA4 saw" unit="percent" />
 						</Stack>
 					</Card>
 				</div>

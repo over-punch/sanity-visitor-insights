@@ -265,7 +265,7 @@ export function grossUp(
 	 * grossed up is the same kind of thing the estimate measured.
 	 */
 	admissible: CaptureBasis[] = ['orders', 'email', 'pageviews'],
-): { value: number; low: number; high: number } | null {
+): { value: number; low: number; high: number; basis: CaptureBasis; rate: number } | null {
 	/*
 	 * The estimate has to measure the same kind of loss as the quantity being corrected.
 	 *
@@ -316,9 +316,22 @@ export function grossUp(
 	 * honestly enormous rather than pretending there is none.
 	 */
 	const floor = Math.max(model.low, 0.01)
+	const low = observed / Math.min(1, model.high)
+	const high = observed / floor
+	// Ordered, because the two clamps can cross. `Math.min(1, high)` and `Math.max(low, 0.01)` pass
+	// each other whenever the capture rate is under about 1% — which is not an exotic case, it is a
+	// dead tag, the exact failure this package was built for. The panel renders these verbatim, so
+	// it printed "~10,000" over "1,502 to 500" with an Estimated badge.
 	return {
 		value: observed / model.rate,
-		low: observed / Math.min(1, model.high),
-		high: observed / floor,
+		low: Math.min(low, high),
+		high: Math.max(low, high),
+		// The estimate this figure was ACTUALLY built from. Callers described it using the model's
+		// own rate and first basis, which after filtering is a different estimate — so the caption
+		// read "seeing 14% of activity, measured against the orders that exist" beside a number
+		// derived from the pageview rate of 20%. 1000/0.14 is 7,000, not the 5,000 printed. The
+		// exclusion was fixed in the arithmetic and left broken in the label.
+		basis: usable[0]!.basis,
+		rate,
 	}
 }

@@ -1,3 +1,4 @@
+import { formatInTimeZone } from '../core/ranges'
 /**
  * Vercel Web Analytics client.
  *
@@ -32,7 +33,12 @@ export interface VercelPageviews {
 
 /** A Vercel client bound to one project. */
 export interface VercelClient {
-	pageviews(start: string, end: string): Promise<VercelPageviews>
+	/**
+	 * @param start - first day, ISO, in `timezone`
+	 * @param end - last day, ISO, inclusive, in `timezone`
+	 * @param timezone - the property timezone every source is anchored to
+	 */
+	pageviews(start: string, end: string, timezone: string): Promise<VercelPageviews>
 }
 
 /**
@@ -127,7 +133,24 @@ export function createVercelClient(projectId: string, token: string, teamId?: st
 	}
 
 	return {
-		async pageviews(start, end) {
+		async pageviews(start, end, timezone) {
+			/*
+			 * Bucketed in the PROPERTY timezone, like GA4 and the orders.
+			 *
+			 * `ranges.ts` opens by stating that all three sources must be anchored to one zone
+			 * precisely because Vercel buckets by UTC. Orders were converted; this was not. The bare
+			 * dates went to the API as UTC and `row.timestamp.slice(0, 10)` took the UTC date back
+			 * off, so for a US-Pacific property a third of every evening's traffic was filed under
+			 * the next day — on the one row of the one chart whose entire purpose is showing WHEN two
+			 * sources diverged, and in the per-day shortfall that differences them.
+			 *
+			 * A day of slack each side, then filtered back to the window we actually want. That costs
+			 * two days of buckets and needs no assumption about how the API reads a bare date.
+			 */
+			const pad = (iso: string, days: number) =>
+				new Date(Date.parse(`${iso}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10)
+			const fetchStart = pad(start, -1)
+			const fetchEnd = pad(end, 1)
 			// Two calls on purpose. The count endpoint gives range totals with visitors deduped
 			// across the whole window; summing the daily rows would overcount visitors, because a
 			// person returning on three days is three daily visitors but one range visitor.
@@ -140,10 +163,10 @@ export function createVercelClient(projectId: string, token: string, teamId?: st
 				// One call per window, so a long range still comes back by day. A single window is the
 				// short-range case and behaves exactly as before.
 				(async () => {
-					const windows = dailyWindows(start, end)
+					const windows = dailyWindows(fetchStart, fetchEnd)
 					const requests = windows.length > 0
 						? windows.map((w) => ({ since: w.start, until: w.end, by: 'day' as const }))
-						: [{ since: start, until: end, by: granularityFor(start, end) }]
+						: [{ since: fetchStart, until: fetchEnd, by: granularityFor(fetchStart, fetchEnd) }]
 
 					const parts = await Promise.all(requests.map((params) =>
 						query<{ data?: AggregateRow[] }>('visits/aggregate', { ...params, limit: '100' })
@@ -175,8 +198,19 @@ export function createVercelClient(projectId: string, token: string, teamId?: st
 			const byDate: Record<string, number> = {}
 			for (const row of series.data ?? []) {
 				if (!row.timestamp) continue
-				byDate[row.timestamp.slice(0, 10)] = row.pageviews ?? 0
+				// The bucket's instant, read as a day in the property's zone rather than in UTC.
+				const day = formatInTimeZone(new Date(row.timestamp), timezone)
+				if (day < start || day > end) continue
+				byDate[day] = (byDate[day] ?? 0) + (row.pageviews ?? 0)
 			}
+
+			// Pageviews SUM, so the zoned daily series is the better total: it covers exactly the
+			// window GA4 was asked about, where the count endpoint's bare dates are read as UTC and
+			// can start and end up to eight hours away from it. Visitors do NOT sum — a person
+			// returning on three days is three daily visitors and one range visitor — so those still
+			// come from the count endpoint, with the zone caveat that implies.
+			const daysTotal = Object.values(byDate).reduce((sum, value) => sum + value, 0)
+			const seriesIsComplete = (series.incompleteWindows ?? 0) === 0 && Object.keys(byDate).length > 0
 
 			return {
 				byDate,
@@ -185,7 +219,7 @@ export function createVercelClient(projectId: string, token: string, teamId?: st
 				// not, and the two feed different figures on one panel. Saying so is what lets the
 				// panel avoid comparing them.
 				incompleteWindows: series.incompleteWindows ?? 0,
-				total: totals.data?.pageviews ?? null,
+				total: seriesIsComplete ? daysTotal : totals.data?.pageviews ?? null,
 				// Absent is not zero. A malformed or partial response used to become ok(0) and render
 				// as a measured figure — on the very panel whose job is to detect that.
 				visitors: totals.data?.visitors ?? null,

@@ -1051,7 +1051,11 @@ describe('panel structure', () => {
 		// The fixture moves traffic 2%, which is suppressed but no longer rendered as "flat" — the
 		// card beside it draws an arrow at that size, and the two used to contradict each other.
 		expect(html).toContain('Traffic little changed')
-		expect(html).toContain('1 campaign sent')
+		// Not a verdict clause any more: that you sent an email is not a finding, and it occupied a
+		// slot in the one line the reader is meant to act on. The campaigns table below still says
+		// how many, and the timeline still marks when.
+		expect(html).not.toContain('campaign sent')
+		expect(html).toContain('Email campaigns')
 		// No all-clear is claimed at all: this line only ever knew one coverage ratio, and "nothing
 		// broken" spoke for the site, the checkout and four other tabs.
 		expect(html).not.toContain('nothing broken')
@@ -1219,7 +1223,11 @@ describe('Overview survives an older API route', () => {
 		// The figures the old route does send still render.
 		expect(html).toContain('2,356')
 		// The ones it does not degrade to a dash that says why, rather than to a zero or a NaN.
-		expect(html).toContain('predates this figure')
+		// Its own reason, not `not_applicable` — which paired "Does not apply to this site" with
+		// "redeploy the site to see it", two contradictory sentences about one dash.
+		expect(html).toContain('older than this figure')
+		expect(html).toContain('Not available from this site yet')
+		expect(html).not.toContain('Does not apply to this site')
 		expect(html).not.toContain('NaN')
 		expect(html).not.toContain('undefined')
 	})
@@ -2331,5 +2339,29 @@ describe('a capture rate above 100% keeps its point inside its own interval', ()
 		// Below zero has no meaning for a capture rate, however wide the interval.
 		const model = captureModel([fromOrders(1, 6)])
 		expect(model.low as number).toBeGreaterThanOrEqual(0)
+	})
+})
+
+describe('an estimate never prints a range its own point sits outside', () => {
+	it('orders the bounds when the two clamps cross', () => {
+		// low is clamped with Math.min(1, high) and high with a floor of 0.01, and they pass each
+		// other whenever the capture rate is under about 1% — which is not exotic, it is a dead tag,
+		// the failure this package exists for. The panel renders both verbatim, so it printed
+		// "~10,000" over "1,502 to 500".
+		const model = captureModel([fromPageviews(5, 10000)])
+		const grossed = grossUp(5, model, ['pageviews', 'email'])
+		expect(grossed).not.toBeNull()
+		expect(grossed!.low).toBeLessThanOrEqual(grossed!.high)
+	})
+
+	it('names the estimate the figure was actually built from', () => {
+		// The caption read the model's own rate and first basis, which after filtering is a different
+		// estimate — so it said "seeing 14%, measured against the orders that exist" beside a number
+		// derived from a 20% pageview rate. The label disagreed with its own arithmetic.
+		const model = captureModel([fromOrders(1, 7), fromPageviews(2000, 10000)])
+		const grossed = grossUp(1000, model, ['pageviews', 'email'])
+		expect(grossed!.basis).toBe('pageviews')
+		expect(grossed!.rate).toBeCloseTo(0.2, 6)
+		expect(Math.round(1000 / grossed!.rate)).toBe(Math.round(grossed!.value))
 	})
 })

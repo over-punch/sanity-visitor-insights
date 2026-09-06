@@ -21,6 +21,11 @@ const REASON_TEXT: Record<UnavailableReason, string> = {
 	outage: 'Not recorded during part of this period',
 	source_error: 'Source did not respond',
 	not_applicable: 'Does not apply to this site',
+	// Its own reason, because it was borrowing not_applicable — so a figure that is temporarily
+	// missing rendered "Does not apply to this site. This site's API route predates this figure."
+	// Two flatly contradictory sentences, and a hurried reader takes the first: this foundry has no
+	// revenue. That is the mistake the top of this file exists to forbid, one layer up.
+	route_outdated: 'Not available from this site yet',
 }
 
 /**

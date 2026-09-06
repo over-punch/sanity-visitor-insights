@@ -320,8 +320,16 @@ async function runReport(report: string, ctx: RunContext): Promise<unknown> {
 			if (!ga4) throw new Error('GA4 is required for the acquisition report')
 			// Sanity's exact figures ride along, so the panel can apportion a real total across
 			// GA4's attribution split rather than reporting GA4's own lossy money.
+			// A failure here is SAID. It was swallowed to null with no log, no notice and no change to
+			// the reported source status — and null coverage is treated as passing by the split's
+			// own gate, so a Sanity outage silently switched off the over-attribution guard and the
+			// revenue split rendered as sound on a double-firing tag.
 			const counted = sanity && config.orders
-				? await countOrders(sanity, orderQueryOptions(config.orders, range)).catch(() => null)
+				? await countOrders(sanity, orderQueryOptions(config.orders, range)).catch((e: Error) => {
+					console.error('Visitor insights: order counts unavailable for acquisition:', e.message)
+					notices.push('Your orders could not be read for this range, so revenue cannot be split by channel and the check on GA4 over-attribution could not run.')
+					return null
+				})
 				: null
 			return acquisition({
 				config, range, ga4, notices,

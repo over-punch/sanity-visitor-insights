@@ -358,7 +358,7 @@ export async function runDiagnostics(input: DiagnosticsInput): Promise<Diagnosti
 		})
 	} else {
 		try {
-			const result = await vercel.pageviews(shiftDays(today, -7), today)
+			const result = await vercel.pageviews(shiftDays(today, -7), today, timezone)
 			checks.push({
 				id: 'vercel',
 				label: 'Vercel Web Analytics reachable',

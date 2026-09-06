@@ -184,8 +184,12 @@ describe('measurementHealth', () => {
 		expect(data.interpretation).toContain('declined analytics consent')
 		expect(data.interpretation).toContain('does not explain the visitors missing from it')
 		expect(data.interpretation).not.toContain('accounts for part of it')
-		// And it is a lower bound, because grants is a maximum across event rows.
-		expect(data.interpretation).toContain('at least')
+		// An UPPER bound on decliners, because `grants` is a Math.max across event rows and is
+		// therefore a lower bound on granters. This test previously asserted "at least" and reasoned
+		// its way to the wrong sign in its own comment — so it did not merely miss the bug, it would
+		// have blocked the fix.
+		expect(data.interpretation).toContain('at most')
+		expect(data.interpretation).not.toContain('at least')
 	})
 
 	it('lets one dead source degrade only its own figure', async () => {
@@ -1650,5 +1654,40 @@ describe('the shortfall compares like days with like', () => {
 		// fifth that is genuinely missing; including GA4's unmatched day against a Vercel total that
 		// never contained it produced 0.0, i.e. perfect agreement, from an absence.
 		expect(data.shortfallRatio).toBeCloseTo(0.2, 2)
+	})
+})
+
+describe('an unreadable order book is stated, not absorbed', () => {
+	const week: DateRange = { key: 'week', start: '2026-08-20', end: '2026-08-26', timezone: 'UTC' }
+
+	it('does not draw a confident zero-order line when Sanity failed', async () => {
+		// `orders: ordersByDate[date] ?? 0` was justified by Sanity being exact — true when it
+		// answers. When the query threw, every calendar day got a zero and the chart drew a flat
+		// no-sales line while the headline order figure showed unavailable beside it.
+		const data = await measurementHealth({
+			config: siteConfig(),
+			range: week,
+			ga4: createFakeGa4Client({ batch: () => [makeGa4Total(400), makeGa4Report([{ metrics: [400, 320] }]), makeGa4Total(0)] }),
+			vercel: createFakeVercelClient(makeVercelPageviews({ '2026-08-20': 1000 })),
+			sanity: { fetch: () => Promise.reject(new Error('Sanity down')) } as never,
+		})
+
+		expect(data.orders.status).toBe('unavailable')
+		for (const day of data.crossSource) {
+			expect(day.orders, `${day.date} must not read as a measured zero`).toBeNull()
+		}
+	})
+
+	it('still reports zeros as zeros when Sanity answered', async () => {
+		const data = await measurementHealth({
+			config: siteConfig(),
+			range: week,
+			ga4: createFakeGa4Client({ batch: () => [makeGa4Total(400), makeGa4Report([{ metrics: [400, 320] }]), makeGa4Total(0)] }),
+			vercel: createFakeVercelClient(makeVercelPageviews({ '2026-08-20': 1000 })),
+			sanity: createFakeSanityClient(() => makeOrders(['2026-08-21'])),
+		})
+
+		const empty = data.crossSource.filter((d) => d.orders === 0)
+		expect(empty.length).toBeGreaterThan(0)
 	})
 })

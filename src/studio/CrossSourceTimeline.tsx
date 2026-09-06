@@ -22,7 +22,7 @@
  */
 
 import React, { useCallback, useMemo, useRef, useState } from 'react'
-import { Stack, Text } from '@liiift-studio/sanity-ui-compat'
+import { Card, Stack, Text } from '@liiift-studio/sanity-ui-compat'
 import { scaleUtc, scaleLinear } from 'd3-scale'
 import { line as d3Line, area as d3Area, curveMonotoneX } from 'd3-shape'
 import { max as d3Max } from 'd3-array'
@@ -639,6 +639,23 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 
 	return (
 		<Stack space={3}>
+			{/*
+			  * ABOVE the chart, at reading size, in a card.
+			  *
+			  * These are the tool's most actionable output — how much a source missed, and the date
+			  * its coverage fell — and they were rendered `size={0} muted` inside the legend row,
+			  * between the series key and the drag instructions. The smallest, faintest type on the
+			  * page, styled as chart furniture, below the thing it explains. Three separate readers
+			  * independently reported it as the best sentence in the product and the hardest to find.
+			  */}
+			{missed.length > 0 && (
+				<Card padding={3} radius={2} tone="caution" border>
+					<Stack space={2}>
+						{missed.map((sentence) => <Text key={sentence} size={1}>{sentence}</Text>)}
+					</Stack>
+				</Card>
+			)}
+
 			<div style={frameStyle}>
 				<svg
 					ref={attachFrame}
@@ -1112,12 +1129,6 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						    solid rule, which is the legend describing a chart that is not there. */}
 						<span aria-hidden="true">{row.mark === 'events' ? '▮▮▮' : row.complete ? '───' : '╌╌╌'}</span> {row.label} ({row.source})
 					</Text>
-				))}
-				{missed.map((sentence) => (
-					// The region's argument, stated as a number. It was drawn to scale and described
-					// in the abstract, so the two facts it exists to convey — how much was missed and
-					// when it was worst — were available only by looking hard at a pale fill.
-					<Text key={sentence} size={0} muted>{sentence}</Text>
 				))}
 				{series.some((row) => row.shortfall) && (
 					<Text size={0} muted>Shaded: what your analytics did not see.</Text>

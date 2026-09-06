@@ -125,7 +125,17 @@ function interpret(ga4Views: MetricValue, vercelViews: MetricValue, shortfall: n
 	 * lower bound, which "Around" quietly promoted to a point estimate.
 	 */
 	const consentPercent = Math.round((1 - consent.value / 100) * 100)
-	return `${base} Of the visitors GA4 did record, at least ${consentPercent}% declined analytics consent. That is measured inside GA4's own sample, so it does not explain the visitors missing from it — anyone who refused before being counted is in neither figure. The gap itself stays unexplained; ad-blocking and bot filtering are plausible and are not separately measurable.`
+	/*
+	 * "At most", not "at least".
+	 *
+	 * `grants` is a Math.max across event rows — deliberately a LOWER bound on how many granted. So
+	 * `1 - grants/users` is an UPPER bound on how many declined, and printing it as "at least"
+	 * inverts the sign of the only bound the figure has. With the suite's own fixture, 240 grants
+	 * against 320 users, the true decline share is somewhere between 0% and 25%; the panel said "at
+	 * least 25%". The previous release's comment reasoned correctly about the bound and then wrote
+	 * the sentence backwards, and the test written alongside it asserted the inversion.
+	 */
+	return `${base} Of the visitors GA4 did record, at most ${consentPercent}% declined analytics consent. That is measured inside GA4's own sample, so it does not explain the visitors missing from it — anyone who refused before being counted is in neither figure. The gap itself stays unexplained; ad-blocking and bot filtering are plausible and are not separately measurable.`
 }
 
 /**
@@ -312,7 +322,7 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	let vercelIncompleteWindows = 0
 	if (vercel) {
 		try {
-			const result = await vercel.pageviews(range.start, range.end)
+			const result = await vercel.pageviews(range.start, range.end, range.timezone)
 			// Null rather than zero when Vercel's response did not carry the figure: this panel
 			// exists to distinguish "measured nothing" from "did not measure", and it must hold
 			// itself to that first.
@@ -340,6 +350,8 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	let orderTotal: number | null = null
 	/** Orders per day, for the timeline. */
 	let ordersByDate: Record<string, number> = {}
+	/** Whether Sanity actually answered. An empty map means "no orders" only when this is true. */
+	let ordersMeasured = false
 	/** Revenue per day, or null when the site names no total field. */
 	let revenueByDate: Record<string, number> | null = null
 	let currency: string | null = null
@@ -351,6 +363,7 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 			orders = ok(counts.total)
 			orderTotal = counts.total
 			ordersByDate = counts.byDate
+			ordersMeasured = true
 			revenueByDate = counts.revenueByDate
 			// Revenue was computed on every one of these requests and thrown away, which is the
 			// same sin this file's other comments congratulate themselves for fixing. It is also
@@ -545,9 +558,19 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 			Math.round(grossed.value),
 			Math.round(grossed.low),
 			Math.round(grossed.high),
-			`GA4 counted ${Math.round(ga4Sessions.status === 'unavailable' ? 0 : ga4Sessions.value)} and appears to be seeing ${Math.round((capture.rate ?? 0) * 100)}% of activity, measured against ${capture.estimates[0]?.basis === 'orders' ? 'the orders that exist' : 'Vercel'}.`,
+			// The rate and basis the figure was ACTUALLY built from, which after filtering is not the
+			// model's own first estimate. Reading them off the model guaranteed the caption disagreed
+			// with the arithmetic whenever an orders estimate existed.
+			`GA4 counted ${Math.round(ga4Sessions.status === 'unavailable' ? 0 : ga4Sessions.value)} and appears to be seeing ${Math.round(grossed.rate * 100)}% of traffic, measured against ${grossed.basis === 'email' ? 'clicks from your mailing list' : 'Vercel'}.`,
 		)
-		: unavailable('not_applicable', 'Not enough overlap between sources to estimate a true figure')
+		// Three different situations shared one sentence: no traffic-shaped estimate at all, GA4
+		// counting MORE than its comparison source (a double-fired tag, which is a loud finding and
+		// not a shortage), and sessions themselves being unavailable.
+		: ga4Sessions.status === 'unavailable'
+			? unavailable('source_error', 'GA4 did not report sessions for this range')
+			: (capture.rate ?? 0) >= 1
+				? unavailable('not_applicable', 'GA4 is counting more than the source it is measured against, so there is nothing to correct upward — see the capture estimates below')
+				: unavailable('not_applicable', 'No traffic-based capture estimate for this range, so sessions cannot be corrected')
 
 	/*
 	 * The cross-source timeline, on a CONTIGUOUS CALENDAR — every day in the range, whether or not
@@ -573,9 +596,11 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		// Pageviews, for the like-for-like comparison the chart draws as an area.
 		ga4Pageviews: ga4ByDate.has(date) ? (ga4ByDate.get(date) as number) : null,
 		ga4Sessions: ga4SessionsByDate.has(date) ? (ga4SessionsByDate.get(date) as number) : null,
-		// Zero rather than null: Sanity is exact, so a day with no order really did have none.
-		// Null here would draw a gap and read as "not measured", which is the opposite of the truth.
-		orders: ordersByDate[date] ?? 0,
+		// Zero only when Sanity actually answered. It is exact, so a day it reported nothing for
+		// really did have no orders — but when the query FAILED, `ordersByDate` is empty and every
+		// day got a confident zero, drawing a flat no-sales line across the whole chart while the
+		// headline order figure showed unavailable beside it. Revenue already got this right.
+		orders: ordersMeasured ? ordersByDate[date] ?? 0 : null,
 		revenue: revenueByDate ? revenueByDate[date] ?? 0 : null,
 	}))
 

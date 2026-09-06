@@ -179,7 +179,7 @@ const PANELS: Array<{ id: string; report: ReportName; label: string; blurb: stri
 	{ id: 'acquisition', report: 'acquisition', label: 'Acquisition', blurb: 'Where visitors come from' },
 	{ id: 'journey', report: 'journey', label: 'Journey', blurb: 'How far visitors get' },
 	{ id: 'typeface-interest', report: 'typeface-interest', label: 'Typeface interest', blurb: 'Viewed, tested and bought, by family' },
-	{ id: 'data-health', report: 'measurement-health', label: 'Data health', blurb: 'Whether the numbers above can be trusted' },
+	{ id: 'data-health', report: 'measurement-health', label: 'Data health', blurb: 'Whether to trust what the other tabs are telling you' },
 ]
 
 /** Options supplied by the plugin config, carried on the Sanity tool definition. */
@@ -494,11 +494,12 @@ function CoverageRibbon({ ratio }: { ratio: number | null }): React.ReactElement
 	return (
 		<Card padding={3} radius={2} tone={ratio > 0.6 ? 'critical' : 'caution'} border>
 			<Text size={1}>
-				Every figure on this tab comes from Google Analytics, which is seeing roughly {seen}% of this
+				Most figures on this tab come from Google Analytics, which is seeing roughly {seen}% of this
 				site&rsquo;s traffic in this window — so the real numbers are{' '}
 				{multiplier === null ? 'many times' : `several times`} these
-				{multiplier !== null && multiplier > 1 ? ` (very roughly ${multiplier}×)` : ''}. Data health
-				explains why, and how uncertain that is.
+				{multiplier !== null && multiplier > 1 ? ` (very roughly ${multiplier}×)` : ''}. Figures drawn
+				from your orders — anything labelled as coming from Sanity — are exact and must not be scaled
+				up. Data health explains the rest, and how uncertain it is.
 			</Text>
 		</Card>
 	)
@@ -826,11 +827,20 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 	const linkedRange = RANGES.some((r) => r.key === linked.range) ? (linked.range as RangeKey) : null
 	const linkedTab = PANELS.some((p) => p.id === linked.tab) ? (linked.tab as string) : null
 
-	const [range, setRange] = useState<RangeKey>(linkedRange ?? 'week')
+	/*
+	 * Month, not week.
+	 *
+	 * A week is seven days, and the coverage-incident detector needs twenty-one measured days before
+	 * it will name a date — so on the range the tool opened with, the founding failure it was built
+	 * to surface could not be reported at all. At seven orders a quarter a week also holds nought or
+	 * one order, so the headline read "Revenue £0" and the cards showed changes of 100% or "new".
+	 * The default view was the one view with nothing to say.
+	 */
+	const [range, setRange] = useState<RangeKey>(linkedRange ?? 'month')
 	// The range in force before a brush, so the escape hatch returns where the reader was rather
 	// than to a week they never chose. Brushing from Quarter and landing in Week loses 358 days,
 	// and the label said so — a stated wrong answer rather than a bug you could rationalise.
-	const [rangeBeforeBrush, setRangeBeforeBrush] = useState<RangeKey>(linkedRange ?? 'week')
+	const [rangeBeforeBrush, setRangeBeforeBrush] = useState<RangeKey>(linkedRange ?? 'month')
 	// Seeded with the trailing month so the picker opens on a valid range rather than on two empty
 	// fields. Local dates, not the property's: this is only the form's starting value, and the
 	// server re-resolves whatever is submitted against the property timezone.

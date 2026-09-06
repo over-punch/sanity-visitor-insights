@@ -296,9 +296,16 @@ export async function acquisition(input: AcquisitionInput): Promise<AcquisitionD
 	const MAX_COVERAGE = 1.2
 	const coverage = actuals?.orders != null && actuals.orders > 0 ? trackedPurchases / actuals.orders : null
 
+	// Unknown coverage does NOT pass. It was treated as passing, so whenever the order count could
+	// not be read the window that catches over-attribution simply switched off — and the
+	// double-firing tag those bounds exist to catch sailed through with the split rendered as sound.
+	// Without the order book there is nothing to check GA4's attribution against, which is a reason
+	// to withhold the split, not to trust it.
 	const splitIsSound = trackedPurchases >= MIN_TRACKED_PURCHASES
 		&& trackedRevenue > 0
-		&& (coverage === null || (coverage >= MIN_COVERAGE && coverage <= MAX_COVERAGE))
+		&& coverage !== null
+		&& coverage >= MIN_COVERAGE
+		&& coverage <= MAX_COVERAGE
 
 	if (splitIsSound) {
 		for (const row of rows) {
