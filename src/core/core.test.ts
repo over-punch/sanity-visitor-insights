@@ -501,3 +501,56 @@ describe('GA4 capture rate', () => {
 		expect(grossUp(100, model)).toBeNull()
 	})
 })
+
+describe('a day boundary survives a DST transition', () => {
+	/*
+	 * The two-pass offset resolution had no test. Reverting it to a single pass — the naive
+	 * implementation anyone would write first — left the whole suite green, on the function that
+	 * decides which orders fall inside the window every other figure is compared against.
+	 */
+	/*
+	 * These dates are chosen because the two passes DISAGREE on them.
+	 *
+	 * A first attempt used the US transition dates, and the mutation — reverting to a single pass —
+	 * went uncaught: for Los Angeles the naive probe at 00:00Z lands on the previous local afternoon,
+	 * which is on the same side of a 02:00 transition as local midnight is, so both passes measure
+	 * the same offset. The zones that discriminate are those far enough ahead of UTC that the naive
+	 * probe crosses the transition, which is what these are.
+	 */
+	it('resolves a fall-back date where the naive offset is the wrong one', () => {
+		// Sydney returns to +10 at 03:00 local on 2026-04-05, so local midnight that day is still
+		// +11. A single pass probes 00:00Z — already 11:00 local, after the change — and subtracts
+		// +10, putting the day boundary an hour late.
+		expect(zonedDayStartUtc('2026-04-05', 'Australia/Sydney')).toBe('2026-04-04T13:00:00.000Z')
+	})
+
+	it('resolves a spring-forward date where the naive offset errs the other way', () => {
+		expect(zonedDayStartUtc('2026-10-04', 'Australia/Sydney')).toBe('2026-10-03T14:00:00.000Z')
+	})
+
+	it('is unchanged on a transition date whose probe stays on one side', () => {
+		// The US dates, kept because they are the foundries' own zones — they pass either way, which
+		// is exactly why they could not guard the two-pass resolution.
+		expect(zonedDayStartUtc('2026-03-08', 'America/Los_Angeles')).toBe('2026-03-08T08:00:00.000Z')
+		expect(zonedDayStartUtc('2026-11-01', 'America/Los_Angeles')).toBe('2026-11-01T07:00:00.000Z')
+	})
+
+	it('handles a zone whose offset is not a whole hour', () => {
+		expect(zonedDayStartUtc('2026-06-15', 'Asia/Kolkata')).toBe('2026-06-14T18:30:00.000Z')
+	})
+
+	it('gives an ordinary day the plain offset', () => {
+		expect(zonedDayStartUtc('2026-06-15', 'America/New_York')).toBe('2026-06-15T04:00:00.000Z')
+	})
+
+	it('refuses a malformed date rather than resolving one', () => {
+		expect(() => zonedDayStartUtc('not-a-date', 'UTC')).toThrow(/Invalid ISO date/)
+	})
+
+	it('makes one day end exactly where the next begins', () => {
+		// The property nothing can double-count across, and the reason the unconverged midnight-DST
+		// case is a shift rather than an overlap.
+		expect(zonedDayEndUtc('2026-03-07', 'America/Los_Angeles'))
+			.toBe(zonedDayStartUtc('2026-03-08', 'America/Los_Angeles'))
+	})
+})

@@ -1815,3 +1815,43 @@ describe('Vercel buckets are labelled by the day they mostly cover', () => {
 		expect(formatInTimeZone(new Date(bucketStart), 'America/Los_Angeles')).toBe('2026-09-04')
 	})
 })
+
+describe('an order window is half-open, so no order lands in two ranges', () => {
+	it('excludes the end instant rather than including it', async () => {
+		// `_createdAt < $end` with $end being the START of the day after — so day N's window ends
+		// exactly where day N+1's begins. Making it `<=` would count an order placed at that instant
+		// in both the current window and the next, in the figure the tool calls exact.
+		const queries: string[] = []
+		const client = {
+			fetch: (query: string) => { queries.push(query); return Promise.resolve([]) },
+		} as never
+
+		await countOrders(client, orderQueryOptions(
+			{ documentType: 'order', statusField: 'orderStatus.status', countedStatuses: ['verified'] },
+			{ start: '2026-08-20', end: '2026-08-26', timezone: 'UTC' },
+		))
+
+		expect(queries[0]).toContain('_createdAt >= $start')
+		expect(queries[0]).toContain('_createdAt < $end')
+		expect(queries[0]).not.toContain('_createdAt <= $end')
+	})
+
+	it('ends the window at the start of the day after the last one', async () => {
+		// The bound has to be exclusive AND cover the whole final day; an exclusive bound at the
+		// final day's own start would silently drop every order placed on it. Asserted through the
+		// params the query is actually run with, rather than by widening the module's exports.
+		let params: Record<string, unknown> | undefined
+		const client = {
+			fetch: (_query: string, p: Record<string, unknown>) => { params = p; return Promise.resolve([]) },
+		} as never
+
+		await countOrders(client, orderQueryOptions(
+			{ documentType: 'order', statusField: 'orderStatus.status', countedStatuses: ['verified'] },
+			{ start: '2026-08-20', end: '2026-08-26', timezone: 'UTC' },
+		))
+
+		expect(params?.start).toBe('2026-08-20T00:00:00.000Z')
+		expect(params?.end).toBe('2026-08-27T00:00:00.000Z')
+	})
+
+})
