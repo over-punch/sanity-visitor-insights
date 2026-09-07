@@ -121,14 +121,14 @@ export function fromPageviews(ga4Pageviews: number, vercelPageviews: number): Ca
  * single known source, so a shortfall here that the others do not show points at attribution — a
  * tagging or redirect problem — rather than at measurement generally.
  */
-export function fromEmail(ga4Sessions: number, mailchimpClicks: number): CaptureEstimate | null {
+export function fromEmail(ga4Users: number, mailchimpClicks: number): CaptureEstimate | null {
 	if (mailchimpClicks < MIN_DENOMINATOR) return null
 	return {
 		basis: 'email',
-		rate: ga4Sessions / mailchimpClicks,
-		observed: ga4Sessions,
+		rate: ga4Users / mailchimpClicks,
+		observed: ga4Users,
 		actual: mailchimpClicks,
-		note: 'GA4 sessions from the campaign against Mailchimp’s unique clicks. A cohort whose true size is known exactly.',
+		note: 'Distinct people GA4 saw arriving from email, against the distinct subscribers Mailchimp says clicked. Both sides count people, so the comparison holds — but it measures tagging as much as capture.',
 	}
 }
 
@@ -239,6 +239,16 @@ function describeDisagreement(estimates: CaptureEstimate[]): string | null {
 			: 'GA4 is capturing pageviews but missing purchases. That is not consent or ad-blocking, which would cost both equally — look at the purchase event itself: whether it fires on a page some buyers never reach, or is blocked at checkout.'
 	}
 
+	// The everyday pair. At seven orders a quarter the orders estimate is below its minimum on Week
+	// and Month, so email-against-pageviews is usually the only comparison there is — and it was the
+	// one pairing with no diagnosis at all, returning null and telling the reader nothing while two
+	// contradictory percentages sat side by side under "How much GA4 is seeing".
+	if (email && pageviews && Math.abs(email.rate - pageviews.rate) > DISAGREEMENT_THRESHOLD) {
+		return email.rate < pageviews.rate
+			? 'Far fewer people are arriving from your mailing list than GA4’s general capture would predict. That points at the campaign links rather than at measurement — check they carry UTM tags, and that no redirect is stripping them.'
+			: 'Email traffic is over-represented against GA4’s general capture rate, which usually means campaign links are tagged while ordinary traffic is not — so email looks larger than it is.'
+	}
+
 	if (email && orders && Math.abs(email.rate - orders.rate) > DISAGREEMENT_THRESHOLD) {
 		return email.rate < orders.rate
 			? 'Traffic from email is arriving less often than GA4’s general capture rate would predict. That is an attribution problem rather than a measurement one — check the campaign links for missing UTMs, or a redirect stripping them.'
@@ -276,7 +286,22 @@ export function grossUp(
 	 * purchase tag was laundered into a multiplier on the traffic figure, under a heading reading
 	 * "Sessions, corrected for what GA4 misses".
 	 */
-	const usable = model.estimates.filter((e) => admissible.includes(e.basis))
+	/*
+	 * The best USABLE estimate, not merely the first.
+	 *
+	 * `usable[0]` is the most trusted admissible basis, and email outranks pageviews — so a campaign
+	 * whose links carry no UTM produced a rate of 0, which fails the checks below, and the panel
+	 * reported "no traffic-based capture estimate for this range" while the pageview estimate sat two
+	 * cards above it saying twenty per cent. A partially tagged campaign was worse: it governed the
+	 * correction outright and quadrupled the corrected figure against what the site-wide comparison
+	 * said.
+	 *
+	 * Trust order still decides between estimates that can each carry the correction; it must not
+	 * hand it to one that cannot.
+	 */
+	const usable = model.estimates.filter((e) => (
+		admissible.includes(e.basis) && e.rate > 0 && e.rate < 1 && Number.isFinite(e.rate)
+	))
 	if (usable.length === 0) return null
 	const rate = usable[0]!.rate
 	const rates = usable.map((e) => e.rate)

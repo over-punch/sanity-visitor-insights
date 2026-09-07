@@ -1,3 +1,4 @@
+import { zonedDayEndUtc, zonedDayStartUtc } from '../core/ranges'
 import { fetchWithTimeout } from './fetchWithTimeout'
 /**
  * Mailchimp — the audience a foundry actually owns.
@@ -56,7 +57,10 @@ export interface MailchimpAudience {
 /** What the reports need from Mailchimp. Narrow, so it is trivial to stub. */
 export interface MailchimpClient {
 	audience(range: { start: string; end: string }): Promise<MailchimpAudience>
-	campaigns(range: { start: string; end: string }): Promise<MailchimpCampaign[]>
+	/**
+	 * @param range - window bounds, and the property timezone every other source is anchored to
+	 */
+	campaigns(range: { start: string; end: string; timezone?: string }): Promise<MailchimpCampaign[]>
 }
 
 /**
@@ -121,11 +125,35 @@ export function createMailchimpClient(apiKey: string, listId: string): Mailchimp
 			if (range.start.endsWith('-01')) {
 				try {
 					const month = range.start.slice(0, 7)
-					const history = await get<{ existing?: number; imports?: number; optins?: number }>(
+					const history = await get<{
+						subscribed?: number
+						existing?: number
+						imports?: number
+						optins?: number
+					}>(
 						`/lists/${listId}/growth-history/${month}`,
-						{ fields: 'existing,imports,optins' },
+						{ fields: 'subscribed,existing,imports,optins' },
 					)
-					membersAtStart = count(history.existing) + count(history.imports) + count(history.optins)
+
+					/*
+					 * `subscribed` first, and ABSENCE is null rather than zero.
+					 *
+					 * This summed `existing + imports + optins` through a helper that returns 0 for
+					 * anything non-numeric — so when those fields are absent, `membersAtStart` became 0
+					 * and the growth line printed the ENTIRE LIST as the range's net change. Four
+					 * thousand people arriving in one month, on a card whose only job is saying whether
+					 * the list is growing.
+					 *
+					 * Mailchimp documents those three only as deprecated; `subscribed` is the current
+					 * field and is the total at the month's end. Preferred where present, the older
+					 * triple used as a fallback where it is genuinely populated, and null when neither
+					 * is — which is what the panel now renders as a stated absence rather than a figure.
+					 */
+					const legacy = [history.existing, history.imports, history.optins]
+					const legacyTotal = legacy.some((v) => typeof v === 'number')
+						? legacy.reduce<number>((sum, v) => sum + count(v), 0)
+						: null
+					membersAtStart = typeof history.subscribed === 'number' ? history.subscribed : legacyTotal
 				} catch {
 					// Months before the list existed 404. Absent is the honest answer.
 					membersAtStart = null
@@ -139,8 +167,17 @@ export function createMailchimpClient(apiKey: string, listId: string): Mailchimp
 			const reports = await get<{ reports?: Array<Record<string, unknown>>; total_items?: number }>('/reports', {
 				// Bounded by the range on both sides, so a panel showing one week does not pick up a
 				// campaign from last year and attribute its clicks to this window.
-				since_send_time: `${range.start}T00:00:00+00:00`,
-				before_send_time: `${range.end}T23:59:59+00:00`,
+				/*
+				 * Bounded in the PROPERTY timezone, like the orders are.
+				 *
+				 * These were bare UTC instants while `zonedDayStartUtc`/`zonedDayEndUtc` exist and
+				 * orders.ts spends a paragraph on why that asks for a different window than the one GA4
+				 * was asked for. For a US-Pacific property a campaign sent at 5pm local on the last day
+				 * of the range fell outside this window while the GA4 sessions it produced fell inside —
+				 * quietly shrinking the denominator of an estimate whose note calls it known exactly.
+				 */
+				since_send_time: zonedDayStartUtc(range.start, range.timezone ?? 'UTC'),
+				before_send_time: zonedDayEndUtc(range.end, range.timezone ?? 'UTC'),
 				/*
 				 * The documented maximum, and `total_items` so truncation can be SEEN.
 				 *

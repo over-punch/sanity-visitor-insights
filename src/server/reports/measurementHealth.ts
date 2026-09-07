@@ -28,7 +28,7 @@ import { captureModel, fromEmail, fromOrders, fromPageviews, grossUp, type Captu
 import type { MailchimpClient } from '../mailchimp'
 import { eventNamesFilter, sumFirstMetric, type Ga4Client } from '../ga4'
 import type { VercelClient } from '../vercel'
-import { countOrders, orderQueryOptions, type SanityQueryClient } from '../orders'
+import { zonedDay, countOrders, orderQueryOptions, type SanityQueryClient } from '../orders'
 
 /** Whole days covered by a range, inclusive of both ends. */
 function daysInRange(range: DateRange): number {
@@ -234,7 +234,11 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 					 * what GA4 does not do.
 					 */
 					keepEmptyRows: true,
-					limit: 400,
+					// A custom range may be 730 days, and this asked for 400 — so the tail simply did not
+					// come back, drawing as absent on the chart whose job is dating when a gap opened.
+					// Vercel has a whole mechanism for exactly this; GA4's own rowCount was parsed and
+					// never checked here.
+					limit: 800,
 				},
 				{
 					// The same-event numerator for the capture model: GA4's purchase count against
@@ -248,7 +252,11 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 					// Sessions GA4 attributes to email. The denominator side of this comes from
 					// Mailchimp's unique subscriber clicks, so the two must describe the same
 					// people — which they only do where campaign links carry a UTM.
-					metrics: [{ name: 'sessions' }],
+					// USERS, not sessions. Mailchimp counts distinct subscribers who clicked; one of them
+					// arriving on two days is one click and two sessions, so dividing sessions by clicks
+					// was not a capture rate at all — it was not even bounded by 1, on an estimate whose
+					// own note calls it "a cohort whose true size is known exactly".
+					metrics: [{ name: 'totalUsers' }],
 					dateRanges: [{ startDate: range.start, endDate: range.end }],
 					dimensionFilter: {
 						filter: { fieldName: 'sessionMedium', stringFilter: { matchType: 'EXACT', value: 'email' } },
@@ -257,6 +265,12 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 			])
 
 			// GA4 returns dates as YYYYMMDD; the Vercel side and the UI both use ISO.
+			if (daily && daily.rowCount > daily.rows.length) {
+				input.notices?.push(
+					`Google Analytics returned ${daily.rows.length} of ${daily.rowCount} days for this range, so the day-by-day comparison is incomplete. Choose a shorter range.`,
+				)
+			}
+
 			if (daily) {
 				for (const row of daily.rows) {
 					const raw = row.dimensions[0]
@@ -518,7 +532,7 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		try {
 			const [list, sent] = await Promise.all([
 				mailchimp.audience({ start: range.start, end: range.end }),
-				mailchimp.campaigns({ start: range.start, end: range.end }),
+				mailchimp.campaigns({ start: range.start, end: range.end, timezone: range.timezone }),
 			])
 
 			audience = ok(list.members)
@@ -638,7 +652,10 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	const timelineEvents: TimelineEvent[] = campaigns
 		.filter((campaign) => campaign.sentAt)
 		.map((campaign) => ({
-			date: campaign.sentAt.slice(0, 10),
+			// The day the send happened where the reader lives, matching the order stems it is meant
+			// to be compared against. The UTC day put an evening send on the following day — the exact
+			// misalignment orders.ts was zoned to prevent.
+			date: zonedDay(campaign.sentAt, range.timezone) ?? campaign.sentAt.slice(0, 10),
 			label: campaign.title,
 			detail: `${formatInt(campaign.sent)} sent, ${formatInt(campaign.clicks)} clicked`,
 		}))

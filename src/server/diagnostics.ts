@@ -362,8 +362,13 @@ export async function runDiagnostics(input: DiagnosticsInput): Promise<Diagnosti
 			checks.push({
 				id: 'vercel',
 				label: 'Vercel Web Analytics reachable',
-				status: 'pass',
-				detail: `${result.total} pageviews in the last 7 days.`,
+				// A response carrying no total is not a healthy source. This reported `pass` and
+				// rendered "null pageviews in the last 7 days" — a check that says nothing is wrong
+				// while printing the word null is worse than no check.
+				status: result.total === null ? 'warn' : 'pass',
+				detail: result.total === null
+					? 'Vercel answered but returned no pageview total, so its figures cannot be trusted for this range.'
+					: `${result.total} pageviews in the last 7 days.`,
 			})
 		} catch (e) {
 			checks.push({

@@ -13,6 +13,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createVercelClient, dailyWindows, granularityFor } from './vercel'
+import { createMailchimpClient } from './mailchimp'
 
 /** One aggregate bucket, as the API returns it. */
 function bucket(day: string, pageviews: number) {
@@ -130,5 +131,70 @@ describe('long ranges', () => {
 		expect(urls.some((u) => u.includes(`by=${granularityFor('2025-08-15', '2026-09-05')}`))).toBe(true)
 		expect(result.daily).toBe(false)
 		expect(result.total).toBe(999)
+	})
+})
+
+describe('Mailchimp and GA4 contracts the fakes never exercised', () => {
+	it('does not turn an absent growth figure into a measured zero', async () => {
+		// `existing + imports + optins` went through a helper returning 0 for anything non-numeric,
+		// so an absent value made membersAtStart 0 and the growth line printed the ENTIRE LIST as the
+		// range's net change — four thousand people arriving in one month.
+		globalThis.fetch = (async (url: string) => ({
+			ok: true, status: 200,
+			async json() {
+				return url.includes('growth-history')
+					// A response with none of the fields, which is what deprecation looks like.
+					? {}
+					: { stats: { member_count: 4210 } }
+			},
+		})) as unknown as typeof fetch
+
+		const client = createMailchimpClient('key-us21', 'list')
+		const audience = await client!.audience({ start: '2026-08-01', end: '2026-08-31' })
+		expect(audience.members).toBe(4210)
+		expect(audience.membersAtStart).toBeNull()
+	})
+
+	it('prefers the documented subscribed field over the deprecated triple', async () => {
+		globalThis.fetch = (async (url: string) => ({
+			ok: true, status: 200,
+			async json() {
+				return url.includes('growth-history')
+					? { subscribed: 4102, existing: 1, imports: 1, optins: 1 }
+					: { stats: { member_count: 4210 } }
+			},
+		})) as unknown as typeof fetch
+
+		const client = createMailchimpClient('key-us21', 'list')
+		const audience = await client!.audience({ start: '2026-08-01', end: '2026-08-31' })
+		expect(audience.membersAtStart).toBe(4102)
+	})
+
+	it('bounds the campaign window in the property timezone', async () => {
+		// Bare UTC bounds asked for a different window than the one GA4 was asked for: a campaign sent
+		// at 5pm local on the last day fell outside while the sessions it produced fell inside.
+		const urls: string[] = []
+		globalThis.fetch = (async (url: string) => {
+			urls.push(url)
+			return { ok: true, status: 200, async json() { return { reports: [], total_items: 0 } } }
+		}) as unknown as typeof fetch
+
+		const client = createMailchimpClient('key-us21', 'list')
+		await client!.campaigns({ start: '2026-08-01', end: '2026-08-31', timezone: 'America/Los_Angeles' })
+		const request = decodeURIComponent(urls[0] ?? '')
+		expect(request).toContain('2026-08-01T07:00:00')
+		expect(request).not.toContain('2026-08-01T00:00:00+00:00')
+	})
+
+	it('asks for the documented maximum page size', async () => {
+		const urls: string[] = []
+		globalThis.fetch = (async (url: string) => {
+			urls.push(url)
+			return { ok: true, status: 200, async json() { return { reports: [], total_items: 0 } } }
+		}) as unknown as typeof fetch
+
+		const client = createMailchimpClient('key-us21', 'list')
+		await client!.campaigns({ start: '2026-08-01', end: '2026-08-31', timezone: 'UTC' })
+		expect(decodeURIComponent(urls[0] ?? '')).toContain('count=1000')
 	})
 })
