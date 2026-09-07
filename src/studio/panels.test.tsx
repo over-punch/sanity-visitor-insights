@@ -18,7 +18,7 @@ import { calendarDays } from '../server/reports/measurementHealth'
 import { dailyWindows } from '../server/vercel'
 import { zonedDay } from '../server/orders'
 import { formatInTimeZone } from '../core/ranges'
-import { SortableTable, columnIsEmpty, formatCount, formatMoney } from './Figure'
+import { columnIsEmpty, formatCount, formatMoney } from './Figure'
 import { decodeView, encodeView, mergeIntoHash } from './urlState'
 import { captureModel, fromOrders, fromPageviews, grossUp } from '../core/capture'
 import { forgetShortfalls, knownShortfall, rememberShortfall } from './useReport'
@@ -51,7 +51,7 @@ vi.mock('sanity', () => ({
 	definePlugin: (definition: unknown) => definition,
 }))
 import visitorInsights from '../index'
-import { Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, SortableTable } from './Figure'
+import { Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, splitGrid } from './Figure'
 import { holdsPreviousAnswer } from './useReport'
 import { ok, partial, unavailable } from '../types'
 import { UI } from '@liiift-studio/sanity-ui-compat'
@@ -2901,5 +2901,79 @@ describe('folding away empty columns', () => {
 		expect(html).toMatch(/Show \d+ empty columns?/)
 		// And the column that could not be measured is still on screen, as dashes.
 		expect(html).toContain('Revenue, split')
+	})
+})
+
+describe('section hierarchy and progressive disclosure', () => {
+	it('gives a section a reader consults a quieter treatment than one they read', () => {
+		// One weight for everything was the whole problem: eleven blocks of equal loudness and no
+		// answer to "what am I meant to look at".
+		const read = render(<SectionTitle title="Traffic sources" />)
+		const consult = render(<SectionTitle title="Configuration" tone="secondary" />)
+		expect(consult).toMatch(/text-transform:\s*uppercase/)
+		expect(read).not.toMatch(/text-transform:\s*uppercase/)
+	})
+
+	it('does not render a folded section\'s contents at all', () => {
+		// Hidden with CSS, the noise is still there — still in the DOM, still found by a page
+		// search, still drawn. Folding has to actually remove it.
+		const html = render(
+			<Section title="Configuration" collapsible defaultOpen={false}>
+				<p>the long reference block</p>
+			</Section>,
+		)
+		expect(html).not.toContain('the long reference block')
+		expect(html).toContain('Configuration')
+		expect(html).toContain('Show')
+	})
+
+	it('renders the contents when it starts open, and offers to hide them', () => {
+		const html = render(
+			<Section title="Configuration" collapsible>
+				<p>the long reference block</p>
+			</Section>,
+		)
+		expect(html).toContain('the long reference block')
+		expect(html).toContain('Hide')
+	})
+
+	it('ties the control to the region it controls, for a screen reader', () => {
+		const html = render(<Section title="Context" collapsible><p>body</p></Section>)
+		expect(html).toMatch(/aria-expanded="true"/)
+		expect(html).toMatch(/aria-controls="[^"]+"/)
+	})
+
+	it('has no control at all when it cannot fold', () => {
+		const html = render(<Section title="Traffic sources"><p>body</p></Section>)
+		expect(html).not.toContain('aria-expanded')
+		expect(html).toContain('body')
+	})
+
+	it('pairs blocks by available width rather than by viewport', () => {
+		// The panel is a resizable pane inside a Studio inside, sometimes, an iframe. A viewport
+		// breakpoint answers a question nobody asked.
+		expect(splitGrid.gridTemplateColumns).toContain('auto-fit')
+		expect(splitGrid.gridTemplateColumns).toContain('100%')
+	})
+
+	it('keeps the configuration checks visible on the tab that exists to show them', () => {
+		// Data health answers "what should I fix before trusting any of this". Folding the answer
+		// away by default would leave the tab opening on the problem with the fix behind a click.
+		const html = render(
+			<DataHealthPanel
+				data={{
+					ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+					ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+					vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
+					revenue: ok(910), currency: 'USD', orderStatuses: {},
+					interpretation: 'Sources differ.', daily: [],
+					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
+					campaigns: [], crossSource: [], timelineEvents: [],
+				} as never}
+				diagnostics={{ checks: [{ key: 'ga4', label: 'GA4 credentials', status: 'pass', detail: 'Configured' }] } as never}
+			/>,
+		)
+		expect(html).toContain('Configuration')
+		expect(html).toContain('GA4 credentials')
 	})
 })

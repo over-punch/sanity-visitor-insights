@@ -15,7 +15,7 @@
 
 import React from 'react'
 import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ChartData, ComparisonBar, Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, SortableTable, formatCount, formatMoney, formatPercent } from './Figure'
+import { ChartData, ComparisonBar, Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import { SEND_WINDOW_DAYS } from '../core/ranges'
 import type {
@@ -322,7 +322,7 @@ export function OverviewPanel({ data, previous, onBrush }: {
 
 			{(data.crossSource?.length ?? 0) >= 3 && (
 				<Stack space={3}>
-					<Heading size={1} style={sectionHeading}>Everything, on one time axis</Heading>
+					<SectionTitle title="Everything, on one time axis" />
 					{/* Forty words defending a design decision to a reader who never proposed the
 					    alternative had escaped from a code comment into the UI. What the reader needs
 					    is how to read the chart, not why it was drawn this way. */}
@@ -515,7 +515,7 @@ export function OverviewPanel({ data, previous, onBrush }: {
 
 			{(data.campaigns?.length ?? 0) > 0 && (
 				<Stack space={3}>
-					<Heading size={1} style={sectionHeading}>Email campaigns</Heading>
+					<SectionTitle title="Email campaigns" />
 					<Text size={1} muted>
 						Clicks are distinct subscribers. Opens are inflated by Apple Mail Privacy Protection,
 						which fetches images on the recipient&rsquo;s behalf — so sort on clicks, not opens.
@@ -733,7 +733,7 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 	return (
 		<Stack space={4}>
 			<Stack space={3}>
-				<Heading size={1} style={sectionHeading}>Pageviews, source against source</Heading>
+				<SectionTitle title="Pageviews, source against source" />
 				<Text size={1} muted>
 					The same unit on both sides. Vercel is cookieless and ungated; GA4 is consent-gated and
 					blockable, so GA4 seeing fewer is expected.
@@ -765,7 +765,7 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 
 			{((data.capture?.estimates?.length ?? 0) > 0 || data.estimatedSessions?.status === 'estimated') && (
 				<Stack space={3}>
-					<Heading size={1} style={sectionHeading}>How much GA4 is seeing</Heading>
+					<SectionTitle title="How much GA4 is seeing" />
 					<div style={cardGrid}>
 						{(data.capture?.estimates ?? []).map((estimate) => (
 							<Card key={estimate.basis} padding={3} radius={2} tone="transparent" border>
@@ -821,7 +821,7 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 
 			{Object.keys(data.orderStatuses ?? {}).length > 0 && (
 				<Stack space={3}>
-					<Heading size={1} style={sectionHeading}>Order statuses in this range</Heading>
+					<SectionTitle title="Order statuses in this range" tone="secondary" />
 					{/* The only place a site's own status vocabulary is visible. Without it nobody can
 					    configure which statuses count as a sale — and getting that wrong zeroes every
 					    order-derived figure in the tool with nothing on screen to explain it. */}
@@ -844,9 +844,12 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 				</Stack>
 			)}
 
-			<Stack space={3}>
-				<Heading size={1} style={sectionHeading}>Context</Heading>
-				<Text size={1} muted>Different units to the figures above, and to each other.</Text>
+			<Section
+				title="Context"
+				tone="secondary"
+				subtitle="Different units to the figures above, and to each other."
+				collapsible
+			>
 				<div style={cardGrid}>
 					<Card padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
@@ -870,13 +873,22 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 						</Stack>
 					</Card>
 				</div>
-			</Stack>
+			</Section>
 
 			{diagnostics && (
-				<Stack space={3}>
-					<Heading size={1} style={sectionHeading}>Configuration</Heading>
+				/* Open, and primary. This is the longest block on the tab and the obvious candidate
+				   for folding away — but the tab it sits on exists to answer "what should I fix
+				   before trusting any of this", and these checks ARE that answer. Folding it would
+				   have left Data health opening on a summary of the problem with the solution behind
+				   a click. It stays collapsible so a reader who has read it can get it out of the
+				   way. */
+				<Section
+					title="Configuration"
+					subtitle="What this site has wired up, and what it is missing."
+					collapsible
+				>
 					<DiagnosticsPanel data={diagnostics} />
-				</Stack>
+				</Section>
 			)}
 		</Stack>
 	)
@@ -955,7 +967,7 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 			</div>
 
 			<Stack space={3}>
-				<Heading size={1} style={sectionHeading}>Traffic sources</Heading>
+				<SectionTitle title="Traffic sources" />
 				<Text size={1} muted>Sort, filter, or exclude a row to see what the rest looks like.</Text>
 				<SortableTable<SourceRow>
 					caption="Traffic sources by sessions"
@@ -1159,16 +1171,19 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 
 			<FunnelChart stages={stages} measurement={data.measurement ?? 'independent-totals'} />
 
+			{/* Side by side on a wide pane. Both blocks are narrow — a few cards and a two-column
+			    table — and stacked full width they pushed the funnel a screen and a half up, so the
+			    thing the tab is named for scrolled out of view before the supporting evidence
+			    started. The grid stacks them again the moment there is not room for both. */}
+			<div style={splitGrid}>
 			{(data.outcomes?.length ?? 0) > 0 && (
-				<Stack space={3}>
-					<Heading size={1} style={sectionHeading}>Other outcomes</Heading>
-					{/* Beside the funnel, not inside it. An enquiry is an alternative ending, not a
-					    later stage — and until now the funnel ended at purchase, which scored the
-					    visitor who read three typeface pages and emailed as a drop-off. */}
-					<Text size={1} muted>
-						Successful outcomes that are not a licence sale. Counted over the same window as the
-						funnel, but not a step within it.
-					</Text>
+				<Section
+					title="Other outcomes"
+					/* Beside the funnel, not inside it. An enquiry is an alternative ending, not a
+					   later stage — and until now the funnel ended at purchase, which scored the
+					   visitor who read three typeface pages and emailed as a drop-off. */
+					subtitle="Successful outcomes that are not a licence sale, counted over the same window as the funnel but not a step within it."
+				>
 					<div style={cardGrid}>
 						{(data.outcomes ?? []).map((outcome) => (
 							<Card key={outcome.key} padding={3} radius={2} tone="transparent" border>
@@ -1180,8 +1195,17 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 							</Card>
 						))}
 					</div>
-				</Stack>
+				</Section>
 			)}
+
+			{/* Entries, not exits. GA4 exposes landingPage and has never had an exits metric; the
+			    previous version of this table queried one and rendered nothing, ever. */}
+			{(data.topLandingPages?.length ?? 0) > 0 && (
+				<Section title="Where sessions began" subtitle="The page a visit started on, busiest first.">
+					<LandingPagesTable rows={data.topLandingPages ?? []} />
+				</Section>
+			)}
+			</div>
 
 			{hiddenSteps.length > 0 && (
 				<Text size={1} muted>
@@ -1190,15 +1214,24 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 				</Text>
 			)}
 
-			{/* Entries, not exits. GA4 exposes landingPage and has never had an exits metric; the
-			    previous version of this table queried one and rendered nothing, ever. */}
-			{(data.topLandingPages?.length ?? 0) > 0 && (
-				<Stack space={3}>
-					<Heading size={1} style={sectionHeading}>Where sessions began</Heading>
-					<SortableTable<LandingPage>
+		</Stack>
+	)
+}
+
+/**
+ * Landing pages, as a table.
+ *
+ * Lifted out of `JourneyPanel` so the two supporting blocks on that tab can sit in one grid without
+ * a hundred lines of column definitions between them. Behaviour is unchanged.
+ *
+ * @param rows - landing pages, busiest first
+ */
+function LandingPagesTable({ rows }: { rows: LandingPage[] }): React.ReactElement {
+	return (
+		<SortableTable<LandingPage>
 						caption="Landing pages by sessions"
 						initialSort="sessions"
-						rows={data.topLandingPages ?? []}
+						rows={rows}
 						rowKey={(page) => page.path}
 						filterOn={(page) => page.path}
 						filterPlaceholder="Filter pages"
@@ -1239,9 +1272,6 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 							},
 						]}
 					/>
-				</Stack>
-			)}
-		</Stack>
 	)
 }
 
@@ -1415,7 +1445,7 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 			</Card>
 
 			<Stack space={3}>
-				<Heading size={1} style={sectionHeading}>Engagement by typeface</Heading>
+				<SectionTitle title="Engagement by typeface" />
 				<Text size={1} muted>
 					Sort by any column. &ldquo;Sells vs catalogue&rdquo; compares each family&rsquo;s sales-per-view
 					against the catalogue as a whole — 1.0× is average, and sorting up finds the families that
@@ -1568,7 +1598,7 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 
 			{(data.licences?.length ?? 0) > 0 && (
 				<Stack space={3}>
-					<Heading size={1} style={sectionHeading}>How licences sell</Heading>
+					<SectionTitle title="How licences sell" />
 					<Text size={1} muted>
 						From the orders themselves, so this is exact and unaffected by whatever GA4 is doing.
 						Tier and term are separate rows, because they are the two variables in the pricing

@@ -10,7 +10,7 @@
  */
 
 import React, { useRef, useState } from 'react'
-import { Badge, Box, Card, Flex, Stack, Text, Tooltip } from '@liiift-studio/sanity-ui-compat'
+import { Badge, Box, Card, Flex, Heading, Stack, Text, Tooltip } from '@liiift-studio/sanity-ui-compat'
 import type { MetricValue, UnavailableReason } from '../types'
 
 /** Human-readable explanation for each unavailable reason. */
@@ -855,6 +855,96 @@ export function columnIsEmpty<Row>(column: SortColumn<Row>, rows: Row[]): boolea
 	})
 }
 
+/**
+ * One titled region of a panel.
+ *
+ * Every section in this tool was a bare `Stack` with a `Heading size={1}` on top, which meant the
+ * panel had exactly one level of hierarchy: the tab title, and then eleven things of equal weight.
+ * A reader scanning for "what should I look at" got no help, because nothing on the page claimed to
+ * matter more than anything else — and the two blocks that genuinely are reference material,
+ * Configuration and Context, shouted as loudly as the traffic table.
+ *
+ * `tone` sets the weight; `collapsible` is what actually removes noise. A collapsed section renders
+ * NO children at all rather than hiding them with CSS, so it costs nothing to draw and cannot be
+ * found by a text search of the page — which is the honest behaviour when the reader has said they
+ * do not want it.
+ */
+export function Section({
+	title,
+	subtitle,
+	tone = 'primary',
+	collapsible = false,
+	defaultOpen = true,
+	children,
+}: {
+	title: string
+	/** One line under the heading. Longer explanation belongs inside, not here. */
+	subtitle?: React.ReactNode
+	/** `secondary` is for reference material a reader consults rather than reads. */
+	tone?: 'primary' | 'secondary'
+	/** Whether the reader can fold it away. */
+	collapsible?: boolean
+	/** Start folded, for material that is worth having and not worth reading every time. */
+	defaultOpen?: boolean
+	children: React.ReactNode
+}): React.ReactElement {
+	const [open, setOpen] = React.useState(defaultOpen)
+	const bodyId = React.useId()
+	const shown = !collapsible || open
+
+	return (
+		<section>
+			<Stack space={3}>
+			<div style={sectionHeader}>
+				<Stack space={1}>
+					<Heading size={tone === 'primary' ? 1 : 0} style={tone === 'primary' ? primaryTitle : secondaryTitle}>
+						{title}
+					</Heading>
+					{subtitle && <Text size={1} muted>{subtitle}</Text>}
+				</Stack>
+				{collapsible && (
+					<button
+						type="button"
+						style={sectionToggle}
+						aria-expanded={open}
+						aria-controls={bodyId}
+						onClick={() => setOpen((was) => !was)}
+					>
+						{open ? 'Hide' : 'Show'}
+					</button>
+				)}
+			</div>
+			{shown && <div id={bodyId}>{children}</div>}
+			</Stack>
+		</section>
+	)
+}
+
+/**
+ * A section heading, without the fold.
+ *
+ * Most sections are not collapsible — they are the content — but they still need the hierarchy the
+ * panel had none of: one weight for what you read, a quieter one for what you consult, and a rule
+ * so the eye can find where one region ends and the next begins. `Section` uses the same two
+ * treatments; this is for the blocks whose markup already owns its own stacking.
+ */
+export function SectionTitle({
+	title,
+	tone = 'primary',
+}: {
+	title: string
+	/** `secondary` is for reference material a reader consults rather than reads. */
+	tone?: 'primary' | 'secondary'
+}): React.ReactElement {
+	return (
+		<div style={sectionHeader}>
+			<Heading size={tone === 'primary' ? 1 : 0} style={tone === 'primary' ? primaryTitle : secondaryTitle}>
+				{title}
+			</Heading>
+		</div>
+	)
+}
+
 /** Props for SortableTable. */
 export interface SortableTableProps<Row> {
 	caption: string
@@ -1189,6 +1279,62 @@ const tableControls: React.CSSProperties = {
 	alignItems: 'center',
 	gap: 10,
 	flexWrap: 'wrap',
+}
+
+/** Title and its control on one line, the control pushed to the trailing edge. */
+const sectionHeader: React.CSSProperties = {
+	display: 'flex',
+	alignItems: 'flex-start',
+	justifyContent: 'space-between',
+	gap: 12,
+	borderBottom: '1px solid var(--card-border-color, rgba(128,128,128,0.22))',
+	paddingBottom: 6,
+}
+
+/** A section the reader is meant to read. */
+const primaryTitle: React.CSSProperties = { margin: 0, lineHeight: 1.3 }
+
+/**
+ * A section the reader consults.
+ *
+ * Smaller and quieter, and the difference has to be visible at a glance or the hierarchy this
+ * component exists to create is just two words in a prop.
+ */
+const secondaryTitle: React.CSSProperties = {
+	margin: 0,
+	lineHeight: 1.3,
+	textTransform: 'uppercase',
+	letterSpacing: '0.07em',
+	opacity: 0.75,
+}
+
+/** The fold control. Reads as a control, not as a heading. */
+const sectionToggle: React.CSSProperties = {
+	appearance: 'none',
+	background: 'transparent',
+	border: '1px solid var(--card-border-color, rgba(128,128,128,0.3))',
+	borderRadius: 3,
+	color: 'inherit',
+	font: 'inherit',
+	fontSize: '0.8em',
+	padding: '2px 9px',
+	cursor: 'pointer',
+	flex: '0 0 auto',
+}
+
+/**
+ * Two blocks side by side on a wide pane, stacked on a narrow one.
+ *
+ * The minimum is deliberately large: a table squeezed into half of a narrow Studio pane is worse
+ * than the same table full width, so the pair splits only when there is genuinely room for both.
+ * Like `cardGrid`, it responds to the PANE rather than the viewport, because the panel is a
+ * resizable region inside a Studio that is sometimes inside an iframe.
+ */
+export const splitGrid: React.CSSProperties = {
+	display: 'grid',
+	gridTemplateColumns: 'repeat(auto-fit, minmax(min(26rem, 100%), 1fr))',
+	gap: 24,
+	alignItems: 'start',
 }
 
 /** The filter box. */
