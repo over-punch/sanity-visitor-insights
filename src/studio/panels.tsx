@@ -532,6 +532,18 @@ function Verdict({ data, previous }: { data: MeasurementHealthData; previous?: M
 				? `${label} flat`
 				: `${label} little changed (${change > 0 ? '+' : '−'}${formatPercent(Math.abs(change), 0)})`)
 		}
+		/*
+		 * A money move carries its amounts, and a percentage alone is suppressed on thin volumes.
+		 *
+		 * "Revenue down 62%" was printed in the largest type on the page. At two orders a month that
+		 * is one order not landing, and the card beneath — which does print its baseline — is smaller
+		 * and read second. Every neighbouring component already knows this: Delta's own comment says
+		 * an 18% move might be one order, and the typeface blurb says a family with one or two sales
+		 * swings a long way. The headline was the one place that skipped it.
+		 */
+		else if (unit === 'money') {
+			parts.push(`${label} ${change > 0 ? 'up' : 'down'} to ${formatMoney(a, data.currency ?? null)} from ${formatMoney(b, data.currency ?? null)}`)
+		}
 		else parts.push(`${label} ${change > 0 ? 'up' : 'down'} ${formatPercent(Math.abs(change), 0)}`)
 	}
 
@@ -1187,6 +1199,7 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 					visitors who buy: Google Analytics sees only a fraction of the views, which moves every
 					family together and so cancels out here. With one or two sales a family will still swing a
 					long way, so read it alongside the order counts beside it.
+					{' '}Bought and Revenue come from your own orders and are exact — do not scale those up.
 				</Text>
 				<SortableTable<TypefaceInterestRow>
 					caption="Engagement by typeface"
@@ -1208,28 +1221,34 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 						},
 						{
 							key: 'viewed',
-							label: 'Viewed',
+							// The source is in the HEADER, because the ribbon at the top of this tab
+							// instructs the reader to multiply its figures by about five — and two of
+							// these four columns come from the order book and are exact. Following that
+							// instruction across the whole table multiplies real revenue fivefold. The
+							// sentence that prevents it already exists on the licence block below; it was
+							// simply never applied where the mistake is made.
+							label: 'Viewed (GA4)',
 							numeric: true,
 							sortValue: (row) => metricSortValue(row.viewed),
 							render: (row) => <MetricFigure metric={row.viewed} label={`${row.typeface} viewed`} size={1} />,
 						},
 						{
 							key: 'tested',
-							label: 'Tested',
+							label: 'Tested (GA4)',
 							numeric: true,
 							sortValue: (row) => metricSortValue(row.tested),
 							render: (row) => <MetricFigure metric={row.tested} label={`${row.typeface} tested`} size={1} />,
 						},
 						{
 							key: 'bought',
-							label: 'Bought',
+							label: 'Bought (orders)',
 							numeric: true,
 							sortValue: (row) => metricSortValue(row.bought),
 							render: (row) => <MetricFigure metric={row.bought} label={`${row.typeface} bought`} size={1} />,
 						},
 						{
 							key: 'revenue',
-							label: 'Revenue',
+							label: 'Revenue (orders)',
 							numeric: true,
 							sortValue: (row) => metricSortValue(row.revenue),
 							exportValue: (row) => {

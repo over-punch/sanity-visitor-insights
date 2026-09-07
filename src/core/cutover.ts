@@ -77,10 +77,24 @@ function toHistory(cutover: EventCutover | undefined): EventHistory | null {
 	return cutover
 }
 
-/** Whether two inclusive date ranges overlap at all. */
+/**
+ * Whether an outage overlaps a range.
+ *
+ * The outage's end is EXCLUSIVE — `EventOutage.until` is documented as the date recording resumed,
+ * so data exists on that day. This tested `aEnd >= bStart`, which counts the resume date as still
+ * missing: an outage ending 1 July against a range starting 1 July was reported as spanning it, and
+ * a range with complete data throughout printed "Undercounted: not recorded …" plus a notice saying
+ * its figures were "too low — not a real decline". The `swallowed` check ten lines below already read
+ * `until` exclusively, so the two halves of one function disagreed.
+ *
+ * @param aStart - outage start, inclusive
+ * @param aEnd - date recording resumed, exclusive; null means still ongoing
+ * @param bStart - range start, inclusive
+ * @param bEnd - range end, inclusive
+ */
 function overlaps(aStart: string, aEnd: string | null, bStart: string, bEnd: string): boolean {
 	// A null end means "ongoing", so it extends past any range end.
-	return aStart <= bEnd && (aEnd === null || aEnd >= bStart)
+	return aStart <= bEnd && (aEnd === null || aEnd > bStart)
 }
 
 /**

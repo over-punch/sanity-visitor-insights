@@ -143,6 +143,16 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 
 	let bought: Map<string, number> | null = null
 	let revenue: Map<string, number> | null = null
+	/**
+	 * Whether the order query actually ran.
+	 *
+	 * Absent maps meant two different things and were reported as one: a site that genuinely does not
+	 * resolve orders to typefaces, and a query that threw. A transient ECONNRESET rendered "Orders do
+	 * not resolve to typefaces on this site" and "No order total field is configured for this site" —
+	 * two permanent-sounding statements about a network blip. measurementHealth solved this with the
+	 * same flag; this file was never given one.
+	 */
+	let ordersMeasured = false
 	if (sanity) {
 		try {
 			const counts = await countOrdersByTypeface(
@@ -150,6 +160,7 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 				orderQueryOptions(config.orders, range),
 				config.orders.typefacesField,
 			)
+			ordersMeasured = true
 			if (counts) {
 				bought = new Map(Object.entries(counts.byTypeface))
 				if (counts.revenueByTypeface) revenue = new Map(Object.entries(counts.revenueByTypeface))
@@ -210,7 +221,11 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 	const rows: TypefaceInterestRow[] = [...families].map((family) => {
 		const viewedMetric = metric(viewed, family, viewCoverage, viewIncomplete)
 		const testedMetric = metric(tested, family, testCoverage, testIncomplete)
-		const boughtMetric = bought === null ? unavailable('not_applicable', 'Orders do not resolve to typefaces on this site') : ok(bought.get(family) ?? 0)
+		const boughtMetric = bought !== null
+			? ok(bought.get(family) ?? 0)
+			: ordersMeasured
+				? unavailable('not_applicable', 'Orders do not resolve to typefaces on this site')
+				: unavailable('source_error', 'Your orders could not be read for this range')
 
 		// Withheld where it cannot be a proportion.
 		//
@@ -237,9 +252,22 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 				? Math.min(1, boughtMetric.value / viewedMetric.value)
 				: null
 
+		/*
+		 * A family with no entry has no measured revenue, and must not read as $0.00.
+		 *
+		 * `orders.ts` deliberately writes no entry for a family whose orders all lack a total, saying
+		 * so in a comment: that must read as unavailable, not as zero, because it is the same defect
+		 * as rendering a withheld view count as zero. `?? 0` undid it — one sale with a missing
+		 * amount printed "$0.00" beside "1", with a buy rate computed as normal.
+		 */
+		const familyRevenue = revenue?.get(family)
 		const revenueMetric: MetricValue = revenue === null
-			? unavailable('not_applicable', 'No order total field is configured for this site')
-			: ok(revenue.get(family) ?? 0)
+			? ordersMeasured
+				? unavailable('not_applicable', 'No order total field is configured for this site')
+				: unavailable('source_error', 'Your orders could not be read for this range')
+			: familyRevenue === undefined
+				? unavailable('not_instrumented', 'No order for this family carried a total')
+				: ok(familyRevenue)
 
 		return {
 			typeface: family,

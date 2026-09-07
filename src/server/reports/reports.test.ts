@@ -1855,3 +1855,78 @@ describe('an order window is half-open, so no order lands in two ranges', () => 
 	})
 
 })
+
+describe('the funnel reads GA4 completion rates in the direction GA4 means them', () => {
+	/** A closed funnel, with GA4's own forward-looking rates and abandonments. */
+	const funnelRows = (counts: number[]) => counts.map((activeUsers, i) => {
+		const next = counts[i + 1]
+		const abandonments = next === undefined ? activeUsers : activeUsers - next
+		return {
+			name: ['Landed', 'Viewed a typeface', 'Used the type tester', 'Added to cart', 'Began checkout', 'Purchased'][i]!,
+			activeUsers,
+			// GA4's documented arithmetic: the complement of abandonments over THIS step's users.
+			completionRate: activeUsers > 0 ? 1 - abandonments / activeUsers : 0,
+			abandonments,
+		}
+	})
+
+	it('reports each rung against the step before it, not against itself', async () => {
+		// Reading `row.completionRate` as this step's inbound conversion shifted every rate one rung
+		// forward, and gave the last rung 0% — the final step has no next step, so its own completion
+		// rate is zero, printed beside a count of real purchasers.
+		const data = await journey(
+			siteConfig(),
+			createFakeGa4Client({ funnel: () => ({ steps: funnelRows([1000, 500, 250, 100, 60, 50]), sampled: false }) }),
+			range,
+			[],
+		)
+
+		expect(data.measurement).toBe('sequence')
+		const rate = (label: string) => data.steps.find((s) => s.label === label)?.conversionFromPrevious
+		expect(rate('Used the type tester')).toBeCloseTo(0.5, 6)
+		expect(rate('Added to cart')).toBeCloseTo(0.4, 6)
+		expect(rate('Began checkout')).toBeCloseTo(0.6, 6)
+		// The rung that used to read 0%.
+		expect(rate('Purchased')).toBeCloseTo(50 / 60, 6)
+	})
+
+	it('leaves the entry step without an inbound rate', async () => {
+		const data = await journey(
+			siteConfig(),
+			createFakeGa4Client({ funnel: () => ({ steps: funnelRows([1000, 500, 250]), sampled: false }) }),
+			range,
+			[],
+		)
+		expect(data.steps[0]?.conversionFromPrevious).toBeNull()
+	})
+})
+
+describe('a family whose orders carry no total is not shown as zero revenue', () => {
+	it('reads as unavailable rather than $0.00', async () => {
+		// orders.ts deliberately writes no entry for such a family, saying in a comment that it must
+		// read as unavailable and not as $0.00 — the same defect as rendering a withheld view count as
+		// zero. `?? 0` undid that: one sale with a missing amount printed "$0.00" beside "1", with a
+		// buy rate computed as normal.
+		const data = await typefaceInterest({
+			config: siteConfig({ orders: {
+				documentType: 'order', statusField: 'orderStatus.status', countedStatuses: ['verified'],
+				typefacesField: 'typefaces', totalField: 'amountCharged',
+			} }),
+			range,
+			ga4: createFakeGa4Client({
+				single: () => makeGa4Report([{ dimensions: ['Freight'], metrics: [400] }]),
+			}),
+			// One order for Freight, and a revenue map that has no entry for it.
+			sanity: { fetch: () => Promise.resolve([
+				{ _createdAt: '2026-08-21T10:00:00Z', typefaces: [{ name: 'Freight' }] },
+			]) } as never,
+		})
+
+		const freight = data.rows.find((r) => r.typeface === 'Freight')
+		expect(freight?.bought.status).toBe('ok')
+		expect(freight?.revenue.status).toBe('unavailable')
+		if (freight?.revenue.status === 'unavailable') {
+			expect(freight.revenue.reason).not.toBe('not_applicable')
+		}
+	})
+})

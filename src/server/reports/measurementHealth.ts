@@ -220,6 +220,20 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 					dimensions: [{ name: 'date' }],
 					dateRanges: [{ startDate: range.start, endDate: range.end }],
 					orderBys: [{ dimension: { dimensionName: 'date' } }],
+					/*
+					 * Days GA4 recorded NOTHING must come back, or the outage deletes itself.
+					 *
+					 * Unset, GA4 omits every row whose metrics are all zero. `comparable` is built from
+					 * the days GA4 returned, so the days a broken tag recorded nothing were dropped from
+					 * the settled shortfall — leaving it computed only over the days that still worked.
+					 * A tag that broke ten days into a thirty-day range reported a 4% shortfall against
+					 * a true 68%, under the sentence "Nothing here suggests a measurement problem".
+					 *
+					 * That is the founding failure of this package, inverted. And it was invisible to
+					 * every test here, because the fixtures feed explicit zero rows — which is precisely
+					 * what GA4 does not do.
+					 */
+					keepEmptyRows: true,
 					limit: 400,
 				},
 				{
@@ -445,6 +459,9 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		? [...ga4ByDate.keys()].filter((date) => !unsettled.has(date) && typeof vercelByDate[date] === 'number')
 		: []
 
+	/** The settled-day sums the shortfall is built from, so the capture model can share them. */
+	let settledPageviews: { ga4: number; vercel: number } | null = null
+
 	const settledShortfall = (() => {
 		// A handful of shared days is a ratio of noise. Below this the whole-range totals, which at
 		// least cover one consistent window each, are the better answer.
@@ -456,6 +473,7 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 			ga4Total += ga4ByDate.get(date) ?? 0
 			vercelTotal += vercelByDate[date] ?? 0
 		}
+		settledPageviews = { ga4: ga4Total, vercel: vercelTotal }
 		return vercelTotal > 0 ? (vercelTotal - ga4Total) / vercelTotal : null
 	})()
 
@@ -536,9 +554,20 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	// and three that disagree say WHERE the problem is rather than merely that there is one.
 	const capture = captureModel([
 		ga4Purchases !== null && orderTotal !== null ? fromOrders(ga4Purchases, orderTotal) : null,
-		ga4Pageviews.status !== 'unavailable' && vercelPageviews.status !== 'unavailable'
-			? fromPageviews(ga4Pageviews.value, vercelPageviews.value)
-			: null,
+		/*
+		 * Built from the SETTLED days, like the shortfall beside it.
+		 *
+		 * This divided the whole-range totals — the exact subtraction the shortfall computation forty
+		 * lines up spends a paragraph arguing against, because GA4's last two days are unprocessed
+		 * while Vercel's are complete. So one screen printed "GA4 recorded 20% fewer pageviews than
+		 * Vercel" next to "appears to be seeing 57% of traffic": two inconsistent statements of one
+		 * quantity, with the corrected session figure inflated forty per cent by the difference.
+		 */
+		settledPageviews !== null
+			? fromPageviews(settledPageviews.ga4, settledPageviews.vercel)
+			: ga4Pageviews.status !== 'unavailable' && vercelPageviews.status !== 'unavailable'
+				? fromPageviews(ga4Pageviews.value, vercelPageviews.value)
+				: null,
 		// Only counted where the site tags its campaign links. Without a UTM the sessions are not
 		// attributable to email and the ratio would measure tagging rather than capture — which is
 		// a real finding, but a different one, and conflating them would hide both.

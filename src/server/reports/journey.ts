@@ -174,11 +174,24 @@ export async function journey(config: SiteAnalyticsConfig, ga4: Ga4Client, range
 						label: rung.step.label,
 						event: rung.step.event,
 						count: applyCoverage(row.activeUsers, rung.coverage),
-						// GA4's own completion rate where it gave one; otherwise derived from the
-						// adjacent step, which in a closed funnel is a genuine continuation rate.
+						/*
+						 * The PREVIOUS step's completion rate, not this step's.
+						 *
+						 * `funnelStepCompletionRate` is measured ON a step and describes progression FROM
+						 * it. Google's own documented response makes that arithmetic explicit: 4,621,565
+						 * active users, 3,337,686 abandonments, an abandonment rate of 0.72220 — which is
+						 * abandonments over THIS step's users — and a completion rate of 0.27780, its
+						 * complement. This codebase's own `abandonments` doc says "users who reached this
+						 * step and went no further", which only fits a forward-looking rate.
+						 *
+						 * Reading it as this step's inbound conversion shifted every rung one forward, and
+						 * gave the last rung 0% — the final step has no next step to progress to, so its
+						 * own completion rate is zero, printed beside a count of real purchasers. On a
+						 * 1000→500→250→100→60→50 funnel every rate was wrong and "Purchased" read 0%.
+						 */
 						conversionFromPrevious: index === 0
 							? null
-							: row.completionRate ?? (previous && previous.activeUsers > 0
+							: previous?.completionRate ?? (previous && previous.activeUsers > 0
 								? row.activeUsers / previous.activeUsers
 								: null),
 					}

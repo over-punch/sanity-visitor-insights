@@ -210,7 +210,15 @@ export interface Ga4FunnelRow {
 	name: string
 	/** Distinct users who reached this step having completed the earlier ones. */
 	activeUsers: number
-	/** Share of the previous step's users who continued, as GA4 computed it. */
+	/**
+	 * Share of THIS step's users who progressed to the NEXT one, as GA4 computed it.
+	 *
+	 * Forward-looking, which the sibling field proves: `abandonments` is users who reached this step
+	 * and went no further, and GA4's own documented response has completionRate as the exact
+	 * complement of abandonments over this step's activeUsers. The last step therefore reports 0 — it
+	 * has no next step — which is why reading it as this step's INBOUND conversion gave the final
+	 * rung 0% beside a count of real purchasers.
+	 */
 	completionRate: number | null
 	/** Users who reached this step and went no further. */
 	abandonments: number | null
@@ -390,8 +398,9 @@ export function createGa4Client(propertyId: string, key: ServiceAccountKey, opti
 			 * and the old comment asserted order was preserved. Chunk order was; alignment was not. A
 			 * 200 carrying fewer entries than its chunk requested slides every later result down one,
 			 * so the purchase report would be read as pageviews and published as a pageview total.
-			 * Padding keeps each caller's index pointing at the request it made, and a short chunk
-			 * yields an empty report rather than someone else's data.
+			 * A short chunk is therefore REFUSED, not padded — `alignBatch` explains why padding could
+			 * not fix it and why an empty placeholder was worse than no answer at all. This comment
+			 * described the padding for a release after it was removed.
 			 */
 			return alignBatch(
 				responses.map((raw, index) => ({

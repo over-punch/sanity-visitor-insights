@@ -554,3 +554,26 @@ describe('a day boundary survives a DST transition', () => {
 			.toBe(zonedDayStartUtc('2026-03-08', 'America/Los_Angeles'))
 	})
 })
+
+describe('an outage ends on the day recording resumed', () => {
+	const cutovers = { purchase: { from: PREEXISTING, outages: [{ start: '2026-06-01', until: '2026-07-01' }] } }
+
+	it('does not mark a range starting on the resume date as spanning the outage', () => {
+		// `until` is documented as the date recording resumed, so data exists on it. Testing
+		// `aEnd >= bStart` counted that day as still missing, so a range with complete data throughout
+		// printed "Undercounted: not recorded …" and a notice calling its figures "too low — not a
+		// real decline". The swallowed check in the same function already read it exclusively.
+		const coverage = coverageForRange(cutovers, 'purchase', { start: '2026-07-01', end: '2026-07-30' })
+		expect(coverage.status).toBe('full')
+	})
+
+	it('still catches a range that genuinely overlaps the outage', () => {
+		const coverage = coverageForRange(cutovers, 'purchase', { start: '2026-06-25', end: '2026-07-30' })
+		expect(coverage.status).not.toBe('full')
+	})
+
+	it('still catches a range ending inside the outage', () => {
+		const coverage = coverageForRange(cutovers, 'purchase', { start: '2026-05-01', end: '2026-06-10' })
+		expect(coverage.status).not.toBe('full')
+	})
+})

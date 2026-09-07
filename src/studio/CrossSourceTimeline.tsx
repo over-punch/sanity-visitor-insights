@@ -251,7 +251,33 @@ export interface CoverageIncident {
  * @param days - coverage per day in date order, null on days that cannot be measured
  * @param dates - the matching dates, same length and order
  */
-export function findCoverageIncident(days: Array<number | null>, dates: string[]): CoverageIncident | null {
+export function findCoverageIncident(
+	days: Array<number | null>,
+	dates: string[],
+	/**
+	 * The complete source's volume on each day, same length and order.
+	 *
+	 * Days too quiet to mean anything are excluded before anything is measured. Without this the
+	 * detector reads a ratio on an unbounded denominator: at a couple of dozen pageviews a day, a
+	 * quiet weekend with three pageviews and none of them seen is coverage 0.0, three of those in a
+	 * row clears the minimum run, and the loudest card in the tool prints a DATED accusation about a
+	 * day on which nothing happened. Someone then goes and pays to investigate it.
+	 *
+	 * The worst-day sentence twenty lines from here already learned this and wrote the reasoning
+	 * down; the superlative got a floor and the accusation did not, which is the wrong way round.
+	 */
+	volumes: Array<number | null> = [],
+): CoverageIncident | null {
+	// A tenth of the busiest day, matching the floor the worst-day sentence uses.
+	const busiest = volumes.reduce<number>((best, v) => Math.max(best, v ?? 0), 0)
+	const floor = busiest > 0 ? Math.max(1, busiest * 0.1) : 0
+	const usable = days.map((value, i) => {
+		const volume = volumes[i]
+		if (floor > 0 && (volume === null || volume === undefined || volume < floor)) return null
+		return value
+	})
+	days = usable
+
 	const measured = days.filter((d): d is number => d !== null)
 	// Three weeks of daily figures before this is worth attempting. Below that a "run" is as likely
 	// to be a quiet fortnight as a fault, and naming a date carries more authority than the evidence.
@@ -630,7 +656,11 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 			const saw = seen.get(point.date)
 			return saw == null ? null : saw / point.value
 		})
-		const incident = findCoverageIncident(coverageByDay, row.points.map((p) => p.date))
+		const incident = findCoverageIncident(
+			coverageByDay,
+			row.points.map((p) => p.date),
+			row.points.map((p) => p.value),
+		)
 		if (incident) {
 			sentences.push(
 				`${row.shortfall.source} coverage fell from about ${formatPercent(incident.before, 0)} to `

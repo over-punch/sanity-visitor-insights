@@ -1047,7 +1047,9 @@ describe('panel structure', () => {
 		const previous = { ...base, revenue: ok(3800), vercelPageviews: ok(2300) }
 		// shortfallRatio 0 — GA4 is seeing everything, so the all-clear is earned.
 		const html = render(<OverviewPanel data={{ ...base, shortfallRatio: 0 } as never} previous={previous as never} />)
-		expect(html).toMatch(/Revenue up \d+%/)
+		// The money clause carries its amounts rather than a bare percentage: "Revenue down 62%" in
+		// the largest type on the page is one order not landing, at these volumes.
+		expect(html).toMatch(/Revenue up to US\$4,820 from US\$3,800/)
 		// The fixture moves traffic 2%, which is suppressed but no longer rendered as "flat" — the
 		// card beside it draws an arrow at that size, and the two used to contradict each other.
 		expect(html).toContain('Traffic little changed')
@@ -1059,7 +1061,7 @@ describe('panel structure', () => {
 		// No all-clear is claimed at all: this line only ever knew one coverage ratio, and "nothing
 		// broken" spoke for the site, the checkout and four other tabs.
 		expect(html).not.toContain('nothing broken')
-		expect(html).toContain('Revenue up')
+		expect(html).toContain('Revenue up to')
 		// A suppressed move now carries its number, so it cannot contradict the card beneath it.
 		expect(html).toContain('little changed')
 	})
@@ -2473,5 +2475,65 @@ describe('the funnel gate looks at the rung, not just the funnel', () => {
 		// changed to avoid.
 		const html = render(<FunnelChart stages={stages([4000, 1800, 900, 300, 20, 8])} measurement="sequence" />)
 		expect(html).toContain('too few from')
+	})
+})
+
+describe('a dated collapse is not invented out of quiet days', () => {
+	const dates = (n: number) => Array.from({ length: n }, (_, i) =>
+		new Date(Date.UTC(2026, 6, 1) + i * 86_400_000).toISOString().slice(0, 10))
+
+	it('ignores days too quiet to carry a ratio', () => {
+		// At a couple of dozen pageviews a day, a quiet weekend with three pageviews and none seen is
+		// coverage 0.0. Three of those in a row cleared the minimum run and printed a DATED
+		// accusation about a day on which nothing happened — the loudest card in the tool, and
+		// someone then pays to investigate that date.
+		const busy = Array(40).fill(0.9)
+		const coverage = [...busy, 0, 0, 0, ...Array(10).fill(0.9)]
+		const volumes = [...Array(40).fill(300), 3, 2, 3, ...Array(10).fill(300)]
+		expect(findCoverageIncident(coverage, dates(53), volumes)).toBeNull()
+	})
+
+	it('still finds a real collapse on days that do carry a ratio', () => {
+		// The floor must not deafen the detector: a genuine fall on busy days is exactly what it is
+		// for.
+		const coverage = [...Array(40).fill(0.9), ...Array(12).fill(0.1)]
+		const volumes = Array(52).fill(300)
+		const found = findCoverageIncident(coverage, dates(52), volumes)
+		expect(found?.onset).toBe(dates(52)[40])
+		expect(found?.days).toBe(12)
+	})
+
+	it('is unchanged when no volumes are supplied', () => {
+		// The parameter is optional so existing callers keep working; a caller that knows the volumes
+		// gets the floor.
+		const coverage = [...Array(40).fill(0.9), ...Array(12).fill(0.1)]
+		expect(findCoverageIncident(coverage, dates(52))?.days).toBe(12)
+	})
+})
+
+describe('the typeface table says which columns are already exact', () => {
+	const data = {
+		interpretationNote: 'x', rowsWithheld: false, licenceTiers: [], totalRevenue: ok(910),
+		currency: 'USD',
+		rows: [{
+			typeface: 'Freight', viewed: ok(400), tested: ok(90), bought: ok(3),
+			revenue: ok(910), testRate: 0.22, buyRate: 3 / 400,
+		}],
+	}
+
+	it('names the source in every column header', () => {
+		// The ribbon at the top of this tab instructs the reader to multiply its figures by about
+		// five, and two of these four columns come from the order book. Following that instruction
+		// across the whole table multiplies real revenue fivefold.
+		const html = render(<TypefaceInterestPanel data={data as never} />)
+		expect(html).toContain('Viewed (GA4)')
+		expect(html).toContain('Tested (GA4)')
+		expect(html).toContain('Bought (orders)')
+		expect(html).toContain('Revenue (orders)')
+	})
+
+	it('says in words that the order columns must not be scaled up', () => {
+		const html = render(<TypefaceInterestPanel data={data as never} />)
+		expect(html).toContain('do not scale those up')
 	})
 })
