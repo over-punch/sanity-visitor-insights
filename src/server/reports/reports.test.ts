@@ -988,7 +988,15 @@ describe('the handler master switch', () => {
 
 	it('gets past the switch when it is truthy, and fails later for its own reasons', async () => {
 		const previous = process.env[ENV_VARS.enabled]
+		const realFetch = globalThis.fetch
 		process.env[ENV_VARS.enabled] = 'darden-2026'
+		// Stubbed, because the assertion is about the SWITCH, not about Sanity. Unstubbed this made
+		// a real call to api.sanity.io on every run: correct most of the time, and a five-second
+		// timeout whenever the suite was busy enough to slow it down — a test that fails for a
+		// reason unrelated to what it is testing.
+		globalThis.fetch = (async () => ({
+			ok: false, status: 401, async json() { return {} },
+		})) as unknown as typeof fetch
 		try {
 			const { sent, res } = recorder()
 			await handler(req, res)
@@ -997,6 +1005,7 @@ describe('the handler master switch', () => {
 			expect(sent.status).toBe(401)
 			expect(sent.body).not.toMatchObject({ disabled: true })
 		} finally {
+			globalThis.fetch = realFetch
 			if (previous === undefined) delete process.env[ENV_VARS.enabled]
 			else process.env[ENV_VARS.enabled] = previous
 		}

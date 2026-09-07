@@ -27,6 +27,7 @@ import { scaleUtc, scaleLinear } from 'd3-scale'
 import { line as d3Line, area as d3Area, curveLinear } from 'd3-shape'
 import { max as d3Max } from 'd3-array'
 import { formatCount, formatMoney, formatPercent } from './Figure'
+import { SERIES, seriesFill, type SeriesKey } from './palette'
 
 /** One point on one series. `value` null where the source reported nothing for that day. */
 export interface SeriesPoint {
@@ -46,6 +47,90 @@ export type SeriesUnit = 'count' | 'money' | 'percent'
  * hiding it entirely would switch off the alarm: the 24 August collapse was visible precisely
  * because two lines came apart.
  */
+/**
+ * The colour a row draws in.
+ *
+ * Explicit `color` wins; otherwise the upstream decides, so every row from one source reads as a
+ * family and a caller adding a row cannot accidentally introduce a sixth hue. Vercel is the
+ * complete count and gets the reference blue; GA4's two units share the warm pair; Sanity's
+ * quantities split into orders and money by unit, because a foundry reads those as different
+ * things even though they come from one place.
+ *
+ * @param source - the upstream the line came from
+ * @param unit - what the row measures, which separates Sanity's two
+ * @param explicit - a colour the caller named
+ */
+export function colorFor(source: Series['source'], unit: SeriesUnit, explicit?: SeriesKey): SeriesKey {
+	if (explicit) return explicit
+	if (source === 'Vercel') return 'vercel'
+	if (source === 'Sanity') return unit === 'money' ? 'revenue' : 'orders'
+	// GA4 and Mailchimp. Sessions are the unit GA4 reports natively; a percentage computed from it
+	// keeps the same family.
+	return unit === 'count' ? 'ga4Pageviews' : 'ga4Sessions'
+}
+
+/**
+ * The floating readout, anchored to the hovered day.
+ *
+ * Sits over the plot rather than under it. The values used to live in a row beneath the chart, so
+ * reading a peak meant looking at the peak, then travelling to the bottom of the component, then
+ * back — and on a tall stack of small multiples the two were far enough apart that the reader lost
+ * which day they were on. Anchored to the crosshair, the number is where the eye already is.
+ *
+ * `pointer-events: none` throughout: the card follows the pointer across the plot and must never
+ * become the thing under it, which would end the hover it exists to describe and flicker.
+ *
+ * It flips to the left of the crosshair in the right-hand third, so the last week of a range — the
+ * part a reader looks at most — does not push the card off the pane.
+ */
+export function HoverCard({
+	x,
+	paneWidth,
+	date,
+	rows,
+	events,
+}: {
+	/** Plot-space x of the crosshair, in CSS pixels. */
+	x: number
+	/** The measured pane width, for the flip decision. */
+	paneWidth: number
+	/** The day, already formatted. */
+	date: string
+	/** One entry per series, in the stack's own order. */
+	rows: Array<{ key: string; label: string; color: string; value: string; seen: string | null }>
+	/** Campaign sends or other markers on this day. */
+	events: string[]
+}): React.ReactElement {
+	// Flip rather than clamp. A clamped card stops tracking the crosshair and then sits ON the
+	// thing it describes for the whole right-hand edge.
+	const flip = x > paneWidth * 0.66
+	return (
+		<div
+			style={{
+				...hoverCard,
+				left: flip ? undefined : x + 14,
+				right: flip ? paneWidth - x + 14 : undefined,
+			}}
+		>
+			<div style={hoverDate}>{date}</div>
+			{rows.map((row) => (
+				<div key={row.key} style={hoverRow}>
+					{/* The same block that labels the row in the plot, so the two are one legend. */}
+					<span style={{ ...hoverSwatch, background: row.color }} />
+					<span style={hoverLabel}>{row.label}</span>
+					<span style={hoverValue}>
+						{row.value}
+						{row.seen && <span style={hoverSeen}> · {row.seen}</span>}
+					</span>
+				</div>
+			))}
+			{events.map((event) => (
+				<div key={event} style={hoverEvent}>{event}</div>
+			))}
+		</div>
+	)
+}
+
 export interface Series {
 	key: string
 	label: string
@@ -53,6 +138,15 @@ export interface Series {
 	source: 'GA4' | 'Vercel' | 'Sanity' | 'Mailchimp'
 	/** Whether the line's source sees everything. Drives the stroke and the wording. */
 	complete: boolean
+	/**
+	 * Which series colour this row draws in.
+	 *
+	 * Optional, and falling back to the row's `source`, so a caller that adds a row gets a colour
+	 * consistent with every other row from the same upstream rather than an uncoloured one. Set it
+	 * explicitly only where the source does not decide the meaning — coverage is computed FROM GA4
+	 * and Vercel and belongs to neither.
+	 */
+	color?: SeriesKey
 	unit: SeriesUnit
 	/**
 	 * How the row is drawn. Defaults to `line`.
@@ -98,6 +192,8 @@ export interface Series {
 	 */
 	shortfall?: {
 		label: string
+		/** The lossier source's colour. Falls back to its `source`, as the row's own does. */
+		color?: SeriesKey
 		source: Series['source']
 		points: SeriesPoint[]
 	}
@@ -832,6 +928,12 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 					})}
 
 					{series.map((row, rowIndex) => {
+						// One colour per row, resolved once. Every mark in this row — line, stems, zero
+						// ticks, region, label swatch — draws in it, so the row reads as one thing.
+						const stroke = SERIES[colorFor(row.source, row.unit, row.color)]
+						const shortfallStroke = row.shortfall
+							? SERIES[colorFor(row.shortfall.source, row.unit, row.shortfall.color)]
+							: null
 						const top = TOP_PAD + rowIndex * rowHeight
 						const bottom = top + rowHeight - BASELINE_GUTTER
 						// The row label gets its own strip above the plot rather than sharing it. The
@@ -967,7 +1069,15 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 								    above its own — bound by proximity to the wrong band, which is the
 								    one thing small multiples exist to get right. On row 0 it also ran
 								    straight through the campaign marker dots. */}
-								<text x={GUTTER + 4} y={top + 11} fontSize={AXIS_TYPE} fill="currentColor" opacity={0.85} fontWeight={500}>
+								{/* A small block of the row's colour, immediately before its name. This is
+								    the only place the mapping from colour to series is stated at full
+								    size and in position, so a reader who glances at a line can name it
+								    without consulting a legend elsewhere on the page. */}
+								{/* Marked as furniture. It is the same colour as the row's data marks, so
+								    anything counting marks by fill — the render tests do — would otherwise
+								    count the label's swatch as a day that had an order. */}
+								<rect data-swatch="" x={GUTTER + 4} y={top + 3} width={8} height={8} rx={2} fill={stroke} />
+								<text x={GUTTER + 16} y={top + 11} fontSize={AXIS_TYPE} fill="currentColor" opacity={0.85} fontWeight={500}>
 									{row.label}
 								</text>
 								{/* 0.5 put 11px type at about 3.9:1 on a white card, under the 4.5:1 floor for
@@ -1010,10 +1120,19 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 										opacity={0.35}
 									/>
 								)}
-								{gap && <path d={gap} fill="currentColor" opacity={0.48} />}
+								{/* The region is what the LOSSIER source missed, so it carries that source's
+								    colour rather than the complete line's. Filled through `seriesFill` so
+								    the alpha is baked in and does not multiply with the group's own. */}
+								{gap && (
+									<path
+										d={gap}
+										fill={shortfallStroke ? seriesFill(colorFor(row.shortfall!.source, row.unit, row.shortfall!.color), 0.3) : 'currentColor'}
+										opacity={shortfallStroke ? 1 : 0.48}
+									/>
+								)}
 
 								{shortfallLine && (
-									<path d={shortfallLine} fill="none" stroke="currentColor" strokeWidth={1.5} strokeDasharray="6 4" opacity={0.8} />
+									<path d={shortfallLine} fill="none" stroke={shortfallStroke ?? 'currentColor'} strokeWidth={1.5} strokeDasharray="6 4" opacity={0.8} />
 								)}
 
 								{zeroes.map((p) => {
@@ -1029,8 +1148,8 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 											y={zeroY - 3}
 											width={stemWidth}
 											height={3}
-											fill="currentColor"
-											opacity={0.55}
+											fill={stroke}
+											opacity={0.7}
 										/>
 									)
 								})}
@@ -1053,8 +1172,8 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 											// scale still happened, and drawing it as zero height would say
 											// it did not.
 											height={Math.max(1.5, Math.abs(zeroY - headY))}
-											fill="currentColor"
-											opacity={0.75}
+											fill={stroke}
+											opacity={0.9}
 										/>
 									)
 								})}
@@ -1062,7 +1181,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 								{path && <path
 									d={path}
 									fill="none"
-									stroke="currentColor"
+									stroke={stroke}
 									strokeWidth={2}
 									// Dashed only where the LINE's own source misses things. A row whose
 									// line is complete stays solid even when it carries a blind-spot fill.
@@ -1163,6 +1282,33 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						)
 					})}
 				</svg>
+
+				{/* Anchored to the crosshair the svg already draws. Rendered outside the svg so it is
+				    ordinary DOM — an SVG <foreignObject> is the alternative and is clipped by the
+				    viewBox, which is exactly the edge case the flip exists to handle. */}
+				{hoveredDate && (
+					<HoverCard
+						x={x(new Date(`${hoveredDate}T00:00:00Z`))}
+						paneWidth={measured}
+						date={tickLabel(new Date(`${hoveredDate}T00:00:00Z`))}
+						rows={series.map((row) => {
+							const point = row.points.find((p) => p.date === hoveredDate)
+							const seen = row.shortfall?.points.find((p) => p.date === hoveredDate)
+							return {
+								key: row.key,
+								label: row.label,
+								color: SERIES[colorFor(row.source, row.unit, row.color)],
+								// A dash, never a zero: a day this source did not measure is not a day it
+								// measured nothing, and the whole package turns on that distinction.
+								value: point && point.value !== null ? formatValue(point.value, row.unit, currency) : '—',
+								seen: seen && seen.value !== null
+									? `${row.shortfall?.source} ${formatValue(seen.value, row.unit, currency)}`
+									: null,
+							}
+						})}
+						events={markers.filter((m) => m.date === hoveredDate).map((m) => m.label)}
+					/>
+				)}
 			</div>
 
 			{/* The readout. Every series at the hovered date, so the co-movement question is answered
@@ -1177,6 +1323,11 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 							? tickLabel(new Date(`${hoveredDate}T00:00:00Z`))
 							: 'Hover the chart to read a day'}
 				</Text>
+				{/* The same figures the floating card shows, kept here for the keyboard path and for
+				    assistive technology: the card is positioned from a pointer coordinate, and a
+				    reader stepping the chart with arrow keys needs the values announced in the live
+				    region rather than drawn next to a crosshair they cannot see. Visually redundant
+				    with the card by design — this is the accessible copy, not a second display. */}
 				{hoveredDate && series.map((row) => {
 					const point = row.points.find((p) => p.date === hoveredDate)
 					const seen = row.shortfall?.points.find((p) => p.date === hoveredDate)
@@ -1184,9 +1335,6 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						<Text key={row.key} size={0} muted>
 							{row.label}:{' '}
 							{point && point.value !== null ? formatValue(point.value, row.unit, currency) : '—'}
-							{/* The constituent source, revealed alongside rather than instead. Reading
-							    "2,356 · GA4 saw 475" is the whole point: one answer, and how much of
-							    it your analytics could account for. */}
 							{seen && seen.value !== null && (
 								<> · {row.shortfall?.source} saw {formatValue(seen.value, row.unit, currency)}</>
 							)}
@@ -1239,7 +1387,54 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 }
 
 /** Chart frame. */
-const frameStyle: React.CSSProperties = { width: '100%', overflow: 'hidden' }
+/**
+ * The floating card.
+ *
+ * Its ground is the Studio's own card colour so it reads as a surface rather than a tooltip drawn
+ * by the chart, and it carries a border because at low contrast a shadow alone disappears on the
+ * dark theme.
+ */
+const hoverCard: React.CSSProperties = {
+	position: 'absolute',
+	top: 8,
+	// Never the element under the pointer: the card follows the crosshair, and taking a pointer
+	// event would end the hover that positions it.
+	pointerEvents: 'none',
+	zIndex: 2,
+	minWidth: 168,
+	maxWidth: 260,
+	padding: '8px 10px',
+	borderRadius: 4,
+	background: 'var(--card-bg-color, #ffffff)',
+	border: '1px solid var(--card-border-color, rgba(128,128,128,0.35))',
+	boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
+	display: 'flex',
+	flexDirection: 'column',
+	gap: 4,
+}
+
+/** The day, which is the card's heading. */
+const hoverDate: React.CSSProperties = { fontSize: 11, fontWeight: 600, opacity: 0.9, marginBottom: 2 }
+
+/** One series line: swatch, name, value. */
+const hoverRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, lineHeight: 1.4 }
+
+/** The colour block, matching the one beside the row's name in the plot. */
+const hoverSwatch: React.CSSProperties = { width: 8, height: 8, borderRadius: 2, flex: '0 0 auto' }
+
+/** The series name, which yields its space to the figure. */
+const hoverLabel: React.CSSProperties = { opacity: 0.75, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
+
+/** The figure, pushed right and tabular so a column of them lines up. */
+const hoverValue: React.CSSProperties = { marginLeft: 'auto', fontVariantNumeric: 'tabular-nums', fontWeight: 500, whiteSpace: 'nowrap' }
+
+/** What the lossier source saw of the same thing, quieter than the answer it qualifies. */
+const hoverSeen: React.CSSProperties = { opacity: 0.6, fontWeight: 400 }
+
+/** A campaign send or other dated marker on the hovered day. */
+const hoverEvent: React.CSSProperties = { fontSize: 11, opacity: 0.8, borderTop: '1px solid var(--card-border-color, rgba(128,128,128,0.25))', paddingTop: 4, marginTop: 2 }
+
+const frameStyle: React.CSSProperties = { width: '100%', overflow: 'hidden', position: 'relative' }
 
 /**
  * The hover readout: every series at one date, wrapping on a narrow pane.

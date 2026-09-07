@@ -815,7 +815,44 @@ export interface SortColumn<Row> {
 	 * currency, and a column with a fallback displays something `sortValue` returns null for.
 	 */
 	exportValue?: (row: Row) => number | string | null
+	/**
+	 * Keep this column even when every value in it is blank or zero.
+	 *
+	 * For the column that identifies the row — a table whose first column collapsed would be a list
+	 * of numbers belonging to nothing — and for any column whose emptiness is itself the finding.
+	 */
+	alwaysShow?: boolean
 	render: (row: Row) => React.ReactNode
+}
+
+/**
+ * Whether a column holds nothing worth a column.
+ *
+ * Empty means MEASURED and nothing: every visible row returns zero, or an empty string. A table of
+ * a foundry's ten families with a Purchases column reading 0 ten times is the case this exists for
+ * — the column is as wide as its heading and says only "not this one".
+ *
+ * NULL DOES NOT COUNT, and that is the whole distinction this package is built on. A column where
+ * every value is unavailable is not an empty column, it is the finding that something could not be
+ * measured — GA4 attributing no revenue to any source is the loudest thing the acquisition table
+ * can tell you, and folding it away would turn the tool's best output into an absence the reader
+ * never sees. A column of dashes is meant to be uncomfortable.
+ *
+ * This is still the one place in the package where a measured zero is treated as nothing, and it
+ * is safe only because the table SAYS how many columns it folded and gives them back in one click.
+ *
+ * @param column - the column under test
+ * @param rows - the rows actually on screen, after filtering and exclusion
+ */
+export function columnIsEmpty<Row>(column: SortColumn<Row>, rows: Row[]): boolean {
+	if (column.alwaysShow) return false
+	// A table with no rows has no empty columns — it has no columns' worth of evidence either way,
+	// and folding every column of an empty table leaves a heading strip and nothing under it.
+	if (rows.length === 0) return false
+	return rows.every((row) => {
+		const value = column.sortValue(row)
+		return value === 0 || value === ''
+	})
 }
 
 /** Props for SortableTable. */
@@ -873,6 +910,9 @@ export function SortableTable<Row>({
 	const [query, setQuery] = React.useState('')
 	const [excluded, setExcluded] = React.useState<ReadonlySet<string>>(() => new Set())
 	const [copied, setCopied] = React.useState<'idle' | 'done' | 'failed'>('idle')
+	// Off by default: the empty columns are the noise this hides. The control below says how many,
+	// so the reduction is announced rather than silent.
+	const [showEmpty, setShowEmpty] = React.useState(false)
 	// Held so repeated clicks cannot stack timers and revert the label early, and so the pending
 	// one is cleared on unmount.
 	const copyTimer = React.useRef<number | null>(null)
@@ -891,6 +931,24 @@ export function SortableTable<Row>({
 			return filterOn(row).toLowerCase().includes(needle)
 		})
 	}, [rows, query, excluded, filterOn, rowKey])
+
+	/**
+	 * The columns actually drawn.
+	 *
+	 * Computed from `visible`, not from every row: narrowing the range or filtering the table can
+	 * empty a column, and a column that is empty for what is on screen is noise for what is on
+	 * screen. The first column is always kept — it names the row — as is whatever is being sorted
+	 * on, because folding the sorted column would leave the order unexplained.
+	 */
+	const emptyColumns = React.useMemo(
+		() => columns.filter((column, index) =>
+			index > 0 && column.key !== sort?.key && columnIsEmpty(column, visible),
+		),
+		[columns, visible, sort?.key],
+	)
+	const shown = showEmpty || emptyColumns.length === 0
+		? columns
+		: columns.filter((column) => !emptyColumns.includes(column))
 
 	const ordered = React.useMemo(() => {
 		const rows = visible
@@ -927,8 +985,10 @@ export function SortableTable<Row>({
 	 * silently differs from the table above it is worse than none.
 	 */
 	const copyCsv = async () => {
-		const header = columns.map((column) => column.label)
-		const lines = [header, ...ordered.map((row) => columns.map((column) => {
+		// What is on screen, columns included. A CSV carrying columns the table folded would not be
+		// the thing the button says it copies, and every one of them would be a column of zeros.
+		const header = shown.map((column) => column.label)
+		const lines = [header, ...ordered.map((row) => shown.map((column) => {
 			// `exportValue` where a column defines one, because `sortValue` is a SORT KEY and is
 			// routinely a different thing from what the cell shows: engagement sorts on 0.4318 and
 			// displays 43%, revenue sorts on a bare number and displays a currency, and campaign
@@ -969,7 +1029,7 @@ export function SortableTable<Row>({
 
 	return (
 		<Stack space={2}>
-			{(filterOn || exportName) && (
+			{(filterOn || exportName || emptyColumns.length > 0) && (
 				<div style={tableControls}>
 					{filterOn && (
 						<input
@@ -996,6 +1056,21 @@ export function SortableTable<Row>({
 						</Text>
 					)}
 					<span style={{ flex: 1 }} />
+					{/* Named with a count, not a bare "show all". A reader has to be able to tell the
+					    difference between a table with four columns and a table showing four of
+					    seven — otherwise this is the tool deciding what the data says. */}
+					{emptyColumns.length > 0 && (
+						<button
+							type="button"
+							style={tableControlButton}
+							aria-pressed={showEmpty}
+							onClick={() => setShowEmpty((open) => !open)}
+						>
+							{showEmpty
+								? `Hide ${emptyColumns.length} empty column${emptyColumns.length === 1 ? '' : 's'}`
+								: `Show ${emptyColumns.length} empty column${emptyColumns.length === 1 ? '' : 's'}`}
+						</button>
+					)}
 					{exportName && (
 						<button type="button" style={tableControlButton} onClick={() => void copyCsv()}>
 							{copied === 'done' ? 'Copied' : copied === 'failed' ? 'Could not copy' : 'Copy as CSV'}
@@ -1009,7 +1084,7 @@ export function SortableTable<Row>({
 				<caption style={visuallyHidden}>{caption}</caption>
 				<thead>
 					<tr>
-						{columns.map((column) => {
+						{shown.map((column) => {
 							const isActive = sort?.key === column.key
 							return (
 								<th
@@ -1036,7 +1111,7 @@ export function SortableTable<Row>({
 						const key = rowKey(row)
 						return (
 							<tr key={key}>
-								{columns.map((column, index) => {
+								{shown.map((column, index) => {
 									const content = column.render(row)
 									return index === 0 ? (
 										<th key={column.key} scope="row" style={bodyCell}>

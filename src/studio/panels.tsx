@@ -982,18 +982,25 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 									{/* A referrer host is a real destination, so it links. GA4's own
 									    buckets — (direct), (not set) — are not hosts and must not
 									    pretend to be, so only a dotted hostname gets an anchor. */}
-									{isLinkableHost(row.source)
-										? (
-											<a
-												href={`https://${row.source}`}
-												target="_blank"
-												rel="noopener noreferrer"
-												style={sourceLink}
-											>
-												{row.source}
-											</a>
-										)
-										: <Text size={1}>{row.source}</Text>}
+									{/* Inside Text, not beside it. A bare anchor inherited the cell's default
+									    size while the plain branch was sized by Text, so whether a source
+									    linked changed how big it was — the rows read as two ranks of
+									    importance when the only difference is that one is a real host.
+									    The underline is what says it is a link. */}
+									<Text size={1}>
+										{isLinkableHost(row.source)
+											? (
+												<a
+													href={`https://${row.source}`}
+													target="_blank"
+													rel="noopener noreferrer"
+													style={sourceLink}
+												>
+													{row.source}
+												</a>
+											)
+											: row.source}
+									</Text>
 									{row.designIndustry && <Badge tone="primary" fontSize={0}>Design</Badge>}
 									{row.unattributed && <Badge tone="caution" fontSize={0}>Unattributed</Badge>}
 								</div>
@@ -1205,7 +1212,11 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 								// the foundry's own URLs were the one table that did not link while
 								// referrer hosts did, and then rendered plain text. A comment asserting
 								// something the code does not do is worse than no comment.
-								render: (page) => <a href={page.path} target="_blank" rel="noopener noreferrer" style={sourceLink}>{page.path}</a>,
+								render: (page) => (
+									<Text size={1}>
+										<a href={page.path} target="_blank" rel="noopener noreferrer" style={sourceLink}>{page.path}</a>
+									</Text>
+								),
 							},
 							{
 								key: 'sessions',

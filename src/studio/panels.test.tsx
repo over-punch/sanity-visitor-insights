@@ -18,11 +18,12 @@ import { calendarDays } from '../server/reports/measurementHealth'
 import { dailyWindows } from '../server/vercel'
 import { zonedDay } from '../server/orders'
 import { formatInTimeZone } from '../core/ranges'
-import { formatCount, formatMoney } from './Figure'
+import { SortableTable, columnIsEmpty, formatCount, formatMoney } from './Figure'
 import { decodeView, encodeView, mergeIntoHash } from './urlState'
 import { captureModel, fromOrders, fromPageviews, grossUp } from '../core/capture'
 import { forgetShortfalls, knownShortfall, rememberShortfall } from './useReport'
-import { CrossSourceTimeline, dayIndexAt, findCoverageIncident } from './CrossSourceTimeline'
+import { CrossSourceTimeline, HoverCard, colorFor, dayIndexAt, findCoverageIncident } from './CrossSourceTimeline'
+import { SERIES } from './palette'
 import React from 'react'
 import {
 	AcquisitionPanel,
@@ -868,6 +869,12 @@ describe('capture model rendering', () => {
 	})
 })
 
+/** The `r, g, b` of a hex, as `seriesFill` writes it into an rgba() string. */
+function rgbOf(hex: string): string {
+	const part = (at: number) => parseInt(hex.slice(at, at + 2), 16)
+	return `${part(1)}, ${part(3)}, ${part(5)}`
+}
+
 describe('CrossSourceTimeline', () => {
 	const days = ['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-05']
 	const base = {
@@ -913,8 +920,9 @@ describe('CrossSourceTimeline', () => {
 		const html = render(<OverviewPanel data={base as never} />)
 		expect(html).toContain('what your analytics did not see')
 		expect(html).toContain('what your analytics did not see')
-		// A filled region, not an outline.
-		expect(html).toMatch(/<path d="M[^"]*" fill="currentColor"/)
+		// A filled region, not an outline — and filled in the LOSSIER source's colour, because the
+		// area is what that source missed rather than a property of the complete line above it.
+		expect(html).toMatch(new RegExp(`<path d="M[^"]*" fill="rgba\\(${rgbOf(SERIES.ga4Pageviews)}`))
 	})
 
 	it('offers a non-pointer route to the per-source detail', () => {
@@ -1380,9 +1388,11 @@ describe('discrete events are not drawn as a continuous line', () => {
 		// A monotone curve through two points spread over a month drew a smooth rise and fall
 		// across twenty-eight days on which nothing happened.
 		const html = render(<OverviewPanel data={data as never} />)
-		// fill="currentColor" is what makes it a data mark. The per-row clip rect lives in <defs>
-		// and carries no fill, so it must not be counted.
-		const rects = (html.match(/<rect[^>]*>/g) ?? []).filter((r) => r.includes('fill="currentColor"'))
+		// A fill is what makes it a data mark. The per-row clip rect lives in <defs> and carries no
+		// fill, so it must not be counted. Orders draw in the orders colour, which is also the
+		// assertion that the row picked up its series colour at all.
+		const rects = (html.match(/<rect[^>]*>/g) ?? [])
+			.filter((r) => r.includes(`fill="${SERIES.orders}"`) && !r.includes('data-swatch'))
 		const stems = rects.filter((r) => !/height="3"/.test(r))
 		expect(stems.length).toBe(2)
 	})
@@ -1391,9 +1401,11 @@ describe('discrete events are not drawn as a continuous line', () => {
 		// Drawing nothing for a zero made "no sales that day" identical to "Sanity reported nothing
 		// for that day" — the distinction this package's figure primitives exist to keep.
 		const html = render(<OverviewPanel data={data as never} />)
-		// fill="currentColor" is what makes it a data mark. The per-row clip rect lives in <defs>
-		// and carries no fill, so it must not be counted.
-		const rects = (html.match(/<rect[^>]*>/g) ?? []).filter((r) => r.includes('fill="currentColor"'))
+		// A fill is what makes it a data mark. The per-row clip rect lives in <defs> and carries no
+		// fill, so it must not be counted. Orders draw in the orders colour, which is also the
+		// assertion that the row picked up its series colour at all.
+		const rects = (html.match(/<rect[^>]*>/g) ?? [])
+			.filter((r) => r.includes(`fill="${SERIES.orders}"`) && !r.includes('data-swatch'))
 		expect(rects.filter((r) => /height="3"/.test(r)).length).toBe(28)
 	})
 
@@ -1406,9 +1418,11 @@ describe('discrete events are not drawn as a continuous line', () => {
 			),
 		}
 		const html = render(<OverviewPanel data={gappy as never} />)
-		// fill="currentColor" is what makes it a data mark. The per-row clip rect lives in <defs>
-		// and carries no fill, so it must not be counted.
-		const rects = (html.match(/<rect[^>]*>/g) ?? []).filter((r) => r.includes('fill="currentColor"'))
+		// A fill is what makes it a data mark. The per-row clip rect lives in <defs> and carries no
+		// fill, so it must not be counted. Orders draw in the orders colour, which is also the
+		// assertion that the row picked up its series colour at all.
+		const rects = (html.match(/<rect[^>]*>/g) ?? [])
+			.filter((r) => r.includes(`fill="${SERIES.orders}"`) && !r.includes('data-swatch'))
 		// 30 days; days 0-9 unmeasured, which swallows the order on day 4. That leaves 20 measured
 		// days carrying one order: 19 zero ticks and 1 stem.
 		expect(rects.filter((r) => /height="3"/.test(r)).length).toBe(19)
@@ -2734,5 +2748,158 @@ describe('the email campaigns table', () => {
 		// the normal state of this repo for a while after every release.
 		const html = render(<OverviewPanel data={overview([campaign]) as never} />)
 		expect(html).toContain('Freight release')
+	})
+})
+
+describe('the floating hover card', () => {
+	const rows = [
+		{ key: 'traffic', label: 'Pageviews', color: SERIES.vercel, value: '2,356', seen: 'GA4 475' },
+		{ key: 'revenue', label: 'Revenue', color: SERIES.revenue, value: 'US$910', seen: null },
+	]
+
+	it('carries each series colour as a block beside its name', () => {
+		// The card and the plot share one legend. A value with no swatch sends the reader back to
+		// the chart to work out which line it belongs to, which is what the card exists to avoid.
+		const html = render(<HoverCard x={100} paneWidth={600} date="20 Aug" rows={rows} events={[]} />)
+		expect(html).toContain(SERIES.vercel)
+		expect(html).toContain(SERIES.revenue)
+		expect(html).toContain('Pageviews')
+		expect(html).toContain('2,356')
+		expect(html).toContain('GA4 475')
+	})
+
+	it('never takes the pointer, which would end the hover positioning it', () => {
+		const html = render(<HoverCard x={100} paneWidth={600} date="20 Aug" rows={rows} events={[]} />)
+		expect(html).toMatch(/pointer-events:\s*none/)
+	})
+
+	it('sits to the right of the crosshair in the left of the pane', () => {
+		const html = render(<HoverCard x={100} paneWidth={600} date="20 Aug" rows={rows} events={[]} />)
+		expect(html).toMatch(/left:\s*114px/)
+	})
+
+	it('flips to the left rather than hanging off the right edge', () => {
+		// The last week of a range is the part most often read. Clamping instead would park the card
+		// on top of the days it describes for the whole right-hand edge.
+		const html = render(<HoverCard x={560} paneWidth={600} date="4 Sep" rows={rows} events={[]} />)
+		expect(html).toMatch(/right:\s*54px/)
+		expect(html).not.toMatch(/left:\s*574px/)
+	})
+
+	it('shows a campaign send on the day it landed', () => {
+		const html = render(<HoverCard x={100} paneWidth={600} date="20 Aug" rows={rows} events={['Freight release']} />)
+		expect(html).toContain('Freight release')
+	})
+})
+
+describe('colorFor', () => {
+	it('gives the complete source its own colour, not one shared with the lossy one', () => {
+		expect(SERIES[colorFor('Vercel', 'count')]).toBe(SERIES.vercel)
+		expect(colorFor('Vercel', 'count')).not.toBe(colorFor('GA4', 'count'))
+	})
+
+	it('keeps GA4 in one family across both its units', () => {
+		// Same instrument, two units. The palette says so; a reader should not have to.
+		const pageviews = colorFor('GA4', 'count')
+		const percent = colorFor('GA4', 'percent')
+		expect([pageviews, percent].every((k) => k.startsWith('ga4'))).toBe(true)
+	})
+
+	it('splits Sanity by unit, because a foundry reads orders and money as different things', () => {
+		expect(colorFor('Sanity', 'count')).toBe('orders')
+		expect(colorFor('Sanity', 'money')).toBe('revenue')
+	})
+
+	it('lets a caller override where the source does not decide the meaning', () => {
+		// Coverage is computed FROM two sources and belongs to neither.
+		expect(colorFor('GA4', 'percent', 'vercel')).toBe('vercel')
+	})
+})
+
+describe('folding away empty columns', () => {
+	const rows = [{ name: 'Freight', views: 40, purchases: 0, revenue: null }, { name: 'Gamay', views: 12, purchases: 0, revenue: null }]
+	const column = (key: string, get: (r: typeof rows[0]) => number | string | null, extra = {}) =>
+		({ key, label: key, sortValue: get, render: () => null, ...extra })
+
+	it('folds a column that is measured zero all the way down', () => {
+		// Ten families and a Purchases column reading 0 ten times: a column as wide as its heading
+		// that says only "not this one".
+		expect(columnIsEmpty(column('purchases', (r) => r.purchases), rows)).toBe(true)
+	})
+
+	it('keeps a column that could not be measured, because that is the finding', () => {
+		// The distinction the whole package turns on. A column of dashes says an instrument failed;
+		// folding it would delete the loudest thing the table can report.
+		expect(columnIsEmpty(column('revenue', (r) => r.revenue), rows)).toBe(false)
+	})
+
+	it('keeps a column with any value in it', () => {
+		expect(columnIsEmpty(column('views', (r) => r.views), rows)).toBe(false)
+	})
+
+	it('keeps a column that asked to stay', () => {
+		expect(columnIsEmpty(column('purchases', (r) => r.purchases, { alwaysShow: true }), rows)).toBe(false)
+	})
+
+	it('folds nothing when there are no rows to judge by', () => {
+		// An empty table folded to its first column is a heading strip with nothing under it, and
+		// says "no columns" where the truth is "no rows".
+		expect(columnIsEmpty(column('purchases', (r) => r.purchases), [])).toBe(false)
+	})
+
+	it('never folds the column that names the row, even when it is empty', () => {
+		// A table folded to its figures is a grid of numbers belonging to nothing. The first column
+		// is the row's identity whatever its values happen to be.
+		const html = render(
+			<SortableTable
+				caption="Families"
+				rowKey={(r: { id: string }) => r.id}
+				rows={[{ id: 'a' }, { id: 'b' }]}
+				columns={[
+					{ key: 'name', label: 'Family', sortValue: () => '', render: () => null },
+					{ key: 'views', label: 'Views', sortValue: () => 5, render: () => null },
+				]}
+			/>,
+		)
+		expect(html).toContain('Family')
+	})
+
+	it('never folds the column being sorted on', () => {
+		// Folding it would leave the rows in an order with nothing on screen to explain it.
+		const html = render(
+			<SortableTable
+				caption="Families"
+				rowKey={(r: { id: string }) => r.id}
+				initialSort="purchases"
+				rows={[{ id: 'a' }, { id: 'b' }]}
+				columns={[
+					{ key: 'name', label: 'Family', sortValue: (r: { id: string }) => r.id, render: () => null },
+					{ key: 'purchases', label: 'Purchases', sortValue: () => 0, render: () => null },
+				]}
+			/>,
+		)
+		expect(html).toContain('Purchases')
+	})
+
+	it('offers the folded columns back, naming how many', () => {
+		// Nothing may be hidden silently. Without the count the tool is deciding what the data says.
+		const data = {
+			rows: [
+				// Engagement measured at zero on every row — a real column of real zeros, which is
+				// what folding is for. Revenue stays null, so it must survive as a column of dashes.
+				{ source: 'fontsinuse.com', channel: 'Referral', medium: 'referral', campaign: null, sessions: 120,
+					engagedSessions: 0, engagementRate: 0, designIndustry: true, unattributed: false,
+					purchases: 0, revenueShare: null, trackedRevenue: 0, apportionedRevenue: null },
+				{ source: 'typographica.org', channel: 'Referral', medium: 'referral', campaign: null, sessions: 40,
+					engagedSessions: 0, engagementRate: 0, designIndustry: true, unattributed: false,
+					purchases: 0, revenueShare: null, trackedRevenue: 0, apportionedRevenue: null },
+			],
+			totalSessions: 120, designIndustryShare: 0.3, unattributedShare: 0.1,
+			rowsWithheld: false, rowsTruncated: false, campaigns: [],
+		}
+		const html = render(<AcquisitionPanel data={data as never} />)
+		expect(html).toMatch(/Show \d+ empty columns?/)
+		// And the column that could not be measured is still on screen, as dashes.
+		expect(html).toContain('Revenue, split')
 	})
 })
