@@ -12,6 +12,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_TTL_MS, cacheKey, clearCache, getCached, setCached, withCache } from './cache'
+import { sourceFailed } from './createHandler'
 
 describe('cacheKey', () => {
 	beforeEach(() => { clearCache() })
@@ -132,5 +133,39 @@ describe('withCache', () => {
 		await expect(withCache('k', 60_000, async () => { throw new Error('upstream down') }))
 			.rejects.toThrow('upstream down')
 		expect(getCached('k')).toBeUndefined()
+	})
+})
+
+describe('sourceFailed reaches the metrics reports actually publish', () => {
+	const failed = { status: 'unavailable', reason: 'source_error', detail: 'GA4 down' }
+	const fine = { status: 'ok', value: 42 }
+
+	it('sees a top-level metric, as measurement-health publishes them', () => {
+		expect(sourceFailed({ ga4Pageviews: failed, orders: fine })).toBe(true)
+	})
+
+	it('sees a metric inside an array of steps, as journey publishes them', () => {
+		// The first version looked only at top-level fields, on the premise that every metric is one.
+		// journey's counts live in steps[].count and outcomes[].count, so a transient failure there
+		// was cached for the full five minutes instead of twenty seconds.
+		expect(sourceFailed({ steps: [{ key: 'landed', count: fine }, { key: 'bought', count: failed }] })).toBe(true)
+	})
+
+	it('sees a metric inside a table row, as typeface interest publishes them', () => {
+		expect(sourceFailed({ rows: [{ typeface: 'Freight', viewed: fine, revenue: failed }] })).toBe(true)
+	})
+
+	it('does not report a healthy envelope as failed', () => {
+		expect(sourceFailed({ rows: [{ viewed: fine }], steps: [{ count: fine }] })).toBe(false)
+	})
+
+	it('ignores an absence that is not a source failure', () => {
+		// A figure this site does not instrument is not an outage, and must not shorten the TTL.
+		expect(sourceFailed({ consentRate: { status: 'unavailable', reason: 'not_instrumented' } })).toBe(false)
+	})
+
+	it('stops at its depth limit rather than walking an arbitrary payload', () => {
+		// The bound is what keeps this off the critical path of every response.
+		expect(sourceFailed({ a: { b: { c: { d: failed } } } })).toBe(false)
 	})
 })

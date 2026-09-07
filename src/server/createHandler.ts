@@ -312,7 +312,7 @@ export function createVisitorInsightsHandler(options: HandlerOptions) {
 				 * A source that failed says so in the metrics it could not produce, which is the only
 				 * signal that reflects what actually happened on this request.
 				 */
-				return sourceFailed(envelope) ? Math.min(ttl, 20_000) : ttl
+				return sourceFailed(envelope.data) ? Math.min(ttl, 20_000) : ttl
 			})
 
 			res.status(200).json(envelope)
@@ -343,20 +343,27 @@ interface RunContext {
  * this request. `sources` cannot be used — it is built from configuration before any report runs
  * and no report mutates it, so it says the same thing on a healthy load and a failing one.
  *
- * Shallow on purpose. Every metric a report publishes is a top-level field of its data object, and
- * walking arbitrary depth would put an unbounded traversal on the response path of every request.
+ * BOUNDED-DEPTH, not shallow. The first version only looked at top-level fields, on the stated
+ * premise that every metric a report publishes is one — which is false for three of the four
+ * reports: journey's counts live in `steps[].count` and `outcomes[].count`, and typeface interest's
+ * in `rows[].{viewed,tested,bought,revenue}`. So the twenty-second degraded TTL only ever fired for
+ * measurement-health, and a transient failure on any other tab was cached for five minutes.
  *
- * @param envelope - the report envelope about to be cached
+ * The depth limit is what keeps this off the critical path. Four levels is what the deepest payload
+ * needs — data, then the array, then the row, then the metric — and a first attempt at three fell one
+ * short of exactly the nested cases this exists for, which the tests caught.
+ *
+ * @param value - the envelope's data, or a nested part of it
+ * @param depth - how many levels remain to inspect
  */
-function sourceFailed(envelope: ReportEnvelope<unknown>): boolean {
-	const data = envelope.data
-	if (!data || typeof data !== 'object') return false
-	return Object.values(data as Record<string, unknown>).some((value) => (
-		!!value
-		&& typeof value === 'object'
-		&& (value as { status?: string }).status === 'unavailable'
-		&& (value as { reason?: string }).reason === 'source_error'
-	))
+export function sourceFailed(value: unknown, depth = 4): boolean {
+	if (!value || typeof value !== 'object' || depth <= 0) return false
+
+	const candidate = value as { status?: string; reason?: string }
+	if (candidate.status === 'unavailable' && candidate.reason === 'source_error') return true
+
+	const children = Array.isArray(value) ? value : Object.values(value as Record<string, unknown>)
+	return children.some((child) => sourceFailed(child, depth - 1))
 }
 
 /** Dispatch to a report by name. A plain switch, so the set of reachable code paths is closed. */

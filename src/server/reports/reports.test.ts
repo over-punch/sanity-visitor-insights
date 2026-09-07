@@ -1930,3 +1930,33 @@ describe('a family whose orders carry no total is not shown as zero revenue', ()
 		}
 	})
 })
+
+describe('a multi-family order splits its total rather than counting it whole', () => {
+	it('apportions revenue across the families on the order', () => {
+		// `value / keys.length`. Counting the whole order total against every family it covers would
+		// report a foundry-wide licence three times over, and the per-family ranking — which is what a
+		// pricing decision reads — would be built from a revenue figure larger than the takings.
+		let captured: Record<string, unknown> | undefined
+		const client = {
+			fetch: (_q: string, p: Record<string, unknown>) => { captured = p; return Promise.resolve([
+				{ _createdAt: '2026-08-21T10:00:00Z', status: 'verified', orderTotal: 900, typefaces: [{ title: 'A' }, { title: 'B' }, { title: 'C' }] },
+			]) },
+		} as never
+
+		return countOrdersByTypeface(
+			client,
+			orderQueryOptions({
+				documentType: 'order', statusField: 'orderStatus.status', countedStatuses: ['verified'],
+				totalField: 'orderTotal',
+			}, range),
+			'typefaces',
+		).then((counts) => {
+			expect(captured).toBeDefined()
+			expect(counts?.byTypeface).toEqual({ A: 1, B: 1, C: 1 })
+			// 900 split three ways, not 900 against each.
+			expect(counts?.revenueByTypeface?.A).toBeCloseTo(300, 6)
+			const total = Object.values(counts?.revenueByTypeface ?? {}).reduce((s, v) => s + v, 0)
+			expect(total).toBeCloseTo(900, 6)
+		})
+	})
+})

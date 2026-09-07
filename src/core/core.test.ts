@@ -12,6 +12,7 @@ import { RANGE_DAYS, daysBetween, formatInTimeZone, previousRange, provisionalNo
 import { validateSiteConfig } from './siteConfig'
 import { captureModel, fromEmail, fromOrders, fromPageviews, grossUp } from './capture'
 import { zonedDayEndUtc, zonedDayStartUtc } from './ranges'
+import { coverageForAny } from './cutover'
 import { ENV_VARS, isEnabled } from '../server/createHandler'
 import { valueOrNull } from '../types'
 
@@ -575,5 +576,33 @@ describe('an outage ends on the day recording resumed', () => {
 	it('still catches a range ending inside the outage', () => {
 		const coverage = coverageForRange(cutovers, 'purchase', { start: '2026-05-01', end: '2026-06-10' })
 		expect(coverage.status).not.toBe('full')
+	})
+})
+
+describe('coverageForAny takes the best coverage, not the first', () => {
+	// A tester step maps several events, and a site may have instrumented them at different times.
+	// Taking the first would report the whole step as uninstrumented because one of its aliases was,
+	// hiding data the site does have.
+	const cutovers = {
+		style_change: { from: '2026-01-01' },
+		variable_font_change: { from: PREEXISTING },
+	}
+	const range = { start: '2026-06-01', end: '2026-06-30' }
+
+	it('prefers a fully covered alias over an uncovered one', () => {
+		expect(coverageForAny(cutovers, ['unknown_event', 'variable_font_change'], range).status).toBe('full')
+	})
+
+	it('prefers a partially covered alias over none', () => {
+		const partial = { a: { from: '2026-06-15' }, b: {} as never }
+		expect(coverageForAny(partial, ['b', 'a'], range).status).toBe('partial')
+	})
+
+	it('reports unknown only when no alias is covered at all', () => {
+		expect(coverageForAny(cutovers, ['nope', 'also_nope'], range).status).toBe('none')
+	})
+
+	it('reports unknown for an empty alias list rather than throwing', () => {
+		expect(coverageForAny(cutovers, [], range).status).toBe('none')
 	})
 })

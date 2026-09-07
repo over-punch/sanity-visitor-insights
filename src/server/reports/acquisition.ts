@@ -326,7 +326,14 @@ export async function acquisition(input: AcquisitionInput): Promise<AcquisitionD
 			// A diagnosable fault in its own right: the purchase event is firing and being attributed,
 			// but carrying no value, so GA4 knows a sale happened and not what it was worth.
 			? `GA4 attributed ${trackedPurchases} purchase${trackedPurchases === 1 ? '' : 's'} to a source but recorded no revenue against them, so there is no shape to split your takings by. The purchase event is firing without its value.`
-			: coverage !== null && coverage > MAX_COVERAGE
+			: coverage === null
+				// The gate that failed was `coverage !== null`, not the count — so "only N purchases,
+				// choose a longer range" was wrong twice: N may be well above the floor, and a longer
+				// range cannot supply an order count that was never read. createHandler pushes a
+				// truthful notice when the query THROWS, but not when no Sanity client was supplied,
+				// so this could be the only explanation on screen.
+				? 'Your orders could not be read for this range, so there is nothing to check GA4\u2019s attribution against and revenue cannot be split by channel.'
+				: coverage > MAX_COVERAGE
 				// Over-attribution is a finding, not a shortage. Reporting it as "too few" would send
 				// the reader to widen the range, which makes a double-firing tag worse, not better.
 				? `GA4 attributed ${trackedPurchases} purchases to a source but you only have ${actuals?.orders} orders in this range. It is counting sales that did not happen — usually a purchase tag firing twice — so its split cannot be trusted.`
