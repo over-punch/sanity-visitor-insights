@@ -21,7 +21,7 @@
 import type { CrossSourceDay, EmailCampaign, MeasurementHealthData, DailyPoint, TimelineEvent } from '../../reportData'
 import { provisionalDates } from '../../core/ranges'
 import type { DateRange, MetricValue } from '../../types'
-import { estimated, ok, unavailable } from '../../types'
+import { partial, estimated, ok, unavailable } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
 import { coverageForAny } from '../../core/cutover'
 import { captureModel, fromEmail, fromOrders, fromPageviews, grossUp, type CaptureModel } from '../../core/capture'
@@ -397,9 +397,28 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 			// same sin this file's other comments congratulate themselves for fixing. It is also
 			// the figure the owner opens the tool for, and the only one in the package that GA4's
 			// collapse could not touch.
+			/*
+			 * PARTIAL when orders are missing their total, not ok().
+			 *
+			 * Checked against Darden's live data: 11 of 69 counted orders carry `amountCharged`. So
+			 * the Revenue headline — and the scale the whole channel split is apportioned across — was
+			 * built from a sixth of the orders and presented as the period's revenue. The notice
+			 * saying so is a standing caveat, which renders below the panel; a figure this incomplete
+			 * has to say it at the number.
+			 *
+			 * `partial` is exactly this distinction and the panel already renders it differently from
+			 * a measured figure. Any missing total makes the sum an undercount, so the threshold is
+			 * one, and the note carries the ratio rather than a vague warning.
+			 */
 			revenue = counts.revenue === null
 				? unavailable('not_applicable', 'No order total field is configured for this site')
-				: ok(counts.revenue)
+				: counts.ordersMissingTotal > 0
+					? partial(
+						counts.revenue,
+						range.start,
+						`Covers ${counts.total - counts.ordersMissingTotal} of ${counts.total} counted orders — the rest carry no amount, so real revenue is higher.`,
+					)
+					: ok(counts.revenue)
 			currency = config.orders.currency ?? null
 			orderStatuses = counts.byStatus
 			if (counts.ordersMissingTotal > 0) {

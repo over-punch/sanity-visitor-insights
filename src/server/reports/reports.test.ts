@@ -2083,3 +2083,50 @@ describe('the revenue split refuses what it cannot check', () => {
 		expect(data.splitIsSound).toBe(true)
 	})
 })
+
+describe('revenue says when it covers only some of the orders', () => {
+	const orders = (withTotal: number, withoutTotal: number) => [
+		...Array.from({ length: withTotal }, (_, i) => ({
+			_createdAt: `2026-08-2${i % 5}T10:00:00Z`, status: 'verified', orderTotal: 4400,
+		})),
+		...Array.from({ length: withoutTotal }, (_, i) => ({
+			_createdAt: `2026-08-2${i % 5}T11:00:00Z`, status: 'verified', orderTotal: null,
+		})),
+	]
+
+	it('reports a partial figure when some counted orders carry no amount', async () => {
+		// Checked against Darden's live data: 11 of 69 counted orders carry an amount, so the Revenue
+		// headline was built from a sixth of them and presented as the period's revenue. The notice
+		// saying so is a standing caveat and renders below the panel.
+		const data = await measurementHealth({
+			config: siteConfig({ orders: {
+				documentType: 'order', statusField: 'orderStatus.status',
+				countedStatuses: ['verified'], totalField: 'amountCharged', currency: 'USD',
+			} }),
+			range,
+			ga4: createFakeGa4Client({ batch: () => [makeGa4Total(400), makeGa4Report([{ metrics: [400, 320] }]), makeGa4Total(0)] }),
+			vercel: createFakeVercelClient(makeVercelPageviews({ '2026-08-20': 1000 })),
+			sanity: { fetch: () => Promise.resolve(orders(11, 58)) } as never,
+		})
+
+		expect(data.revenue.status).toBe('partial')
+		if (data.revenue.status === 'partial') {
+			expect(data.revenue.note).toContain('11 of 69')
+		}
+	})
+
+	it('reports a plain figure when every counted order carries one', async () => {
+		const data = await measurementHealth({
+			config: siteConfig({ orders: {
+				documentType: 'order', statusField: 'orderStatus.status',
+				countedStatuses: ['verified'], totalField: 'amountCharged', currency: 'USD',
+			} }),
+			range,
+			ga4: createFakeGa4Client({ batch: () => [makeGa4Total(400), makeGa4Report([{ metrics: [400, 320] }]), makeGa4Total(0)] }),
+			vercel: createFakeVercelClient(makeVercelPageviews({ '2026-08-20': 1000 })),
+			sanity: { fetch: () => Promise.resolve(orders(11, 0)) } as never,
+		})
+
+		expect(data.revenue.status).toBe('ok')
+	})
+})

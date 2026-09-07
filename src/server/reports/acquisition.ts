@@ -192,6 +192,8 @@ export async function acquisition(input: AcquisitionInput): Promise<AcquisitionD
 	/** GA4's own revenue per attribution row. Used only for its SHAPE — the unit cancels in a share. */
 	const revenueBySource = new Map<string, number>()
 	let purchasesAvailable = false
+	/** Whether GA4 held more attributed purchases than it returned, making every share a subtotal. */
+	let purchasesTruncated = false
 	try {
 		const purchaseReport = await ga4.runReport({
 			dimensions: [
@@ -232,7 +234,20 @@ export async function acquisition(input: AcquisitionInput): Promise<AcquisitionD
 			notices?.push('GA4 answered the purchase-attribution query from a sample, so the revenue split is approximate even before its own coverage is considered.')
 		}
 		if (purchaseReport.thresholded || purchaseReport.rowCount > purchaseReport.rows.length) {
-			notices?.push('GA4 withheld or truncated some attributed purchases, so the revenue split does not account for every sale it tracked.')
+			/*
+			 * Truncation DISQUALIFIES the split, rather than merely being mentioned beside it.
+			 *
+			 * `trackedRevenue` is summed from the rows that came back, so every share is a share of a
+			 * subtotal presented as a share of the whole — each one inflated by exactly the tail that
+			 * is missing. `metricAggregations: ['TOTAL']` is requested but `metricTotal` carries only
+			 * the FIRST metric, the count, so the revenue denominator cannot be recovered from it.
+			 *
+			 * A notice saying the figures "do not account for every sale" left them on screen to be
+			 * read anyway. This is the same call the design-industry share makes when its row list is
+			 * truncated, and the same one the session denominator makes.
+			 */
+			purchasesTruncated = true
+			notices?.push('GA4 withheld or truncated some attributed purchases, so revenue cannot be split by channel for this range. Choose a shorter range or a narrower window.')
 		}
 
 		for (const row of purchaseReport.rows) {
@@ -301,7 +316,8 @@ export async function acquisition(input: AcquisitionInput): Promise<AcquisitionD
 	// double-firing tag those bounds exist to catch sailed through with the split rendered as sound.
 	// Without the order book there is nothing to check GA4's attribution against, which is a reason
 	// to withhold the split, not to trust it.
-	const splitIsSound = trackedPurchases >= MIN_TRACKED_PURCHASES
+	const splitIsSound = !purchasesTruncated
+		&& trackedPurchases >= MIN_TRACKED_PURCHASES
 		&& trackedRevenue > 0
 		&& coverage !== null
 		&& coverage >= MIN_COVERAGE
