@@ -1960,3 +1960,126 @@ describe('a multi-family order splits its total rather than counting it whole', 
 		})
 	})
 })
+
+describe('behaviours whose comments explain them but whose tests did not', () => {
+	it('takes the largest consent row, never their sum', async () => {
+		// Distinct-user counts across several event rows overlap: anyone who fired two of them is in
+		// both. Summing would exceed the true union and can exceed the user count entirely, which
+		// then trips the "grants exceed users" error on healthy data. The existing test used one row,
+		// so max and sum were indistinguishable.
+		const data = await measurementHealth({
+			config: siteConfig(),
+			range,
+			ga4: createFakeGa4Client({
+				batch: () => [
+					makeGa4Total(400),
+					makeGa4Report([{ metrics: [400, 320] }]),
+					// Three consent event rows, overlapping: 240 is the tightest correct lower bound.
+					makeGa4Report([{ metrics: [240] }, { metrics: [180] }, { metrics: [120] }]),
+				],
+			}),
+			vercel: createFakeVercelClient(makeVercelPageviews({ '2026-08-20': 1000 })),
+			sanity: null,
+		})
+
+		// 240 of 320 users = 75%. The sum, 540, would exceed 320 and report a source error.
+		expect(data.consentRate).toEqual({ status: 'ok', value: 75 })
+	})
+
+	it('withholds the settled shortfall when too few days can be compared', async () => {
+		// A ratio built from one or two shared days is noise wearing a decimal point; the whole-range
+		// totals at least cover one consistent window each.
+		const data = await measurementHealth({
+			config: siteConfig(),
+			range,
+			now: new Date('2026-08-26T12:00:00Z'),
+			ga4: createFakeGa4Client({
+				batch: () => [
+					makeGa4Total(400),
+					makeGa4Report([{ metrics: [400, 320] }]),
+					makeGa4Total(0),
+					makeGa4Report([{ dimensions: ['20260820'], metrics: [80] }, { dimensions: ['20260821'], metrics: [80] }]),
+				],
+			}),
+			// Vercel covers enough of the week to count as a daily series — which is what makes this
+			// reachable — but GA4 reported only two of those days, so just two can be compared.
+			vercel: createFakeVercelClient(makeVercelPageviews({
+				'2026-08-20': 100, '2026-08-21': 100, '2026-08-22': 100,
+				'2026-08-23': 100, '2026-08-24': 100, '2026-08-25': 100,
+			})),
+			sanity: null,
+		})
+
+		// Two shared days would give (200-160)/200 = 0.2. Below the floor it falls back to the
+		// whole-range totals instead, which at least cover one consistent window each.
+		expect(data.shortfallRatio).not.toBeCloseTo(0.2, 5)
+	})
+})
+
+describe('an absent GA4 total is absent, not zero', () => {
+	it('leaves metricTotal undefined when the response carried none', async () => {
+		// toMetricNumber yields NaN for an absent value. Letting that through would put NaN into a
+		// share — a silent wrong answer — while `undefined` means "not requested" and every caller
+		// already withholds the share rather than dividing by a subtotal.
+		const bodies: unknown[] = []
+		globalThis.fetch = (async () => ({
+			ok: true, status: 200,
+			async json() {
+				bodies.push(1)
+				// A response with rows but no totals block at all.
+				return { rows: [{ dimensionValues: [{ value: 'x' }], metricValues: [{ value: '5' }] }] }
+			},
+		})) as unknown as typeof fetch
+
+		try {
+			const client = createGa4Client('1', { client_email: 'x', private_key: 'y' } as never)
+			const report = await client.runReport({
+				metrics: [{ name: 'sessions' }],
+				dateRanges: [{ startDate: '2026-08-20', endDate: '2026-08-26' }],
+			})
+			expect(report.metricTotal).toBeUndefined()
+			expect(Number.isNaN(report.metricTotal as number)).toBe(false)
+		} finally {
+			bodies.length = 0
+		}
+	})
+})
+
+describe('the revenue split refuses what it cannot check', () => {
+	const sourceRow = (source: string, sessions: number) => ({
+		dimensions: [source, 'Referral', 'referral', '(not set)'],
+		metrics: [sessions, sessions],
+	})
+
+	const run = (actuals: { revenue: number | null; orders: number | null } | null, purchases: number) =>
+		acquisition({
+			config: siteConfig(),
+			range,
+			actuals,
+			ga4: createFakeGa4Client({
+				single: (request) => (request.metrics?.some((m) => m.name === 'ecommercePurchases')
+					? makeGa4Report([{ dimensions: ['a.test', 'Referral', 'referral', '(not set)'], metrics: [purchases, 1000] }])
+					: makeGa4Report([sourceRow('a.test', 300)])),
+			}),
+			notices: [],
+		})
+
+	it('withholds the split when the order book could not be read', async () => {
+		// Unknown coverage was treated as PASSING, so an unreadable order book switched off the
+		// window that catches over-attribution and the split rendered as sound on a double-firing tag.
+		const data = await run(null, 20)
+		expect(data.splitIsSound).toBe(false)
+		for (const row of data.rows) expect(row.revenueShare ?? null).toBeNull()
+	})
+
+	it('withholds it when GA4 attributed more purchases than there are orders', async () => {
+		// The upper bound: counting sales that did not happen is a finding, not a shortage.
+		const data = await run({ revenue: 5000, orders: 7 }, 20)
+		expect(data.splitIsSound).toBe(false)
+	})
+
+	it('computes it when coverage sits inside the window', async () => {
+		const data = await run({ revenue: 5000, orders: 10 }, 6)
+		expect(data.splitIsSound).toBe(true)
+	})
+})
