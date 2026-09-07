@@ -31,10 +31,13 @@ import {
 	OverviewPanel,
 	DataHealthPanel,
 	TypefaceInterestPanel,
+	averageOrderValue,
 	buyRateIndex,
 	catalogueRate,
 	coverageOf,
 	gapOf,
+	revenuePerThousandSent,
+	visitorsPerOrder,
 } from './panels'
 import { PanelBoundary, ReadyReport, VisitorInsightsTool } from './VisitorInsightsTool'
 
@@ -137,7 +140,7 @@ describe('MeasurementHealthPanel', () => {
 				data={{
 					ga4Pageviews: ok(33486), vercelPageviews: ok(33597), shortfallRatio: 0.0033,
 					ga4Sessions: ok(22781), orders: ok(64), consentRate: ok(78.4),
-					vercelVisitors: ok(21400), vercelDailyUnavailable: false,
+					vercelVisitors: ok(21400), ordersWithTotal: 64, vercelDailyUnavailable: false,
 					revenue: ok(4820), currency: 'USD', orderStatuses: { verified: 60, refunded: 4 },
 					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
 					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [], crossSource: [], timelineEvents: [],
@@ -155,7 +158,7 @@ describe('MeasurementHealthPanel', () => {
 				data={{
 					ga4Pageviews: unavailable('source_error'), vercelPageviews: ok(2620), shortfallRatio: null,
 					ga4Sessions: unavailable('source_error'), orders: ok(12), consentRate: unavailable('source_error'),
-					vercelVisitors: ok(1730), vercelDailyUnavailable: false,
+					vercelVisitors: ok(1730), ordersWithTotal: null, vercelDailyUnavailable: false,
 					revenue: unavailable('source_error'), currency: null, orderStatuses: {},
 					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
 					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [], crossSource: [], timelineEvents: [],
@@ -496,7 +499,7 @@ describe('panels tolerate an older route response', () => {
 		const legacy = {
 			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
 			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
-					vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+					vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 					revenue: ok(910), currency: 'USD', orderStatuses: {},
 					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
 					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [], crossSource: [], timelineEvents: [],
@@ -557,7 +560,7 @@ describe('layout does not depend on design tokens resolving', () => {
 				data={{
 					ga4Pageviews: ok(543), vercelPageviews: ok(2392), shortfallRatio: 0.773,
 					ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
-					vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+					vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 					revenue: ok(910), currency: 'USD', orderStatuses: {},
 					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
 					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [], crossSource: [], timelineEvents: [],
@@ -803,7 +806,7 @@ describe('capture model rendering', () => {
 	const base = {
 		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
 		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
-		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 		revenue: ok(910), currency: 'USD', orderStatuses: {},
 		interpretation: 'Sources differ.', daily: [],
 		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [], crossSource: [], timelineEvents: [],
@@ -870,7 +873,7 @@ describe('CrossSourceTimeline', () => {
 	const base = {
 		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
 		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
-		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 		revenue: ok(910), currency: 'USD', orderStatuses: {},
 		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 		capture: { estimates: [], rate: 0.25, low: 0.2, high: 0.3, discrepancy: null },
@@ -983,7 +986,7 @@ describe('the chart says in words what it draws', () => {
 	const data = {
 		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
 		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
-		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 		revenue: ok(910), currency: 'USD', orderStatuses: {},
 		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
@@ -1021,7 +1024,7 @@ describe('panel structure', () => {
 	const base = {
 		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
 		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
-		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 		revenue: ok(4820), currency: 'USD', orderStatuses: { verified: 12 },
 		audience: ok(4210), audienceGrowth: ok(108),
 		campaigns: [{ title: 'September release', subject: 's', sentAt: '2026-09-03T10:00:00Z', sent: 1200, opens: 400, clicks: 84, unsubscribed: 2 }],
@@ -1104,7 +1107,7 @@ describe('brushing and details on demand', () => {
 	const base = {
 		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
 		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
-		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 		revenue: ok(910), currency: 'USD', orderStatuses: {},
 		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
@@ -1177,7 +1180,7 @@ describe('the verdict can name the failure it exists for', () => {
 	const base = {
 		ga4Pageviews: ok(475), vercelPageviews: ok(2356),
 		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
-		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 		revenue: ok(4820), currency: 'USD', orderStatuses: {},
 		audience: ok(4210), audienceGrowth: ok(108), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
@@ -1256,7 +1259,7 @@ describe('the chart draws at a 1:1 scale', () => {
 	const data = {
 		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.2,
 		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
-		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 		revenue: ok(910), currency: 'USD', orderStatuses: {},
 		audience: ok(1), audienceGrowth: ok(0), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
@@ -1299,7 +1302,7 @@ describe('chrome sits on the side of the figures that matches what it does', () 
 	const data = {
 		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.8,
 		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
-		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 		revenue: ok(910), currency: 'USD', orderStatuses: {},
 		audience: ok(4000), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
@@ -1359,7 +1362,7 @@ describe('discrete events are not drawn as a continuous line', () => {
 	const data = {
 		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.2,
 		ga4Sessions: ok(357), orders: ok(2), consentRate: unavailable('not_instrumented'),
-		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 		revenue: ok(0), currency: 'USD', orderStatuses: {},
 		audience: ok(1), audienceGrowth: ok(0), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
@@ -1508,7 +1511,7 @@ describe('the capture cards do not flatter the instrument', () => {
 		const html = render(<DataHealthPanel data={{
 			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.2,
 			ga4Sessions: ok(357), orders: ok(8), consentRate: unavailable('not_instrumented'),
-			vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+			vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 			revenue: ok(910), currency: 'USD', orderStatuses: {},
 			interpretation: 'x', daily: [], capture: model,
 			estimatedSessions: unavailable('not_applicable'),
@@ -1575,7 +1578,7 @@ describe('disagreement is a quantity, not only a shaded area', () => {
 		const html = render(<OverviewPanel data={{
 			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.8,
 			ga4Sessions: ok(357), orders: ok(2), consentRate: unavailable('not_instrumented'),
-			vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+			vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 			revenue: ok(0), currency: 'USD', orderStatuses: {},
 			audience: ok(1), audienceGrowth: ok(0), campaigns: [],
 			capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
@@ -1687,7 +1690,7 @@ describe('every tab renders its own panel', () => {
 	const data = {
 		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.8,
 		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
-		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 		revenue: ok(910), currency: 'USD', orderStatuses: {},
 		audience: ok(4000), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
@@ -1747,6 +1750,36 @@ describe('every tab renders its own panel', () => {
 		const journey = render(<ReadyReport envelope={withComparison as never} tabId="journey" {...props} />)
 		expect(journey).not.toContain('Changes are against')
 		expect(journey).toContain('per-step totals')
+	})
+
+	it('names which baseline is in force rather than leaving it to the dates', () => {
+		// A year-ago comparison read as last month's is a wrong conclusion about the business, not a
+		// cosmetic slip — the sentence has to say which one it is.
+		const props = {
+			apiBaseUrl: 'https://x.test', range: 'quarter' as const,
+			custom: { start: '2026-06-08', end: '2026-09-05' },
+			revalidationError: null, diagnostics: { status: 'idle' } as never,
+		}
+		const withBasis = (basis: string) => ({
+			...envelope('measurement-health'),
+			comparison: { range: { start: '2025-06-09', end: '2025-09-06' }, data, provisional: false, basis },
+		})
+
+		const lastYear = render(<ReadyReport envelope={withBasis('same-period-last-year') as never} tabId="overview" {...props} />)
+		expect(lastYear).toContain('the same window a year earlier')
+		expect(lastYear).not.toContain('immediately before this one')
+
+		const preceding = render(<ReadyReport envelope={withBasis('previous-period') as never} tabId="overview" {...props} />)
+		expect(preceding).toContain('immediately before this one')
+
+		// An envelope from a build that predates the option carries no basis at all, and must read as
+		// the baseline it actually used rather than falling through to no sentence.
+		const older = {
+			...envelope('measurement-health'),
+			comparison: { range: { start: '2026-03-10', end: '2026-06-07' }, data, provisional: false },
+		}
+		expect(render(<ReadyReport envelope={older as never} tabId="overview" {...props} />))
+			.toContain('immediately before this one')
 	})
 })
 
@@ -1813,7 +1846,7 @@ describe('a lifetime figure is not shown as a period figure', () => {
 		const html = render(<OverviewPanel data={{
 			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.2,
 			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
-			vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+			vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 			revenue: ok(910), currency: 'USD', orderStatuses: {},
 			audience: ok(4210), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 			capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
@@ -2119,7 +2152,7 @@ describe('the headline agrees with the cards under it', () => {
 	const base = {
 		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.1,
 		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
-		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 		revenue: ok(1000), currency: 'USD', orderStatuses: {},
 		audience: ok(4000), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
@@ -2409,7 +2442,7 @@ describe('the chart anchors each row against the period before it', () => {
 	const shell = {
 		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.2,
 		ga4Sessions: ok(357), orders: ok(2), consentRate: unavailable('not_instrumented'),
-		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 		revenue: ok(0), currency: 'USD', orderStatuses: {},
 		audience: ok(1), audienceGrowth: ok(0), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
@@ -2566,7 +2599,7 @@ describe('small-sample and absent figures say so on the panels', () => {
 		const html = render(<OverviewPanel data={{
 			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.2,
 			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
-			vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+			vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 			revenue: ok(910), currency: 'USD', orderStatuses: {},
 			audience: ok(4210),
 			audienceGrowth: unavailable('not_applicable', 'Mailchimp reports list growth by calendar month, so this range has no start figure'),
@@ -2575,5 +2608,131 @@ describe('small-sample and absent figures say so on the panels', () => {
 			crossSource: [], timelineEvents: [],
 		} as never} />)
 		expect(html).toContain('list growth by calendar month')
+	})
+})
+
+describe('averageOrderValue', () => {
+	const base = { revenue: { status: 'ok', value: 4400 }, ordersWithTotal: 11, currency: 'USD' }
+
+	it('divides by the orders that carry an amount, not by every order', () => {
+		// At Darden 11 of 69 orders carry a total. Dividing the revenue those 11 produced by all 69
+		// gives an average six times too low — a number that reads as a collapse in order size and is
+		// in fact a gap in the order record.
+		expect(averageOrderValue({ ...base, orders: { status: 'ok', value: 69 } } as never))
+			.toMatchObject({ status: 'partial', value: 400 })
+	})
+
+	it('marks the average partial exactly when the revenue behind it is partial', () => {
+		// A complete revenue figure produces a plain average; the qualifier must not be decoration.
+		expect(averageOrderValue({ ...base, orders: { status: 'ok', value: 11 } } as never).status)
+			.toBe('ok')
+	})
+
+	it('says it does not apply rather than dividing by zero', () => {
+		expect(averageOrderValue({ ...base, ordersWithTotal: 0 } as never))
+			.toMatchObject({ status: 'unavailable', reason: 'not_applicable' })
+	})
+
+	it('reports an absent order total as absent, never as a zero average', () => {
+		// The site has no total field configured. That is not an average of nothing; it is no average.
+		expect(averageOrderValue({ ...base, ordersWithTotal: null } as never).status).toBe('unavailable')
+	})
+})
+
+describe('visitorsPerOrder', () => {
+	it('counts people rather than GA4 sessions', () => {
+		// Sessions would flatter the ratio roughly fivefold at Darden's shortfall, and the figure is
+		// read as "how many people it takes to make a sale".
+		expect(visitorsPerOrder({
+			vercelVisitors: { status: 'ok', value: 1400 },
+			orders: { status: 'ok', value: 7 },
+		} as never)).toMatchObject({ status: 'ok', value: 200 })
+	})
+
+	it('withholds the ratio when there was no order to divide by', () => {
+		expect(visitorsPerOrder({
+			vercelVisitors: { status: 'ok', value: 1400 },
+			orders: { status: 'ok', value: 0 },
+		} as never)).toMatchObject({ status: 'unavailable', reason: 'not_applicable' })
+	})
+
+	it('passes an unavailable input through rather than inventing a ratio from one side', () => {
+		expect(visitorsPerOrder({
+			vercelVisitors: { status: 'unavailable', reason: 'source_error', detail: 'Vercel down' },
+			orders: { status: 'ok', value: 7 },
+		} as never).status).toBe('unavailable')
+	})
+})
+
+describe('revenuePerThousandSent', () => {
+	const campaign = { title: 'August', subject: 'August', sentAt: '2026-08-20T19:00:00+00:00', sent: 2000, opens: 900, clicks: 120, unsubscribed: 3 }
+
+	it('scales to a thousand addresses, where a foundry\'s figures are legible', () => {
+		// Per send this is $0.35, which rounds to the same zero for every campaign in the table.
+		expect(revenuePerThousandSent({ ...campaign, revenueAfter: 700 })).toBe(350)
+	})
+
+	it('withholds the figure when no revenue was measured, rather than showing nothing sold', () => {
+		expect(revenuePerThousandSent({ ...campaign, revenueAfter: null })).toBeNull()
+		expect(revenuePerThousandSent({ ...campaign })).toBeNull()
+	})
+
+	it('does not divide by a send count of zero', () => {
+		expect(revenuePerThousandSent({ ...campaign, sent: 0, revenueAfter: 700 })).toBeNull()
+	})
+
+	it('reports a genuine zero as zero, distinct from unmeasured', () => {
+		// A send that produced no orders is a finding. It must not be withheld alongside the ones
+		// that could not be measured.
+		expect(revenuePerThousandSent({ ...campaign, revenueAfter: 0 })).toBe(0)
+	})
+})
+
+describe('the email campaigns table', () => {
+	const campaign = {
+		title: 'Freight release', subject: 'Freight is here', sentAt: '2026-08-20T19:00:00+00:00',
+		sent: 2000, opens: 900, clicks: 120, unsubscribed: 3,
+	}
+	const overview = (campaigns: unknown[]) => ({
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), ordersWithTotal: 7, vercelDailyUnavailable: false,
+		revenue: ok(910), currency: 'USD', orderStatuses: {},
+		interpretation: 'Sources differ.', daily: [],
+		audience: ok(4210), audienceGrowth: ok(12), campaigns, crossSource: [], timelineEvents: [],
+	})
+
+	it('shows what the order book recorded after a send', () => {
+		const html = render(<OverviewPanel data={overview([{ ...campaign, ordersAfter: 4, revenueAfter: 700, windowDays: 3, windowComplete: true }]) as never} />)
+		expect(html).toContain('Orders after')
+		expect(html).toContain('Per 1,000 sent')
+		// $700 over 2,000 addresses is $350 per thousand.
+		expect(html).toContain('350')
+	})
+
+	it('says what the columns do not claim', () => {
+		// Without this the table reads as attribution, and a reader will credit the newsletter for
+		// the site's ordinary trade in those days.
+		const html = render(<OverviewPanel data={overview([{ ...campaign, ordersAfter: 4, revenueAfter: 700, windowDays: 3, windowComplete: true }]) as never} />)
+		expect(html).toContain('not what the send caused')
+	})
+
+	it('marks a window the range cut short rather than showing it as a finished result', () => {
+		const html = render(<OverviewPanel data={overview([{ ...campaign, ordersAfter: 1, revenueAfter: 100, windowDays: 1, windowComplete: false }]) as never} />)
+		expect(html).toContain('so far')
+	})
+
+	it('renders an unmeasured campaign as a dash, never as zero orders', () => {
+		// The failure this whole package exists to prevent: an absence rendered as a measurement.
+		const html = render(<OverviewPanel data={overview([{ ...campaign, ordersAfter: null, revenueAfter: null, windowDays: 0, windowComplete: false }]) as never} />)
+		expect(html).toContain('Freight release')
+		expect(html).not.toContain('>0<')
+	})
+
+	it('renders campaigns from a route that predates these columns', () => {
+		// The Studio ships separately from the sites, so an envelope with no window fields at all is
+		// the normal state of this repo for a while after every release.
+		const html = render(<OverviewPanel data={overview([campaign]) as never} />)
+		expect(html).toContain('Freight release')
 	})
 })

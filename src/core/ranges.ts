@@ -109,6 +109,15 @@ export function daysBetween(start: string, end: string): number {
 }
 
 /** How many days each range key spans. */
+/**
+ * What a period-over-period change is measured against.
+ *
+ * Type sales are seasonal — a release, a conference, a sale — so "the previous thirty days" is often
+ * the least informative baseline available, and it was the only one. Both cost the same: one extra
+ * comparison window either way.
+ */
+export type ComparisonBasis = 'previous-period' | 'same-period-last-year'
+
 /** Trailing window length in days, for the named ranges. `custom` carries its own dates. */
 export const RANGE_DAYS: Record<Exclude<RangeKey, 'custom'>, number> = {
 	week: 7,
@@ -145,7 +154,24 @@ export function resolveRange(key: Exclude<RangeKey, 'custom'>, timezone: string,
  * A bare count answers "how many", which on its own is not actionable; the comparison is what
  * tells someone whether to do anything.
  */
-export function previousRange(range: DateRange): DateRange {
+export function previousRange(range: DateRange, basis: ComparisonBasis = 'previous-period'): DateRange {
+	if (basis === 'same-period-last-year') {
+		/*
+		 * The same calendar window a year earlier.
+		 *
+		 * Shifted by 364 days rather than by a calendar year, so the window keeps its shape: a
+		 * Monday-to-Sunday week stays Monday-to-Sunday, and a foundry comparing a release week
+		 * against last year's is not comparing a weekend against a working week. It costs one day of
+		 * drift a year, which is worth far less than the weekday alignment.
+		 */
+		return {
+			key: range.key,
+			start: shiftDays(range.start, -364),
+			end: shiftDays(range.end, -364),
+			timezone: range.timezone,
+		}
+	}
+
 	const span = daysBetween(range.start, range.end)
 	return {
 		key: range.key,
@@ -233,3 +259,13 @@ export function resolveCustomRange(
 
 	return { range: { key: 'custom', start, end, timezone } }
 }
+
+/**
+ * How many days after a send its orders are counted for.
+ *
+ * Three. A newsletter's clicks arrive within hours and its orders within a day or two; stretching
+ * the window further does not attribute more sales to the send, it attributes more of the site's
+ * ordinary trade to it. The window closes early when the next send lands, so overlapping sends
+ * never claim the same order.
+ */
+export const SEND_WINDOW_DAYS = 3

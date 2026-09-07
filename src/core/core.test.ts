@@ -188,6 +188,26 @@ describe('ranges', () => {
 		expect(daysBetween(previous.start, previous.end)).toBe(daysBetween(range.start, range.end))
 	})
 
+	it('shifts a year-ago baseline by whole weeks, so the weekdays line up', () => {
+		// 365 days would put a Thursday window against a Wednesday one, and a foundry's traffic is
+		// weekday-shaped: the shift would show up as a change in behaviour that is only a change in
+		// which days were counted. 364 is 52 weeks exactly.
+		const range = resolveRange('week', 'UTC', new Date('2026-08-26T12:00:00Z'))
+		const lastYear = previousRange(range, 'same-period-last-year')
+
+		expect(lastYear.start).toBe('2025-08-21')
+		expect(lastYear.end).toBe('2025-08-27')
+		expect(daysBetween(lastYear.start, lastYear.end)).toBe(daysBetween(range.start, range.end))
+		// The point of the whole option: it must not be the preceding window under another name.
+		expect(lastYear.start).not.toBe(previousRange(range).start)
+	})
+
+	it('defaults to the preceding window when no basis is named', () => {
+		// Every existing caller passes one argument, and must keep the baseline it has always had.
+		const range = resolveRange('quarter', 'UTC', new Date('2026-08-26T12:00:00Z'))
+		expect(previousRange(range)).toEqual(previousRange(range, 'previous-period'))
+	})
+
 	it('warns when a range includes days GA4 has not finished processing', () => {
 		const now = new Date('2026-08-26T12:00:00Z')
 		const range = resolveRange('week', 'UTC', now)

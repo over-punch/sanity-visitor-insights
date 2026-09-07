@@ -19,7 +19,7 @@
  */
 
 import type { CrossSourceDay, EmailCampaign, MeasurementHealthData, DailyPoint, TimelineEvent } from '../../reportData'
-import { provisionalDates } from '../../core/ranges'
+import { SEND_WINDOW_DAYS, provisionalDates, shiftDays } from '../../core/ranges'
 import type { DateRange, MetricValue } from '../../types'
 import { partial, estimated, ok, unavailable } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
@@ -168,6 +168,75 @@ export function calendarDays(start: string, end: string): string[] {
  * Each source is queried independently and a failure in one degrades only its own figures, so the
  * panel can always say which source did not answer rather than showing an unexplained blank.
  */
+
+/**
+ * Attach each send's following-days order figures to the campaigns.
+ *
+ * Reads the daily series already assembled for the chart, so this costs no extra upstream request.
+ * Days are partitioned rather than windowed independently: every day belongs to at most one send —
+ * the most recent one before it — so the columns can be summed without double-counting.
+ *
+ * @param campaigns - the sends, in any order
+ * @param days - the cross-source daily series, which carries exact orders and revenue
+ * @param timezone - the property timezone the send times are resolved against
+ * @param rangeEnd - the last day the report covers, so a send near the edge can say it is cut short
+ */
+export function attributeToSends(
+	campaigns: EmailCampaign[],
+	days: CrossSourceDay[],
+	timezone: string,
+	rangeEnd: string,
+): EmailCampaign[] {
+	const byDate = new Map(days.map((day) => [day.date, day]))
+	// Send day in the reader's zone, matching the order stems these are compared against.
+	const dated = campaigns.map((campaign) => ({
+		campaign,
+		day: zonedDay(campaign.sentAt, timezone) ?? campaign.sentAt.slice(0, 10),
+	}))
+	const order = [...dated].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0))
+
+	const windowEnds = new Map<EmailCampaign, { end: string; complete: boolean }>()
+	order.forEach(({ campaign, day }, index) => {
+		const natural = shiftDays(day, SEND_WINDOW_DAYS - 1)
+		// The day before the next send, so two sends in one week partition the days between them.
+		const nextSend = order[index + 1]?.day
+		const cutByNext = nextSend ? shiftDays(nextSend, -1) : null
+		const limit = cutByNext !== null && cutByNext < natural ? cutByNext : natural
+		const end = limit < rangeEnd ? limit : rangeEnd
+		windowEnds.set(campaign, { end, complete: natural <= end })
+	})
+
+	return dated.map(({ campaign, day }) => {
+		const window = windowEnds.get(campaign)
+		// A send from before the range's first day has no days here to count. Its window is not
+		// empty, it is unmeasured — and zero orders would read as a campaign that sold nothing.
+		if (!window || window.end < day) {
+			return { ...campaign, ordersAfter: null, revenueAfter: null, windowDays: 0, windowComplete: false }
+		}
+
+		let orders: number | null = null
+		let revenue: number | null = null
+		let counted = 0
+		for (let date = day; date <= window.end; date = shiftDays(date, 1)) {
+			const row = byDate.get(date)
+			if (!row) continue
+			counted += 1
+			// Null propagates rather than summing as zero: a day the order query could not answer for
+			// must not shorten a campaign's total, which is exactly how a working campaign reads dud.
+			if (row.orders !== null) orders = (orders ?? 0) + row.orders
+			if (row.revenue !== null) revenue = (revenue ?? 0) + row.revenue
+		}
+
+		return {
+			...campaign,
+			ordersAfter: counted > 0 ? orders : null,
+			revenueAfter: counted > 0 ? revenue : null,
+			windowDays: counted,
+			windowComplete: window.complete,
+		}
+	})
+}
+
 export async function measurementHealth(input: MeasurementHealthInput): Promise<MeasurementHealthData> {
 	const { config, range, ga4, vercel, sanity } = input
 	const mailchimp = input.mailchimp ?? null
@@ -385,6 +454,8 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	let currency: string | null = null
 	/** The status vocabulary this site's own orders use, so countedStatuses can be configured. */
 	let orderStatuses: Record<string, number> = {}
+	/** Counted orders carrying an amount — the denominator for average order value. */
+	let ordersWithTotal: number | null = null
 	if (sanity) {
 		try {
 			const counts = await countOrders(sanity, orderQueryOptions(config.orders, range))
@@ -421,6 +492,7 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 					: ok(counts.revenue)
 			currency = config.orders.currency ?? null
 			orderStatuses = counts.byStatus
+			ordersWithTotal = counts.revenue === null ? null : counts.total - counts.ordersMissingTotal
 			if (counts.ordersMissingTotal > 0) {
 				input.notices?.push(
 					`${counts.ordersMissingTotal} of ${counts.total} counted orders carry no usable total, ` +
@@ -666,6 +738,10 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		revenue: revenueByDate ? revenueByDate[date] ?? 0 : null,
 	}))
 
+	// Each send's following days, from the exact order book. Computed here rather than in the panel
+	// because the daily series it reads is assembled here and the send times are zoned here.
+	campaigns = attributeToSends(campaigns, crossSource, range.timezone, range.end)
+
 	// Campaign sends. Date and title only — a marker says when and what; the table below it carries
 	// the campaign's actual numbers.
 	const timelineEvents: TimelineEvent[] = campaigns
@@ -697,6 +773,7 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		revenue,
 		currency,
 		orderStatuses,
+		ordersWithTotal,
 		consentRate,
 		interpretation: interpret(ga4Pageviews, vercelPageviews, shortfallRatio, consentRate),
 		daily,

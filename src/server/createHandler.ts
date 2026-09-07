@@ -23,7 +23,7 @@ import {
 } from '../types'
 import { assertValidSiteConfig, type SiteAnalyticsConfig } from '../core/siteConfig'
 import { coverageNotices } from '../core/cutover'
-import { previousRange, provisionalDates, resolveCustomRange, resolveRange, provisionalNotice } from '../core/ranges'
+import { type ComparisonBasis, previousRange, provisionalDates, resolveCustomRange, resolveRange, provisionalNotice } from '../core/ranges'
 import { applyCors, requireStudioUser, type HandlerRequest, type HandlerResponse } from './auth'
 import { createGa4Client, type Ga4Client } from './ga4'
 import { createVercelClient, type VercelClient } from './vercel'
@@ -227,8 +227,18 @@ export function createVisitorInsightsHandler(options: HandlerOptions) {
 				: { status: 'error', message: 'Mailchimp key carries no datacenter suffix' }
 		}
 
+		// The reader's chosen baseline. Same cost either way — one comparison window — so the only
+		// thing that changes is which question the arrows answer.
+		const basisParam = param(req, 'compare')
+		const basis: ComparisonBasis = basisParam === 'same-period-last-year'
+			? 'same-period-last-year'
+			: 'previous-period'
+
 		try {
-			const key = cacheKey(['vi', config.siteId, reportName, range.key, range.start, range.end])
+			// The basis is part of the key. Two bases produce different comparison windows for the
+			// same report and range, so without it the second reader to ask is served the first
+			// reader's baseline — deltas against last month, labelled as against last year.
+			const key = cacheKey(['vi', config.siteId, reportName, range.key, range.start, range.end, basis])
 
 			const envelope = await withCache<ReportEnvelope<unknown>>(key, ttl, async () => {
 				const notices: string[] = []
@@ -248,7 +258,7 @@ export function createVisitorInsightsHandler(options: HandlerOptions) {
 				// four non-diagnostics reports while the Studio passed the result to exactly one
 				// panel, so journey — the most expensive report in the package, three GA4 calls —
 				// cost six and discarded half, against a property whose concurrency ceiling is ten.
-				const priorRange = previousRange(range)
+				const priorRange = previousRange(range, basis)
 				const wantsComparison = COMPARED_REPORTS.includes(reportName)
 				const [data, priorResult] = await Promise.all([
 					runReport(reportName, { config, range, ga4, vercel, sanity, mailchimp, notices }),
@@ -282,6 +292,7 @@ export function createVisitorInsightsHandler(options: HandlerOptions) {
 								// the number is still directional and suppressing it entirely would
 								// lose the signal this feature exists to carry.
 								provisional: provisionalDates(range).length > 0,
+							basis,
 							},
 						}
 						: {}),

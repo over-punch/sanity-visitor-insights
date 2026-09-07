@@ -51,6 +51,14 @@ export interface MeasurementHealthData {
 	 */
 	vercelVisitors: MetricValue
 	/**
+	 * How many counted orders actually carried an amount.
+	 *
+	 * The denominator for average order value. Dividing revenue by the full order count would be
+	 * wrong wherever any order lacks a total — at Darden that is 58 of 69, so the average would come
+	 * out six times too low. Null when no total field is configured.
+	 */
+	ordersWithTotal: number | null
+	/**
 	 * True when Vercel bucketed this range weekly or monthly, so the trend shows GA4 alone.
 	 * The chart still renders; the panel says which line is missing and why.
 	 */
@@ -146,6 +154,25 @@ export interface EmailCampaign {
 	/** Distinct subscribers who clicked. One person, one expected GA4 session. */
 	clicks: number
 	unsubscribed: number
+	/**
+	 * Orders placed on the days following this send, from the order book rather than from GA4.
+	 *
+	 * NOT a claim of causation, and deliberately not GA4's campaign attribution: a foundry's GA4 sees
+	 * a fifth of its traffic and its purchase split is withheld at these volumes, whereas the send
+	 * time and the order times are both exact. What this counts is what happened afterwards, which is
+	 * the honest form of the question a sender is really asking.
+	 *
+	 * The window runs from the send until the next send or `windowDays`, whichever comes first, so
+	 * two sends in one week never claim the same order. Optional: a site whose API route predates
+	 * this field omits it.
+	 */
+	ordersAfter?: number | null
+	/** Revenue over the same window, in major units. Null where no order total is configured. */
+	revenueAfter?: number | null
+	/** How many days the window actually covered — shorter when another send or the range cut it. */
+	windowDays?: number
+	/** False when the range ended before the window could run its course, so the figures read low. */
+	windowComplete?: boolean
 }
 
 /**

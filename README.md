@@ -19,7 +19,23 @@ only as a conversion anchor and a count; no revenue, and no customer data.
 | **Typeface interest** | Which families get viewed, tested and bought? |
 | **Diagnostics** | What to fix before trusting any of the above? |
 
-Each panel offers a week, quarter or year range.
+Each panel offers a week, quarter or year range, a custom window, and a choice of what the changes
+are measured against — the preceding window, or the same window a year earlier. Type sales are
+seasonal, so a quiet August against a quiet July often says less than August against last August.
+Both cost the same: one comparison window either way.
+
+Four figures are derived from the ones above rather than measured separately:
+
+| Figure | How it is arrived at |
+|---|---|
+| **Average order value** | Revenue over the orders that *carry an amount*, not over every counted order. Marked partial, naming both counts, whenever those differ. |
+| **Visitors per order** | Vercel visitors over orders. Vercel because it is server-side and complete; GA4 sessions would flatter the ratio by roughly the shortfall. |
+| **Orders after a send** | What the order book records in the three days following each email, ending early if another send lands first, so no order is counted twice. |
+| **Revenue per 1,000 sent** | The same window's revenue scaled to a thousand addresses — per send it is fractions of a cent and every campaign renders as the same zero. |
+
+The last two are **what happened next, not what the send caused**. They are built from send times and
+order times, both of which are exact, rather than from GA4's campaign attribution, which at a
+foundry's volumes is withheld for being too thin to divide revenue by.
 
 ---
 

@@ -17,6 +17,7 @@ import React from 'react'
 import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
 import { ChartData, ComparisonBar, Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, SortableTable, formatCount, formatMoney, formatPercent } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
+import { SEND_WINDOW_DAYS } from '../core/ranges'
 import type {
 	AcquisitionData,
 	CheckStatus,
@@ -30,7 +31,7 @@ import type {
 	MeasurementHealthData,
 	TypefaceInterestData,
 } from '../reportData'
-import type { MetricValue } from '../types'
+import { ok, partial, unavailable, type MetricValue } from '../types'
 
 /**
  * Sortable value for a metric, or null when there is nothing to sort on.
@@ -279,6 +280,46 @@ export function OverviewPanel({ data, previous, onBrush }: {
 				</Card>
 			</div>
 
+			{/*
+			  * The two ratios a foundry would quote, which the tool held both halves of and never
+			  * divided. Revenue and Orders sat in adjacent cards; sessions and orders sat on adjacent
+			  * tabs. Derived here, so neither costs a query.
+			  */}
+			<div style={cardGrid}>
+				<Card padding={3} radius={2} tone="transparent" border>
+					<Stack space={3}>
+						<Label size={1} muted>Average order</Label>
+						{(() => {
+							const average = averageOrderValue(data)
+							const value = metricSortValue(average)
+							if (value === null) return <MetricFigure metric={average} label="Average order value" />
+							return (
+								<div style={figureRow}>
+									<Text size={4}>{formatMoney(value, data.currency ?? null)}</Text>
+									{average.status === 'partial' && <Text size={0} muted>partial</Text>}
+								</div>
+							)
+						})()}
+						<Text size={0} muted>
+							From your own orders, so it is exact — but only across the orders that carry an
+							amount, which is what the revenue figure covers.
+						</Text>
+					</Stack>
+				</Card>
+
+				<Card padding={3} radius={2} tone="transparent" border>
+					<Stack space={3}>
+						<Label size={1} muted>Visitors per order</Label>
+						<MetricFigure metric={visitorsPerOrder(data)} label="Visitors per order" />
+						<Text size={0} muted>
+							Against Vercel&rsquo;s visitor count, not Google Analytics&rsquo; — dividing by GA4
+							would flatter this by whatever share it is missing. Read it as a ceiling: some of
+							those visitors are crawlers or repeat devices.
+						</Text>
+					</Stack>
+				</Card>
+			</div>
+
 			{(data.crossSource?.length ?? 0) >= 3 && (
 				<Stack space={3}>
 					<Heading size={1} style={sectionHeading}>Everything, on one time axis</Heading>
@@ -479,6 +520,15 @@ export function OverviewPanel({ data, previous, onBrush }: {
 						Clicks are distinct subscribers. Opens are inflated by Apple Mail Privacy Protection,
 						which fetches images on the recipient&rsquo;s behalf — so sort on clicks, not opens.
 					</Text>
+					{/* Said once, above the table, rather than in a tooltip on every cell. The claim these
+					    columns do NOT make is the important half, and a reader who takes "after" for
+					    "because of" will over-credit the newsletter. */}
+					<Text size={1} muted>
+						The last two columns count what your order book records in the {SEND_WINDOW_DAYS} days
+						after each send, ending early if another send lands first. They are what happened
+						next, not what the send caused &mdash; but unlike anything GA4 can tell you about
+						email, both the send times and the order times are exact.
+					</Text>
 					<SortableTable<EmailCampaign>
 						caption="Email campaigns by clicks"
 						initialSort="clicks"
@@ -508,6 +558,42 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								numeric: true,
 								sortValue: (c) => c.unsubscribed,
 								render: (c) => <Text size={1} muted>{formatCount(c.unsubscribed)}</Text>,
+							},
+							{
+								key: 'ordersAfter',
+								label: 'Orders after',
+								numeric: true,
+								sortValue: (c) => c.ordersAfter ?? null,
+								exportValue: (c) => c.ordersAfter ?? null,
+								render: (c) => (
+									<Text size={1}>
+										{c.ordersAfter === null || c.ordersAfter === undefined ? '—' : formatCount(c.ordersAfter)}
+										{/* A send on the last day of the range has not had its days yet. Without
+										    this it reads as a campaign that sold nothing, which is a conclusion
+										    about the campaign drawn from the shape of the window. */}
+										{c.windowComplete === false && c.ordersAfter !== null && c.ordersAfter !== undefined && (
+											<Text as="span" size={0} muted> so far</Text>
+										)}
+									</Text>
+								),
+							},
+							{
+								key: 'revenuePerThousand',
+								label: 'Per 1,000 sent',
+								numeric: true,
+								// Per thousand, not per send: a foundry's sends run to thousands of addresses
+								// against a handful of orders, so per-send lands at fractions of a cent and
+								// every campaign renders as the same rounded zero.
+								sortValue: (c) => revenuePerThousandSent(c),
+								exportValue: (c) => revenuePerThousandSent(c),
+								render: (c) => {
+									const value = revenuePerThousandSent(c)
+									return (
+										<Text size={1}>
+											{value === null ? '—' : formatMoney(value, data.currency ?? null)}
+										</Text>
+									)
+								},
 							},
 						]}
 					/>
@@ -1223,6 +1309,87 @@ export function buyRateIndex(
 	if (views === null || views < MIN_FAMILY_VIEWS) return null
 
 	return rate / benchmark
+}
+
+/**
+ * Revenue divided by the orders that actually carried an amount.
+ *
+ * NOT by the full order count. At Darden 58 of 69 counted orders have no amount recorded, so
+ * dividing the revenue sum by every order would report an average six times too low — a number
+ * someone might price against. The denominator has to be the same population as the numerator.
+ *
+ * Inherits `partial` from the revenue figure, because an average over a sixth of the orders is an
+ * average of that sixth and should not present as the catalogue's.
+ *
+ * @param data - the overview payload
+ */
+/**
+ * What a campaign's following days took, per thousand addresses it went to.
+ *
+ * Per thousand rather than per send because a foundry mails thousands against a handful of orders:
+ * divided per send the figure is fractions of a cent and every campaign renders as the same zero.
+ *
+ * Null — never zero — when there is no revenue figure, no send count, or the window has not run,
+ * so an unmeasured campaign is not ranked below one that genuinely sold nothing.
+ *
+ * @param campaign - one send, already carrying its following-days figures
+ */
+export function revenuePerThousandSent(campaign: EmailCampaign): number | null {
+	if (campaign.revenueAfter === null || campaign.revenueAfter === undefined) return null
+	if (!Number.isFinite(campaign.sent) || campaign.sent <= 0) return null
+	return (campaign.revenueAfter / campaign.sent) * 1000
+}
+
+export function averageOrderValue(data: MeasurementHealthData): MetricValue {
+	/*
+	 * A derived figure INHERITS the absence of what it was derived from.
+	 *
+	 * Both of these first returned `not_applicable` for any missing input — which on a site whose
+	 * route predates the fields renders "Does not apply to this site" over a dash, the precise
+	 * contradiction removed from `metricOr` two releases ago, reintroduced one layer up. The
+	 * version-skew test caught it, which is what that test is for. `metricOr` already knows how to
+	 * describe a field the route is too old to send; a derived figure should say the same thing.
+	 */
+	const revenueMetric = metricOr(data.revenue, OLDER_ROUTE)
+	if (revenueMetric.status === 'unavailable') return revenueMetric
+	const revenue = metricSortValue(revenueMetric)
+	const orders = finiteOrNull(data.ordersWithTotal)
+	if (revenue === null || orders === null || orders <= 0) {
+		return unavailable('not_applicable', 'No order in this range carried an amount to average')
+	}
+	const average = revenue / orders
+	// Partial is decided here rather than inherited from the revenue metric, because this figure has
+	// its own denominator: whenever fewer orders carry an amount than were counted, the average is
+	// over a subset and the reader has to be told which subset before comparing it to anything.
+	const counted = finiteOrNull(metricSortValue(metricOr(data.orders, OLDER_ROUTE)))
+	const overSubset = counted !== null && counted > orders
+	return overSubset || data.revenue.status === 'partial'
+		? partial(average, '', `Averaged over the ${formatCount(orders)} of ${formatCount(counted ?? orders)} orders that carry an amount.`)
+		: ok(average)
+}
+
+/**
+ * How many visitors it takes to make one sale.
+ *
+ * Against VERCEL's visitors rather than GA4's sessions. The owner's instinct is orders-per-session,
+ * but GA4 sees a fraction of the traffic here, so that ratio would flatter conversion by whatever
+ * share is missing — the same mistake the buy-rate column was rebuilt to avoid. Vercel is the least
+ * lossy denominator available, and it counts people rather than visits, which is the unit a sale
+ * belongs to.
+ *
+ * @param data - the overview payload
+ */
+export function visitorsPerOrder(data: MeasurementHealthData): MetricValue {
+	const visitorMetric = metricOr(data.vercelVisitors, OLDER_ROUTE)
+	const orderMetric = metricOr(data.orders, OLDER_ROUTE)
+	if (visitorMetric.status === 'unavailable') return visitorMetric
+	if (orderMetric.status === 'unavailable') return orderMetric
+	const visitors = metricSortValue(visitorMetric)
+	const orders = metricSortValue(orderMetric)
+	if (visitors === null || orders === null || orders <= 0) {
+		return unavailable('not_applicable', 'No order in this range to divide the visitors by')
+	}
+	return ok(Math.round(visitors / orders))
 }
 
 /** Typeface interest — viewed, tested and bought per family. */

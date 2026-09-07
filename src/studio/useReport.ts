@@ -72,10 +72,12 @@ export function rememberShortfall(base: string, range: string, custom: { start: 
 }
 
 /** Identity of a request: everything that changes the answer. */
-function cacheKey(base: string, report: string, range: string, custom?: { start: string; end: string }): string {
+function cacheKey(base: string, report: string, range: string, custom?: { start: string; end: string }, compare?: string): string {
 	// apiBaseUrl included: the plugin takes a `name` so it can be registered twice in one Studio,
 	// and without the base those two registrations would serve each other's envelopes.
-	return [base, report, range, custom?.start ?? '', custom?.end ?? ''].join('|')
+	// The comparison basis is part of the key: two bases produce different envelopes for the same
+	// window, and without it switching baseline would serve the other one's deltas from cache.
+	return [base, report, range, custom?.start ?? '', custom?.end ?? '', compare ?? 'previous-period'].join('|')
 }
 
 /**
@@ -116,6 +118,8 @@ export interface UseReportOptions {
 	apiBaseUrl: string
 	report: ReportName
 	range: RangeKey
+	/** Which baseline the deltas are measured against. Defaults to the preceding window. */
+	compare?: 'previous-period' | 'same-period-last-year'
 	/**
 	 * Whether to fetch at all. Defaults to true.
 	 *
@@ -130,7 +134,7 @@ export interface UseReportOptions {
  *
  * @returns the current state plus a `reload` for manual refresh
  */
-export function useReport<T>({ apiBaseUrl, report, range, custom, enabled = true }: UseReportOptions): {
+export function useReport<T>({ apiBaseUrl, report, range, custom, compare, enabled = true }: UseReportOptions): {
 	state: ReportState<T>
 	reload: () => void
 } {
@@ -149,7 +153,7 @@ export function useReport<T>({ apiBaseUrl, report, range, custom, enabled = true
 		requestIdRef.current = requestId
 
 		const controller = new AbortController()
-		const key = cacheKey(apiBaseUrl, report, range, custom)
+		const key = cacheKey(apiBaseUrl, report, range, custom, compare)
 		const cached = envelopeCache.get(key)
 
 		// A cached answer for THIS key is shown at once and still revalidated. Marked stale so the
@@ -197,6 +201,9 @@ export function useReport<T>({ apiBaseUrl, report, range, custom, enabled = true
 				// never break the query string, and so the two named-range and custom-range paths
 				// produce one shape rather than two.
 				const query = new URLSearchParams({ range })
+				// Only sent when it differs from the default, so an unchanged request keeps the exact
+				// URL — and therefore the exact cache key — it had before this option existed.
+				if (compare && compare !== 'previous-period') query.set('compare', compare)
 				if (range === 'custom' && custom) {
 					query.set('start', custom.start)
 					query.set('end', custom.end)

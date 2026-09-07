@@ -180,6 +180,8 @@ export interface ReportEnvelope<T> {
 		 * complete, which biases every GA4-derived delta downwards.
 		 */
 		provisional: boolean
+		/** Which baseline the reader chose: the preceding window, or the same window a year back. */
+		basis?: 'previous-period' | 'same-period-last-year'
 	}
 }
 

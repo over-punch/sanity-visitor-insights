@@ -568,7 +568,13 @@ export function ReadyReport({
 					{envelope.comparison && COMPARED_TABS.includes(tabId) && (
 						<Text size={0} muted>
 							Changes are against {envelope.comparison.range.start} to {envelope.comparison.range.end},
-							the equivalent window immediately before this one.
+							{/* Named, not implied. Once the baseline can be chosen, a sentence that says
+							    only "the equivalent window" leaves the reader to work out which one is in
+							    force from the dates — and a year-ago comparison misread as last month's
+							    is a wrong conclusion, not a cosmetic one. */}
+							{envelope.comparison.basis === 'same-period-last-year'
+								? ' the same window a year earlier.'
+								: ' the equivalent window immediately before this one.'}
 							{envelope.comparison.provisional && (
 								<> This window&rsquo;s last days are still being processed by GA4, so changes read low.</>
 							)}
@@ -613,6 +619,47 @@ export function ReadyReport({
 	)
 }
 
+/**
+ * Which baseline the deltas are drawn against.
+ *
+ * Type sales are seasonal — a foundry's quiet August against a quiet July says far less than
+ * August against last August — and the preceding window was the only baseline available. Both cost
+ * the same: the server fetches one comparison window either way, just a different one.
+ */
+function BasisSelector({
+	value,
+	onChange,
+}: {
+	value: 'previous-period' | 'same-period-last-year'
+	onChange: (value: 'previous-period' | 'same-period-last-year') => void
+}): React.ReactElement {
+	return (
+		<div style={controlRow}>
+			<Text size={0} muted>Compared with</Text>
+			{/* Plain buttons for the same reason the range selector uses them: the compat shim's DOM
+			    fallback does not forward `text`, so the UI kit's Button renders as a blank box. */}
+			<button
+				type="button"
+				style={rangeButton(value === 'previous-period')}
+				aria-pressed={value === 'previous-period'}
+				title="The equivalent window immediately before this one"
+				onClick={() => onChange('previous-period')}
+			>
+				Previous period
+			</button>
+			<button
+				type="button"
+				style={rangeButton(value === 'same-period-last-year')}
+				aria-pressed={value === 'same-period-last-year'}
+				title="The same window a year earlier, shifted by 364 days so the weekdays line up"
+				onClick={() => onChange('same-period-last-year')}
+			>
+				Last year
+			</button>
+		</div>
+	)
+}
+
 /** Renders one report panel, including its loading, error and empty states. */
 function ReportPanel({
 	tabId,
@@ -620,6 +667,7 @@ function ReportPanel({
 	apiBaseUrl,
 	range,
 	custom,
+	compare,
 	onBrush,
 }: {
 	/** The tab being drawn. No longer the same as `report`: two tabs share one envelope. */
@@ -628,9 +676,10 @@ function ReportPanel({
 	apiBaseUrl: string
 	range: RangeKey
 	custom: { start: string; end: string }
+	compare?: 'previous-period' | 'same-period-last-year'
 	onBrush?: (start: string, end: string) => void
 }): React.ReactElement {
-	const { state, reload } = useReport<unknown>({ apiBaseUrl, report, range, custom })
+	const { state, reload } = useReport<unknown>({ apiBaseUrl, report, range, custom, compare })
 	// Data health additionally shows the configuration checks. Fetched only on that tab, so the
 	// four tabs that do not show them do not pay for them.
 	// A fixed range: runDiagnostics takes none — it probes the present configuration — so keying it
@@ -849,6 +898,14 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 		: { start: isoDaysAgo(30), end: isoDaysAgo(0) }))
 	/** Whether the custom window already runs to today, so forward panning has nowhere to go. */
 	const atPresent = custom.end >= isoDaysAgo(0)
+	/**
+	 * What the deltas are measured against.
+	 *
+	 * Type sales are seasonal, so "the previous thirty days" is often the least informative baseline
+	 * available — and it was the only one. Both cost the same: one comparison window either way.
+	 */
+	const [compare, setCompare] = useState<'previous-period' | 'same-period-last-year'>('previous-period')
+
 	const [activePanel, setActivePanel] = useState<string>(linkedTab ?? 'overview')
 
 	// And write it back, so the address bar always describes what is on screen.
@@ -883,7 +940,10 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 					    says whose it is in the navigation — repeating it was a line of chrome
 					    where the range and its dates are the useful context. */}
 					<Heading size={2}>Visitor insights</Heading>
-					<RangeSelector value={range} custom={custom} onChange={setRange} onCustomChange={setCustom} />
+					<Stack space={2}>
+						<RangeSelector value={range} custom={custom} onChange={setRange} onCustomChange={setCustom} />
+						<BasisSelector value={compare} onChange={setCompare} />
+					</Stack>
 				</Flex>
 
 				<PanelTabs value={activePanel} onChange={setActivePanel} />
@@ -974,6 +1034,7 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 								apiBaseUrl={apiBaseUrl}
 								range={range}
 								custom={custom}
+								compare={compare}
 								onBrush={(start, end) => { if (range !== 'custom') setRangeBeforeBrush(range); setCustom({ start, end }); setRange('custom') }}
 							/>
 						</PanelBoundary>

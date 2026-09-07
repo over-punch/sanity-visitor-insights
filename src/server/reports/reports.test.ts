@@ -41,7 +41,7 @@ import { previousRange, zonedDayEndUtc, zonedDayStartUtc } from '../../core/rang
 import { parseFunnelReport } from '../ga4'
 import { COMPARED_REPORTS, ENV_VARS, createVisitorInsightsHandler } from '../createHandler'
 import type { HandlerRequest, HandlerResponse } from '../auth'
-import { measurementHealth } from './measurementHealth'
+import { attributeToSends, measurementHealth } from './measurementHealth'
 import { acquisition } from './acquisition'
 import { journey } from './journey'
 import { typefaceInterest } from './typefaceInterest'
@@ -2102,6 +2102,7 @@ describe('revenue says when it covers only some of the orders', () => {
 			config: siteConfig({ orders: {
 				documentType: 'order', statusField: 'orderStatus.status',
 				countedStatuses: ['verified'], totalField: 'amountCharged', currency: 'USD',
+				typefacesField: 'items[].typeface',
 			} }),
 			range,
 			ga4: createFakeGa4Client({ batch: () => [makeGa4Total(400), makeGa4Report([{ metrics: [400, 320] }]), makeGa4Total(0)] }),
@@ -2120,6 +2121,7 @@ describe('revenue says when it covers only some of the orders', () => {
 			config: siteConfig({ orders: {
 				documentType: 'order', statusField: 'orderStatus.status',
 				countedStatuses: ['verified'], totalField: 'amountCharged', currency: 'USD',
+				typefacesField: 'items[].typeface',
 			} }),
 			range,
 			ga4: createFakeGa4Client({ batch: () => [makeGa4Total(400), makeGa4Report([{ metrics: [400, 320] }]), makeGa4Total(0)] }),
@@ -2128,5 +2130,87 @@ describe('revenue says when it covers only some of the orders', () => {
 		})
 
 		expect(data.revenue.status).toBe('ok')
+	})
+})
+
+describe('attributing orders to email sends', () => {
+	/** A day in the cross-source series; only orders and revenue matter here. */
+	const day = (date: string, orders: number | null, revenue: number | null) => ({
+		date, vercelPageviews: null, ga4Pageviews: null, ga4Sessions: null, orders, revenue,
+	})
+
+	/** One send, at noon in the property zone so no timezone edge is in play by accident. */
+	const send = (title: string, date: string) => ({
+		title, subject: title, sentAt: `${date}T19:00:00+00:00`,
+		sent: 2000, opens: 900, clicks: 120, unsubscribed: 3,
+	})
+
+	const week = [
+		day('2026-08-20', 1, 100), day('2026-08-21', 2, 200), day('2026-08-22', 4, 400),
+		day('2026-08-23', 8, 800), day('2026-08-24', 16, 1600), day('2026-08-25', 32, 3200),
+		day('2026-08-26', 64, 6400),
+	]
+
+	it('counts the send day and the two days after it', () => {
+		const [campaign] = attributeToSends([send('August', '2026-08-20')], week, 'America/Los_Angeles', '2026-08-26')
+		expect(campaign!.ordersAfter).toBe(1 + 2 + 4)
+		expect(campaign!.revenueAfter).toBe(700)
+		expect(campaign!.windowDays).toBe(3)
+		expect(campaign!.windowComplete).toBe(true)
+	})
+
+	it('stops a window early when the next send lands inside it', () => {
+		// Otherwise two sends three days apart both claim the same orders and the columns sum to more
+		// sales than the foundry made.
+		const [first, second] = attributeToSends(
+			[send('First', '2026-08-20'), send('Second', '2026-08-22')],
+			week, 'America/Los_Angeles', '2026-08-26',
+		)
+		expect(first!.ordersAfter).toBe(1 + 2)
+		expect(second!.ordersAfter).toBe(4 + 8 + 16)
+		// The partition holds: no order is counted twice.
+		expect((first!.ordersAfter ?? 0) + (second!.ordersAfter ?? 0)).toBe(1 + 2 + 4 + 8 + 16)
+	})
+
+	it('says a window is incomplete rather than reporting a short one as a poor campaign', () => {
+		const [campaign] = attributeToSends([send('Late', '2026-08-26')], week, 'America/Los_Angeles', '2026-08-26')
+		expect(campaign!.windowComplete).toBe(false)
+		expect(campaign!.windowDays).toBe(1)
+		expect(campaign!.ordersAfter).toBe(64)
+	})
+
+	it('reports a send from before the range as unmeasured, not as zero orders', () => {
+		// A campaign whose days are all outside the window sold an unknown amount. Zero would rank it
+		// bottom of the table as the worst performer on the strength of the range the reader chose.
+		const [campaign] = attributeToSends([send('Earlier', '2026-08-01')], week, 'America/Los_Angeles', '2026-08-26')
+		expect(campaign!.ordersAfter).toBeNull()
+		expect(campaign!.revenueAfter).toBeNull()
+	})
+
+	it('does not turn a window the order query could not answer for into a measured zero', () => {
+		// `orders: null` means Sanity did not answer for that day, which is the shape of a failed
+		// order query — every day null. Summed as zeros the campaign reports having sold nothing,
+		// which is a statement about the send rather than about the outage that produced it.
+		const blind = [day('2026-08-20', null, null), day('2026-08-21', null, null), day('2026-08-22', null, null)]
+		const [campaign] = attributeToSends([send('Blind', '2026-08-20')], blind, 'America/Los_Angeles', '2026-08-22')
+		expect(campaign!.ordersAfter).toBeNull()
+		expect(campaign!.revenueAfter).toBeNull()
+		// The window itself was measured — the days are present, their order counts are not.
+		expect(campaign!.windowDays).toBe(3)
+	})
+
+	it('still totals the days it does have when only some are missing', () => {
+		const withHole = [day('2026-08-20', 1, 100), day('2026-08-21', null, null), day('2026-08-22', 4, 400)]
+		const [campaign] = attributeToSends([send('Holey', '2026-08-20')], withHole, 'America/Los_Angeles', '2026-08-22')
+		expect(campaign!.ordersAfter).toBe(5)
+	})
+
+	it('places an evening send on the day it happened where the reader lives', () => {
+		// 19:00 UTC is midday in Los Angeles. Read in UTC the send lands on the same day here, but a
+		// later send would roll over — orders.ts is zoned for exactly this and the join has to match.
+		const evening = { ...send('Evening', '2026-08-22'), sentAt: '2026-08-23T03:00:00+00:00' }
+		const [campaign] = attributeToSends([evening], week, 'America/Los_Angeles', '2026-08-26')
+		// 2026-08-23T03:00Z is 2026-08-22 20:00 in Los Angeles.
+		expect(campaign!.ordersAfter).toBe(4 + 8 + 16)
 	})
 })

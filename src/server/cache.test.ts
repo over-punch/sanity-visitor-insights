@@ -25,6 +25,13 @@ describe('cacheKey', () => {
 		expect(cacheKey(['vi', undefined])).toBe('vi|')
 	})
 
+	it('separates the two comparison baselines for one report and range', () => {
+		// They differ ONLY in the basis. Without it in the key the second reader to ask is served the
+		// first reader's envelope: deltas measured against last month, labelled against last year.
+		const parts = ['vi', 'darden', 'measurement-health', 'quarter', '2026-06-08', '2026-09-05']
+		expect(cacheKey([...parts, 'previous-period'])).not.toBe(cacheKey([...parts, 'same-period-last-year']))
+	})
+
 	it('does not collide across a part boundary', () => {
 		// Without a separator, ['a','bc'] and ['ab','c'] would be the same key and two different
 		// sites could read each other's reports.
