@@ -258,8 +258,9 @@ describe('JourneyPanel', () => {
 		const html = render(<JourneyPanel data={inflated} />)
 		// Both bars are drawn at full width — the second is clamped, not rescaled.
 		// Both bars full width — the second is clamped, not rescaled. Matched on the fill's own
-		// declaration now that bars are explicit styles rather than Card tones.
-		expect(html.match(/opacity:0\.55;width:100%/g)).toHaveLength(2)
+		// declaration: the funnel bars carry the reference blue, so this also pins that a rung is
+		// drawn as a rung rather than picking up the abandonment colour.
+		expect(html.match(new RegExp(`background:${SERIES.vercel};opacity:0\\.85;width:100%`, 'g'))).toHaveLength(2)
 		// But the printed share is NOT clamped. Showing "100.0%" here would hide the anomaly.
 		expect(html).toContain('500.0% of landed')
 		// And a step larger than the one above it is named as such, not as "no difference".
@@ -2975,5 +2976,39 @@ describe('section hierarchy and progressive disclosure', () => {
 		)
 		expect(html).toContain('Configuration')
 		expect(html).toContain('GA4 credentials')
+	})
+})
+
+describe('the funnel draws what was lost', () => {
+	const steps = [
+		{ key: 'landed', label: 'Landed', event: 'page_view', count: ok(1000), conversionFromPrevious: null },
+		{ key: 'tested', label: 'Tested', event: 'tester_engaged', count: ok(250), conversionFromPrevious: 0.25 },
+	]
+
+	it('gives the drop-off a bar of its own, to the same scale as the rungs', () => {
+		// The interesting quantity at each rung is how many STOPPED. Stated in six words of muted
+		// type, the largest number on the tab was the quietest thing on it.
+		const html = render(<JourneyPanel data={{ steps, measurement: 'sequence', approximate: false, approximationNote: 'Tracked.', outcomes: [], topLandingPages: [] } as never} />)
+		expect(html).toContain(SERIES.ga4Pageviews)
+		// 750 of 1,000 lost — three quarters of the entry width.
+		expect(html).toMatch(/width:\s*75%/)
+	})
+
+	it('draws no drop-off arm under independent totals, where there is no drop-off', () => {
+		// The counts are of different acts by possibly different people. A bar would invent exactly
+		// the reading the fallback's caveat exists to forbid.
+		const html = render(<JourneyPanel data={{ steps, measurement: 'independent-totals', approximate: true, approximationNote: 'Each step counted on its own.', outcomes: [], topLandingPages: [] } as never} />)
+		expect(html).not.toContain(SERIES.ga4Pageviews)
+		expect(html).toContain('fewer')
+	})
+
+	it('draws nothing where nobody was lost', () => {
+		const level = [
+			{ key: 'landed', label: 'Landed', event: 'page_view', count: ok(1000), conversionFromPrevious: null },
+			{ key: 'tested', label: 'Tested', event: 'tester_engaged', count: ok(1000), conversionFromPrevious: 1 },
+		]
+		const html = render(<JourneyPanel data={{ steps: level, measurement: 'sequence', approximate: false, approximationNote: 'Tracked.', outcomes: [], topLandingPages: [] } as never} />)
+		expect(html).toContain('no drop-off')
+		expect(html).not.toContain(SERIES.ga4Pageviews)
 	})
 })

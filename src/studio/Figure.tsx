@@ -11,6 +11,7 @@
 
 import React, { useRef, useState } from 'react'
 import { Badge, Box, Card, Flex, Heading, Stack, Text, Tooltip } from '@liiift-studio/sanity-ui-compat'
+import { SERIES } from './palette'
 import type { MetricValue, UnavailableReason } from '../types'
 
 /** Human-readable explanation for each unavailable reason. */
@@ -534,6 +535,23 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
 					<li key={stage.key} style={funnelItem}>
 						{previous && (
 							<div style={funnelGap} aria-hidden="true">
+								{/* Drawn to scale, and ONLY for a tracked funnel.
+								
+								    GA4 calls this abandonment and gives it a limb of its own, which is
+								    the right instinct: the interesting quantity at each rung is not how
+								    many continued but how many stopped, and stating it in six words of
+								    muted type made the largest number on the tab the quietest thing on
+								    it. As a bar it is comparable between rungs at a glance.
+								
+								    Under independent totals the difference between two steps is NOT a
+								    drop-off — the counts are of different acts by possibly different
+								    people — so there is nothing to draw and drawing it would invent
+								    the one reading the fallback's caveat exists to forbid. */}
+								{measurement === 'sequence' && delta > 0 && entry > 0 && (
+									<div style={lostTrack}>
+										<div style={{ ...lostFill, width: `${Math.max(1, Math.min(1, delta / entry) * 100)}%` }} />
+									</div>
+								)}
 								<Text size={0} muted>{gapLabel(delta, measurement)}</Text>
 							</div>
 						)}
@@ -631,8 +649,46 @@ const funnelItem: React.CSSProperties = { display: 'grid', gap: 4 }
 /** The space between two rungs, where the drop-off is named. */
 const funnelGap: React.CSSProperties = {
 	display: 'flex',
+	alignItems: 'center',
 	justifyContent: 'flex-end',
+	gap: 8,
 	padding: '4px 2px',
+}
+
+/**
+ * The rail the abandonment bar sits in.
+ *
+ * Narrow, and right-aligned with the label, so it reads as a note between two rungs rather than as
+ * a sixth stage. It is the same scale as the stage bars above and below it — a share of entry — so
+ * the eye can compare a drop-off against the step it came from without converting anything.
+ */
+const lostTrack: React.CSSProperties = {
+	width: '38%',
+	maxWidth: 200,
+	height: 6,
+	borderRadius: 2,
+	overflow: 'hidden',
+	background: 'currentColor',
+	opacity: 0.1,
+	// Right to left: the bar grows back toward the funnel it came out of, which reads as leaving
+	// rather than as another quantity accumulating alongside.
+	display: 'flex',
+	justifyContent: 'flex-end',
+}
+
+/**
+ * The people who did not continue.
+ *
+ * The one warm mark in the funnel. It is not an error — a drop-off is normal and a foundry's is
+ * enormous — so it is drawn at a weight that says "this is the quantity" rather than "this is
+ * wrong", and it takes the same colour the timeline gives GA4's shortfall so that "what you lost"
+ * looks the same everywhere in the tool.
+ */
+const lostFill: React.CSSProperties = {
+	height: '100%',
+	borderRadius: 2,
+	background: SERIES.ga4Pageviews,
+	opacity: 0.75,
 }
 
 /** One rung. The active state is a background and a border, so it survives a forced-colours mode. */
@@ -665,10 +721,11 @@ function funnelStage(active: boolean): React.CSSProperties {
 const barFill: React.CSSProperties = {
 	height: '100%',
 	borderRadius: 2,
-	// currentColor at an alpha that clears 3:1 against the card in both themes, so the mark works
-	// from one declaration rather than needing a palette.
-	background: 'currentColor',
-	opacity: 0.55,
+	// The reference blue, as everywhere else the tool draws "people who were here". Previously
+	// currentColor at 0.55, which made the funnel a stack of grey bars whose only variable was
+	// length — legible, and giving the eye nothing to hold on to across five rungs.
+	background: SERIES.vercel,
+	opacity: 0.85,
 }
 
 /** The track a bar sits in. Visible on its own, so an empty bar still reads as a bar. */
