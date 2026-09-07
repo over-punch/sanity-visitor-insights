@@ -244,7 +244,26 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								// it to Delta with a baseline of 0 printed "new from 0" on an established
 								// list of four thousand people.
 								const growth = metricSortValue(data.audienceGrowth)
-								if (growth === null) return null
+								if (growth === null) {
+									/*
+									 * Absent SAYS why, rather than rendering nothing.
+									 *
+									 * `metricSortValue` returns null for any unavailable metric, so the reason
+									 * the server took care to write — "Mailchimp reports list growth by
+									 * calendar month, so this range has no start figure" — was discarded. And
+									 * the start figure is only fetched when the range begins on the first of a
+									 * month, which no preset range does. So on every range the card showed a
+									 * bare total and nothing else, forever, and a foundry whose largest asset
+									 * is its list would conclude the tool does not do growth.
+									 *
+									 * This is the one card that bypasses MetricFigure, which is exactly where
+									 * the absent-versus-zero rule stopped being applied.
+									 */
+									const reason = data.audienceGrowth?.status === 'unavailable'
+										? data.audienceGrowth.detail
+										: null
+									return reason ? <Text size={0} muted>{reason}</Text> : null
+								}
 								return (
 									<Text size={1} muted>
 										{growth > 0 ? '+' : ''}{formatCount(growth)} this period
@@ -1147,6 +1166,14 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
  *
  * @param rows - every family in the window
  */
+/**
+ * Views a family needs before its sales-per-view is comparable to anything.
+ *
+ * Thirty, matching the funnel's floor: below it one more order moves the index by more than a
+ * third, so the figure describes a single buyer rather than how the family converts.
+ */
+const MIN_FAMILY_VIEWS = 30
+
 export function catalogueRate(rows: Array<{ viewed?: MetricValue; bought?: MetricValue }>): number | null {
 	let views = 0
 	let sales = 0
@@ -1172,10 +1199,29 @@ export function catalogueRate(rows: Array<{ viewed?: MetricValue; bought?: Metri
  * @param row - the family's row
  * @param benchmark - the catalogue rate, or null when there was none
  */
-export function buyRateIndex(row: { buyRate?: number | null }, benchmark: number | null): number | null {
+export function buyRateIndex(
+	row: { buyRate?: number | null; viewed?: MetricValue },
+	benchmark: number | null,
+): number | null {
 	const rate = row.buyRate
 	if (benchmark === null || benchmark <= 0) return null
 	if (rate === null || rate === undefined || !Number.isFinite(rate) || rate < 0) return null
+
+	/*
+	 * The family's own views have to carry a ratio, not just the catalogue's.
+	 *
+	 * Every other small-sample figure here is gated by a number — the funnel withholds a rate below
+	 * thirty and says "too few to give a rate", the revenue split needs five attributed purchases and
+	 * a quarter of the order book. This column was gated only by a sentence in the blurb. On a
+	 * catalogue where a family's month is sixteen views and zero-or-one order, a single sale printed
+	 * "4.9× catalogue" in the same type as a figure computed on hundreds, and a reader would put that
+	 * typeface on the homepage on the strength of one order.
+	 *
+	 * The same floor the funnel uses, applied to the denominator that actually varies per row.
+	 */
+	const views = metricSortValue(row.viewed)
+	if (views === null || views < MIN_FAMILY_VIEWS) return null
+
 	return rate / benchmark
 }
 
@@ -1200,6 +1246,8 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 					family together and so cancels out here. With one or two sales a family will still swing a
 					long way, so read it alongside the order counts beside it.
 					{' '}Bought and Revenue come from your own orders and are exact — do not scale those up.
+					{' '}A family needs a reasonable number of views before it gets a comparison at all;
+					below that it says so rather than ranking one order against the catalogue.
 				</Text>
 				<SortableTable<TypefaceInterestRow>
 					caption="Engagement by typeface"
@@ -1301,7 +1349,16 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 							render: (row) => {
 								const index = buyRateIndex(row, benchmark)
 								if (index === null) {
-									return <Text size={1} muted aria-label={`${row.typeface} not comparable`}>—</Text>
+									// Says which absence it is, like the funnel does. A dash alone made a
+									// family too quiet to compare look the same as one the catalogue could
+									// not be benchmarked against at all.
+									const views = metricSortValue(row.viewed)
+									const tooQuiet = views !== null && views < MIN_FAMILY_VIEWS
+									return (
+										<Text size={1} muted aria-label={`${row.typeface} not comparable`}>
+											{tooQuiet ? 'too few views to compare' : '—'}
+										</Text>
+									)
 								}
 								if (index === 0) {
 									// Named, not left as "0.0×". A family with views and no sales is the

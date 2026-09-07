@@ -136,13 +136,24 @@ export function createMailchimpClient(apiKey: string, listId: string): Mailchimp
 		},
 
 		async campaigns(range) {
-			const reports = await get<{ reports?: Array<Record<string, unknown>> }>('/reports', {
+			const reports = await get<{ reports?: Array<Record<string, unknown>>; total_items?: number }>('/reports', {
 				// Bounded by the range on both sides, so a panel showing one week does not pick up a
 				// campaign from last year and attribute its clicks to this window.
 				since_send_time: `${range.start}T00:00:00+00:00`,
 				before_send_time: `${range.end}T23:59:59+00:00`,
-				count: '100',
+				/*
+				 * The documented maximum, and `total_items` so truncation can be SEEN.
+				 *
+				 * This asked for 100 and never read the count. Mailchimp's default is 10 and its
+				 * maximum is 1000, so a sender past a hundred campaigns in the window silently lost
+				 * the rest — dropped from the email capture estimate, whose whole claim is a cohort
+				 * "whose true size is known exactly", and dropped from the timeline markers. Every
+				 * other truncation in this package is reported: GA4 rows, Vercel windows, orders
+				 * missing a total. This one was not even measurable.
+				 */
+				count: '1000',
 				fields: [
+					'total_items',
 					'reports.id',
 					'reports.campaign_title',
 					'reports.subject_line',
@@ -154,7 +165,16 @@ export function createMailchimpClient(apiKey: string, listId: string): Mailchimp
 				].join(','),
 			})
 
-			return (reports.reports ?? []).map((report) => {
+			const returned = reports.reports ?? []
+			// Said, not swallowed. A cohort the estimate calls "known exactly" cannot be missing rows
+			// without the reader being told.
+			if (typeof reports.total_items === 'number' && reports.total_items > returned.length) {
+				console.error(
+					`Visitor insights: Mailchimp reported ${reports.total_items} campaigns in this range and returned ${returned.length}.`,
+				)
+			}
+
+			return returned.map((report) => {
 				const opens = report.opens as { unique_opens?: number } | undefined
 				const clicks = report.clicks as { unique_subscriber_clicks?: number } | undefined
 				return {

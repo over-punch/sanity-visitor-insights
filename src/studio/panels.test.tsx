@@ -2537,3 +2537,43 @@ describe('the typeface table says which columns are already exact', () => {
 		expect(html).toContain('do not scale those up')
 	})
 })
+
+describe('small-sample and absent figures say so on the panels', () => {
+	const shell = {
+		interpretationNote: 'x', rowsWithheld: false, licenceTiers: [], totalRevenue: ok(910), currency: 'USD',
+	}
+
+	it('will not rank a family on a handful of views', () => {
+		// Every other small-sample figure here is gated by a number; this column was gated by a
+		// sentence in the blurb. At sixteen views and one order it printed "4.9× catalogue" in the
+		// same type as a figure computed on hundreds.
+		const html = render(<TypefaceInterestPanel data={{
+			...shell,
+			rows: [
+				{ typeface: 'Quiet', viewed: ok(16), tested: ok(3), bought: ok(1), revenue: ok(300), testRate: 0.2, buyRate: 1 / 16 },
+				{ typeface: 'Busy', viewed: ok(800), tested: ok(200), bought: ok(8), revenue: ok(2400), testRate: 0.25, buyRate: 8 / 800 },
+			],
+		} as never} />)
+		expect(html).toContain('too few views to compare')
+		// The family with a real denominator still gets its comparison.
+		expect(html).toMatch(/\d\.\d× catalogue/)
+	})
+
+	it('states why mailing-list growth is missing rather than rendering nothing', () => {
+		// metricSortValue returns null for any unavailable metric, so the reason the server wrote was
+		// discarded — and the start figure is only fetched when a range begins on the first of a
+		// month, which no preset range does. The card showed a bare total forever.
+		const html = render(<OverviewPanel data={{
+			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.2,
+			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+			vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+			revenue: ok(910), currency: 'USD', orderStatuses: {},
+			audience: ok(4210),
+			audienceGrowth: unavailable('not_applicable', 'Mailchimp reports list growth by calendar month, so this range has no start figure'),
+			campaigns: [], capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
+			estimatedSessions: unavailable('not_applicable'), interpretation: 'x', daily: [],
+			crossSource: [], timelineEvents: [],
+		} as never} />)
+		expect(html).toContain('list growth by calendar month')
+	})
+})
