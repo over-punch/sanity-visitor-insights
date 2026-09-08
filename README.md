@@ -15,7 +15,7 @@ only as a conversion anchor and a count; no revenue, and no customer data.
 |---|---|
 | **Measurement health** | How much of reality does each source actually see? |
 | **Acquisition** | Where do visitors come from, and how many are design-industry referrals? |
-| **Journey** | How far do visitors get, and where do they stop? |
+| **Journey** | How far do visitors get, where do they stop, and is it different on mobile? |
 | **Typeface interest** | Which families get viewed, tested and bought? |
 | **Diagnostics** | What to fix before trusting any of the above? |
 

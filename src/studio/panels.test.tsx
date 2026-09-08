@@ -36,8 +36,10 @@ import {
 	buyRateIndex,
 	catalogueRate,
 	coverageOf,
+	firstStepRate,
 	gapOf,
 	revenuePerThousandSent,
+	spread,
 	visitorsPerOrder,
 } from './panels'
 import { PanelBoundary, ReadyReport, VisitorInsightsTool } from './VisitorInsightsTool'
@@ -3010,5 +3012,58 @@ describe('the funnel draws what was lost', () => {
 		const html = render(<JourneyPanel data={{ steps: level, measurement: 'sequence', approximate: false, approximationNote: 'Tracked.', outcomes: [], topLandingPages: [] } as never} />)
 		expect(html).toContain('no drop-off')
 		expect(html).not.toContain(SERIES.ga4Pageviews)
+	})
+})
+
+describe('the funnel breakdown', () => {
+	const step = (key: string, label: string, count: number, rate: number | null) =>
+		({ key, label, event: key, count: ok(count), conversionFromPrevious: rate })
+	const desktop = { key: 'desktop', label: 'Desktop', steps: [step('landed', 'Landed', 8804, null), step('viewed', 'Viewed', 112, 0.0127)] }
+	const mobile = { key: 'mobile', label: 'Mobile', steps: [step('landed', 'Landed', 8408, null), step('viewed', 'Viewed', 12, 0.0014)] }
+	const journey = (segments: unknown[]) => ({
+		steps: [step('landed', 'Landed', 17723, null), step('viewed', 'Viewed', 129, 0.0073)],
+		segments, segmentDimension: 'device',
+		measurement: 'sequence', approximate: false, approximationNote: 'Tracked.',
+		outcomes: [], topLandingPages: [],
+	})
+
+	it('puts each segment\'s own rate on its control, so the difference is legible unclicked', () => {
+		// A bare row of device names makes the reader press three buttons to discover that one of
+		// them is the entire story.
+		const html = render(<JourneyPanel data={journey([desktop, mobile]) as never} />)
+		expect(html).toContain('Desktop')
+		expect(html).toContain('Mobile')
+		expect(html).toContain('1.27%')
+		expect(html).toContain('0.14%')
+	})
+
+	it('says in words when the segments differ by a multiple', () => {
+		const html = render(<JourneyPanel data={journey([desktop, mobile]) as never} />)
+		expect(html).toContain('times worse')
+		expect(html).toContain('describes neither')
+	})
+
+	it('says nothing when the segments merely differ', () => {
+		// A tool that remarks on every difference teaches the reader to stop reading its remarks.
+		const close = { ...mobile, steps: [step('landed', 'Landed', 8408, null), step('viewed', 'Viewed', 90, 0.010)] }
+		expect(spread([desktop, close] as never)).toBeNull()
+	})
+
+	it('will not call a segment worse on too few visitors to tell', () => {
+		// Forty users can produce any rate at all. "Tablet converts nine times better" off six
+		// people is exactly the confident nonsense this package exists not to print.
+		const tiny = { key: 'tablet', label: 'Tablet', steps: [step('landed', 'Landed', 40, null), step('viewed', 'Viewed', 9, 0.225)] }
+		expect(spread([desktop, tiny] as never)).toBeNull()
+	})
+
+	it('offers no control at all when there is nothing to compare', () => {
+		const html = render(<JourneyPanel data={journey([]) as never} />)
+		expect(html).not.toContain('Everyone')
+	})
+
+	it('reads the first-step rate, and reports an unmeasured one as absent rather than zero', () => {
+		expect(firstStepRate(desktop.steps as never)).toBeCloseTo(0.0127, 5)
+		expect(firstStepRate([step('landed', 'Landed', 10, null)] as never)).toBeNull()
+		expect(firstStepRate([step('a', 'A', 10, null), step('b', 'B', 1, null)] as never)).toBeNull()
 	})
 })

@@ -346,9 +346,39 @@ export interface JourneyOutcome {
 	count: MetricValue
 }
 
+/**
+ * The same funnel, for one slice of the audience.
+ *
+ * GA4's own funnel exploration calls this a breakdown, and it is the question the undivided funnel
+ * cannot answer: a single set of rungs averages a foundry's desktop and mobile visitors together,
+ * and at Darden those two behave so differently that the average describes neither.
+ */
+export interface JourneySegment {
+	/** The dimension value, e.g. `mobile`. */
+	key: string
+	/** The value as shown, e.g. `Mobile`. */
+	label: string
+	/**
+	 * This slice's rungs.
+	 *
+	 * Only the steps GA4 answered for this slice, which may be fewer than the whole funnel's — a
+	 * segment that never reached step three has three fewer rungs, not three zeroes.
+	 */
+	steps: JourneyStep[]
+}
+
 /** How far visitors get. Per-step totals, never an observed path. */
 export interface JourneyData {
 	steps: JourneyStep[]
+	/**
+	 * The funnel split by device, when GA4 answered a tracked one.
+	 *
+	 * Optional: absent under the independent-totals fallback, where there is no funnel to split,
+	 * and absent from any route that predates this field.
+	 */
+	segments?: JourneySegment[]
+	/** What the segments are split by, in words the panel can print. */
+	segmentDimension?: string
 	/**
 	 * Where sessions began, busiest first. GA4 exposes entries but not exits — the previous
 	 * `topExitPages` queried a metric GA4 has never had and was permanently empty.

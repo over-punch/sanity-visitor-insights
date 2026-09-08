@@ -27,6 +27,8 @@ import type {
 	CrossSourceDay,
 	EmailCampaign,
 	JourneyData,
+	JourneySegment,
+	JourneyStep,
 	LandingPage,
 	MeasurementHealthData,
 	TypefaceInterestData,
@@ -112,6 +114,30 @@ const figureRow: React.CSSProperties = {
 }
 
 /** Referrer links, marked as links without shouting. */
+/** The segment control: one row of options, wrapping on a narrow pane. */
+const segmentRow: React.CSSProperties = { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }
+
+/** One segment option, carrying its own headline figure. */
+function segmentButton(selected: boolean): React.CSSProperties {
+	return {
+		appearance: 'none',
+		background: selected ? 'var(--card-bg-color, rgba(128,128,128,0.12))' : 'transparent',
+		border: `1px solid ${selected ? 'currentColor' : 'var(--card-border-color, rgba(128,128,128,0.3))'}`,
+		borderRadius: 3,
+		color: 'inherit',
+		font: 'inherit',
+		fontSize: '0.85em',
+		padding: '4px 10px',
+		cursor: 'pointer',
+		display: 'flex',
+		alignItems: 'baseline',
+		gap: 7,
+	}
+}
+
+/** The figure on the option. Quieter than the name, and tabular so the row of them lines up. */
+const segmentRate: React.CSSProperties = { opacity: 0.65, fontVariantNumeric: 'tabular-nums' }
+
 const sourceLink: React.CSSProperties = {
 	color: 'inherit',
 	textDecoration: 'underline',
@@ -1135,8 +1161,74 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 }
 
 /** Journey — a funnel, drawn as a tracked sequence or as independent totals, whichever the report used. */
+/**
+ * How many of a segment's entrants reached the second rung.
+ *
+ * The single most comparable number between segments: every segment has a first step, the rate is
+ * already a proportion so segments of wildly different sizes sit on one scale, and it is where a
+ * foundry's funnel actually breaks. Null when the segment has fewer than two rungs or GA4 gave no
+ * rate — never zero, which would rank an unmeasured segment as the worst performer.
+ *
+ * @param steps - one segment's rungs, in funnel order
+ */
+export function firstStepRate(steps: JourneyStep[]): number | null {
+	const second = steps[1]
+	if (!second) return null
+	const rate = second.conversionFromPrevious
+	return typeof rate === 'number' && Number.isFinite(rate) ? rate : null
+}
+
+/**
+ * A sentence naming the gap between the best and worst segment, or null when there is not one.
+ *
+ * Only fires at a MULTIPLE, not a margin. Segments always differ a little, and a tool that
+ * remarks on every difference teaches the reader to stop reading its remarks; three times apart is
+ * the point at which the undivided funnel above stops describing either group.
+ *
+ * Both sides need a real denominator. At a foundry's volumes a segment of forty users can produce
+ * any rate at all, and "tablet converts nine times better than desktop" off six people is the kind
+ * of confident nonsense this package exists not to print.
+ *
+ * @param segments - every segment, in any order
+ */
+export function spread(segments: JourneySegment[]): string | null {
+	const MIN_USERS = 200
+	const RATIO = 3
+
+	const rated = segments
+		.map((segment) => ({
+			label: segment.label,
+			rate: firstStepRate(segment.steps),
+			users: metricSortValue(segment.steps[0]?.count) ?? 0,
+		}))
+		.filter((row): row is { label: string; rate: number; users: number } =>
+			row.rate !== null && row.rate > 0 && row.users >= MIN_USERS)
+
+	if (rated.length < 2) return null
+	const sorted = [...rated].sort((a, b) => b.rate - a.rate)
+	const best = sorted[0] as { label: string; rate: number; users: number }
+	const worst = sorted[sorted.length - 1] as { label: string; rate: number; users: number }
+	const ratio = best.rate / worst.rate
+	if (ratio < RATIO) return null
+
+	return `${worst.label} reaches the second step at ${formatPercent(worst.rate, 2)} against `
+		+ `${best.label}'s ${formatPercent(best.rate, 2)} — about ${Math.round(ratio)} times worse, on `
+		+ `${formatCount(worst.users)} visitors. The combined funnel above averages the two and describes neither.`
+}
+
 export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElement {
-	const allSteps = data.steps ?? []
+	/**
+	 * Which slice of the audience the funnel is drawn for.
+	 *
+	 * Null is everyone, which is what the tab has always shown. The segments arrive in the same
+	 * envelope as the whole funnel — GA4 returns both in one response — so switching between them
+	 * costs no request and the control can be instant.
+	 */
+	const [segmentKey, setSegmentKey] = React.useState<string | null>(null)
+	const segments = data.segments ?? []
+	const segment = segmentKey === null ? null : segments.find((row) => row.key === segmentKey) ?? null
+
+	const allSteps = segment ? segment.steps : data.steps ?? []
 
 	// Steps this site does not instrument are hidden rather than drawn as empty rails. An
 	// uninstrumented rung told the reader nothing except that the funnel had a hole in it, and it
@@ -1168,6 +1260,49 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 					<Text size={1} muted={tracked}>{data.approximationNote}</Text>
 				</Stack>
 			</Card>
+
+			{segments.length > 1 && (
+				<Stack space={3}>
+					{/* The control, and beside each option the number that makes it worth pressing.
+					    A bare set of device names would make the reader click three times to find
+					    out that one of them is the story; the first-step rate is printed on the
+					    button so the difference is legible before anything is chosen. */}
+					<div style={segmentRow} role="radiogroup" aria-label={`Funnel by ${data.segmentDimension ?? 'segment'}`}>
+						<button
+							type="button"
+							role="radio"
+							aria-checked={segmentKey === null}
+							style={segmentButton(segmentKey === null)}
+							onClick={() => setSegmentKey(null)}
+						>
+							Everyone
+						</button>
+						{segments.map((row) => {
+							const rate = firstStepRate(row.steps)
+							return (
+								<button
+									key={row.key}
+									type="button"
+									role="radio"
+									aria-checked={segmentKey === row.key}
+									style={segmentButton(segmentKey === row.key)}
+									onClick={() => setSegmentKey(row.key)}
+								>
+									{row.label}
+									{rate !== null && <span style={segmentRate}>{formatPercent(rate, 2)}</span>}
+								</button>
+							)
+						})}
+					</div>
+					{spread(segments) && (
+						/* Said in words, once, where the funnel is. The whole reason to split a funnel
+						   is that the halves differ; when they differ by a multiple rather than a
+						   margin, the undivided funnel above describes nobody and the reader should
+						   be told rather than left to press the buttons and notice. */
+						<Text size={1}>{spread(segments)}</Text>
+					)}
+				</Stack>
+			)}
 
 			<FunnelChart stages={stages} measurement={data.measurement ?? 'independent-totals'} />
 

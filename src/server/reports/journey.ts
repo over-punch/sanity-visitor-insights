@@ -28,7 +28,7 @@
  * event-count funnel compares a number that inflates with engagement against one that does not.
  */
 
-import type { JourneyData, JourneyOutcome, JourneyStep, LandingPage } from '../../reportData'
+import type { JourneyData, JourneyOutcome, JourneySegment, JourneyStep, LandingPage } from '../../reportData'
 import { unavailable, type DateRange, type MetricValue } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
 import { applyCoverage, coverageForAny, coverageForRange } from '../../core/cutover'
@@ -65,6 +65,24 @@ const APPROXIMATION_NOTE =
  * All step queries go in one batched call rather than one request per step, which would otherwise
  * make this the most quota-expensive panel in the tool.
  */
+/**
+ * What the funnel is split by.
+ *
+ * Device, and only device for now. It is the split that separates a foundry's visitors into two
+ * populations that genuinely behave differently — the type tester is a desktop instrument — and
+ * every extra breakdown dimension is another funnel request against a property with a
+ * ten-concurrent ceiling.
+ */
+const SEGMENT_DIMENSION = 'deviceCategory'
+
+/** GA4's device values, in the case a reader expects to see. */
+const SEGMENT_LABELS: Record<string, string> = {
+	desktop: 'Desktop',
+	mobile: 'Mobile',
+	tablet: 'Tablet',
+	smart_tv: 'TV',
+}
+
 export async function journey(config: SiteAnalyticsConfig, ga4: Ga4Client, range: DateRange, notices?: string[]): Promise<JourneyData> {
 	// The tester step is whatever this site calls it. TDF emits five distinct tester events and
 	// has for a long time; forcing a single canonical name on every site would throw that away.
@@ -150,11 +168,21 @@ export async function journey(config: SiteAnalyticsConfig, ga4: Ga4Client, range
 		.filter((entry) => entry.coverage.status !== 'none')
 		.map((entry) => ({ step: entry.step, events: entry.events, coverage: entry.coverage }))
 
+	// Filled only when the tracked funnel answers. Under the fallback there is no funnel to split,
+	// and a "breakdown" of independent per-step totals would be four more ways to misread them.
+	let segments: JourneySegment[] = []
+
 	if (funnelRungs.length >= 2) {
 		try {
 			const funnel = await ga4.runFunnelReport(
 				funnelRungs.map((rung) => ({ name: rung.step.label, eventNames: rung.events })),
 				{ startDate: range.start, endDate: range.end },
+				// Device, and it costs nothing: GA4 returns the undivided RESERVED_TOTAL rows in the
+				// same response, so the funnel below is the same funnel it always was and the split
+				// arrives alongside it. Device because it is the split that actually separates a
+				// foundry's visitors — a type tester is a desktop instrument, and the undivided
+				// funnel averages two populations that behave nothing alike.
+				SEGMENT_DIMENSION,
 			)
 
 			if (funnel.sampled) {
@@ -165,6 +193,31 @@ export async function journey(config: SiteAnalyticsConfig, ga4: Ga4Client, range
 			// mismatch means the response does not describe the funnel that was asked for — better
 			// to fall back than to line up rows that may not correspond.
 			const byName = new Map(funnel.steps.map((row) => [row.name, row]))
+
+			segments = funnel.segments.map((segment) => ({
+				key: segment.value,
+				label: SEGMENT_LABELS[segment.value] ?? segment.value,
+				// Only the rungs GA4 answered for this slice. A rung it omitted is not a rung with
+				// nobody on it — GA4 stops reporting a segment once it empties — and filling the gap
+				// with zeroes would draw a confident cliff where the truth is that the data stops.
+				steps: funnelRungs.flatMap((rung, index) => {
+					const row = segment.steps.find((step) => step.name === rung.step.label)
+					if (!row) return []
+					const previous = index > 0
+						? segment.steps.find((step) => step.name === funnelRungs[index - 1]!.step.label)
+						: undefined
+					return [{
+						key: rung.step.key,
+						label: rung.step.label,
+						event: rung.step.event,
+						count: applyCoverage(row.activeUsers, rung.coverage),
+						// The PREVIOUS step's rate, for the same reason the undivided funnel uses it:
+						// `funnelStepCompletionRate` is measured on a step and describes progression
+						// from it.
+						conversionFromPrevious: index === 0 ? null : previous?.completionRate ?? null,
+					}]
+				}),
+			}))
 			if (funnelRungs.every((rung) => byName.has(rung.step.label))) {
 				sequencedSteps = funnelRungs.map((rung, index) => {
 					const row = byName.get(rung.step.label) as NonNullable<ReturnType<typeof byName.get>>
@@ -240,6 +293,11 @@ export async function journey(config: SiteAnalyticsConfig, ga4: Ga4Client, range
 
 	return {
 		steps: sequencedSteps ?? steps,
+		// Only where the steps they belong to are the tracked ones. `sequencedSteps` being null
+		// means the funnel call failed or its names did not line up, and the segments — which came
+		// from that same response — then describe a funnel the panel is not showing.
+		segments: sequencedSteps ? segments : [],
+		segmentDimension: 'device',
 		topLandingPages,
 		outcomes: await otherOutcomes(config, ga4, range),
 		measurement: sequencedSteps ? 'sequence' : 'independent-totals',

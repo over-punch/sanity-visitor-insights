@@ -9,7 +9,7 @@
  */
 
 import { fetchWithTimeout } from '../fetchWithTimeout'
-import { alignBatch, type Ga4Report } from '../ga4'
+import { alignBatch, type Ga4FunnelReport, type Ga4Report } from '../ga4'
 import { formatInTimeZone } from '../../core/ranges'
 import { countLicenceTiers } from '../orders'
 import { describe, expect, it, vi } from 'vitest'
@@ -740,9 +740,10 @@ describe('hasRequiredRole', () => {
 
 describe('journey funnel', () => {
 	/** A funnel response echoing the step names it was given, with GA4's own completion rates. */
-	function funnelFor(counts: Record<string, number>) {
+	function funnelFor(counts: Record<string, number>, segments: Ga4FunnelReport['segments'] = []) {
 		const names = Object.keys(counts)
 		return {
+			segments,
 			sampled: false,
 			steps: names.map((name, index) => {
 				const previous = index > 0 ? counts[names[index - 1]!]! : null
@@ -931,7 +932,7 @@ describe('parseFunnelReport', () => {
 	})
 
 	it('returns no steps rather than guessing when the table is missing', () => {
-		expect(parseFunnelReport({})).toEqual({ steps: [], sampled: false })
+		expect(parseFunnelReport({})).toEqual({ steps: [], segments: [], sampled: false })
 	})
 
 	it('drops a row whose user count is absent rather than reading it as zero', () => {
@@ -1885,7 +1886,7 @@ describe('the funnel reads GA4 completion rates in the direction GA4 means them'
 		// rate is zero, printed beside a count of real purchasers.
 		const data = await journey(
 			siteConfig(),
-			createFakeGa4Client({ funnel: () => ({ steps: funnelRows([1000, 500, 250, 100, 60, 50]), sampled: false }) }),
+			createFakeGa4Client({ funnel: () => ({ steps: funnelRows([1000, 500, 250, 100, 60, 50]), segments: [], sampled: false }) }),
 			range,
 			[],
 		)
@@ -1902,7 +1903,7 @@ describe('the funnel reads GA4 completion rates in the direction GA4 means them'
 	it('leaves the entry step without an inbound rate', async () => {
 		const data = await journey(
 			siteConfig(),
-			createFakeGa4Client({ funnel: () => ({ steps: funnelRows([1000, 500, 250]), sampled: false }) }),
+			createFakeGa4Client({ funnel: () => ({ steps: funnelRows([1000, 500, 250]), segments: [], sampled: false }) }),
 			range,
 			[],
 		)

@@ -157,7 +157,7 @@ interface RawFunnelReport {
  */
 export function parseFunnelReport(raw: RawFunnelReport): Ga4FunnelReport {
 	const table = raw.funnelTable
-	if (!table) return { steps: [], sampled: false }
+	if (!table) return { steps: [], segments: [], sampled: false }
 
 	const stepNameAt = (table.dimensionHeaders ?? []).findIndex((h) => h.name === 'funnelStepName')
 	const metricIndex = (name: string) => (table.metricHeaders ?? []).findIndex((h) => h.name === name)
@@ -171,9 +171,12 @@ export function parseFunnelReport(raw: RawFunnelReport): Ga4FunnelReport {
 	const breakdownAt = (table.dimensionHeaders ?? []).findIndex((h) => h.name !== 'funnelStepName')
 
 	const steps: Ga4FunnelRow[] = []
+	// Per-breakdown-value rows, keyed by that value. Previously discarded: the parser took only
+	// RESERVED_TOTAL, so a breakdown could be requested and its whole point thrown away.
+	const bySegment = new Map<string, Ga4FunnelRow[]>()
+
 	for (const row of table.rows ?? []) {
 		if (stepNameAt < 0) continue
-		if (breakdownAt >= 0 && row.dimensionValues?.[breakdownAt]?.value !== 'RESERVED_TOTAL') continue
 
 		const users = usersAt >= 0 ? toMetricNumber(row.metricValues?.[usersAt]?.value) : Number.NaN
 		if (!Number.isFinite(users)) continue
@@ -181,18 +184,33 @@ export function parseFunnelReport(raw: RawFunnelReport): Ga4FunnelReport {
 		const completion = completionAt >= 0 ? toMetricNumber(row.metricValues?.[completionAt]?.value) : Number.NaN
 		const abandonments = abandonmentsAt >= 0 ? toMetricNumber(row.metricValues?.[abandonmentsAt]?.value) : Number.NaN
 
-		steps.push({
+		const parsed: Ga4FunnelRow = {
 			// GA4 prefixes step names with an ordinal, "1. Landed". The array already carries the
 			// order, so the prefix is duplication in the label.
 			name: (row.dimensionValues?.[stepNameAt]?.value ?? '').replace(/^\d+\.\s*/, ''),
 			activeUsers: users,
 			completionRate: Number.isFinite(completion) ? completion : null,
 			abandonments: Number.isFinite(abandonments) ? abandonments : null,
-		})
+		}
+
+		const segment = breakdownAt >= 0 ? row.dimensionValues?.[breakdownAt]?.value : undefined
+		if (breakdownAt < 0 || segment === 'RESERVED_TOTAL') {
+			steps.push(parsed)
+			continue
+		}
+		if (segment === undefined) continue
+		const held = bySegment.get(segment)
+		if (held) held.push(parsed)
+		else bySegment.set(segment, [parsed])
 	}
 
 	return {
 		steps,
+		// Ordered by the first step's size, so the reader meets the largest segment first rather
+		// than in whatever order GA4 happened to answer.
+		segments: [...bySegment.entries()]
+			.map(([value, rows]) => ({ value, steps: rows }))
+			.sort((a, b) => (b.steps[0]?.activeUsers ?? 0) - (a.steps[0]?.activeUsers ?? 0)),
 		sampled: Array.isArray(table.metadata?.samplingMetadatas) && table.metadata.samplingMetadatas.length > 0,
 	}
 }
@@ -227,6 +245,13 @@ export interface Ga4FunnelRow {
 /** A parsed funnel report. */
 export interface Ga4FunnelReport {
 	steps: Ga4FunnelRow[]
+	/**
+	 * The same funnel, split by the breakdown dimension. Empty when none was requested.
+	 *
+	 * Each entry holds only the steps GA4 answered for that value — a segment that never reached
+	 * step three has three fewer rows, not three zeroes, and the difference matters downstream.
+	 */
+	segments: Array<{ value: string; steps: Ga4FunnelRow[] }>
 	sampled: boolean
 }
 
@@ -238,7 +263,17 @@ export interface Ga4Client {
 	 * Run an ordered, closed funnel. Rejects like any other call; the caller decides whether to
 	 * fall back, because a funnel failing is not a reason to show no journey at all.
 	 */
-	runFunnelReport(steps: readonly Ga4FunnelStep[], range: { startDate: string; endDate: string }): Promise<Ga4FunnelReport>
+	runFunnelReport(
+		steps: readonly Ga4FunnelStep[],
+		range: { startDate: string; endDate: string },
+		/**
+		 * A dimension to split the funnel by, e.g. `deviceCategory`.
+		 *
+		 * Costs NO extra request: GA4 returns the RESERVED_TOTAL rows alongside the per-value ones
+		 * in the same response, so the undivided funnel is still there and the split comes free.
+		 */
+		breakdown?: string,
+	): Promise<Ga4FunnelReport>
 }
 
 /**
@@ -410,7 +445,7 @@ export function createGa4Client(propertyId: string, key: ServiceAccountKey, opti
 			)
 		},
 
-		async runFunnelReport(steps, range) {
+		async runFunnelReport(steps, range, breakdown) {
 			// The hostname goes in a TOP-LEVEL dimensionFilter, not into each step.
 			//
 			// An earlier version ANDed a funnelFieldFilter into every step's filterExpression, on
@@ -445,6 +480,9 @@ export function createGa4Client(propertyId: string, key: ServiceAccountKey, opti
 			}
 
 			if (hostFilter) body.dimensionFilter = hostFilter
+			// Five values: enough for deviceCategory (three) and for a channel split's real head,
+			// without turning one funnel into a wall of near-empty segments.
+			if (breakdown) body.funnelBreakdown = { breakdownDimension: { name: breakdown }, limit: 5 }
 
 			const raw = await post<RawFunnelReport>('runFunnelReport', body, DATA_API_ALPHA)
 			return parseFunnelReport(raw)
