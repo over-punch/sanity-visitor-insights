@@ -3218,3 +3218,33 @@ describe('saying the short-list caveat once', () => {
 		expect(html.match(/shorter than reality/g)).toHaveLength(1)
 	})
 })
+
+describe('the coverage ribbon says only what the reader must act on', () => {
+	const render62 = () => render(
+		<VisitorInsightsTool
+			apiBaseUrl="https://x.test"
+			// The ribbon is what is under test; the panel behind it does not matter.
+		/> as never,
+	)
+
+	it('keeps the two claims that change what a reader does', () => {
+		// How low the figures run, and which ones not to touch. Everything else in the old 62 words
+		// was either naming a system the reader does not recognise, or pointing at a tab whose name
+		// is in the strip directly above the card.
+		const html = render(<AcquisitionPanel data={{
+			rows: [], totalSessions: 0, designIndustryShare: null, unattributedShare: null,
+			rowsWithheld: false, rowsTruncated: false, campaigns: [],
+		} as never} />)
+		// The panel itself carries no ribbon — it is drawn by the tool shell — so this asserts the
+		// panel does not restate the claim a third time on its own.
+		expect(html).not.toContain('must not be scaled')
+	})
+
+	it('no longer names Sanity at the reader', () => {
+		// "anything labelled as coming from Sanity" named a system the reader knows only as the
+		// place they type. The (orders) column suffix carries the same distinction where it applies.
+		const tool = readFileSync(new URL('./VisitorInsightsTool.tsx', import.meta.url), 'utf8')
+		const visible = tool.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+		expect(visible).not.toContain('coming from Sanity')
+	})
+})

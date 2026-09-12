@@ -493,13 +493,18 @@ function CoverageRibbon({ ratio }: { ratio: number | null }): React.ReactElement
 	const multiplier = seen > 0 ? Math.round(100 / seen) : null
 	return (
 		<Card padding={3} radius={2} tone={ratio > 0.6 ? 'critical' : 'caution'} border>
+			{/* Sixty-two words, on three tabs, on every load. Cut to the two claims a reader has to
+			    act on: how low these figures run, and which ones not to touch.
+			
+			    "anything labelled as coming from Sanity" went because it names a system the reader
+			    has no reason to recognise — they know it as where they type. The column headers
+			    already carry (GA4) and (orders), which is the same distinction in the place it
+			    applies. "Data health explains the rest" went because the tab is named in the strip
+			    directly above this card. */}
 			<Text size={1}>
-				Most figures on this tab come from Google Analytics, which is seeing roughly {seen}% of this
-				site&rsquo;s traffic in this window — so the real numbers are{' '}
-				{multiplier === null ? 'many times' : `several times`} these
-				{multiplier !== null && multiplier > 1 ? ` (very roughly ${multiplier}×)` : ''}. Figures drawn
-				from your orders — anything labelled as coming from Sanity — are exact and must not be scaled
-				up. Data health explains the rest, and how uncertain it is.
+				Google Analytics is seeing about {seen}% of your traffic here, so treat the figures below
+				as roughly {multiplier === null ? 'many times' : `${multiplier}×`} low. Anything marked
+				(orders) is exact — do not scale it.
 			</Text>
 		</Card>
 	)

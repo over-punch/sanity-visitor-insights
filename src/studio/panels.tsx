@@ -340,8 +340,9 @@ export function OverviewPanel({ data, previous, onBrush }: {
 							)
 						})()}
 						<Text size={0} muted>
-							From your own orders, so it is exact — but only across the orders that carry an
-							amount, which is what the revenue figure covers.
+							{/* The denominator moved into the figure above, where it belongs. This caption
+							    used to carry it in prose as well. */}
+							From your orders, so exact.
 						</Text>
 					</Stack>
 				</Card>
@@ -1781,7 +1782,7 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 				<Stack space={3}>
 					<SectionTitle title="How licences sell" />
 					<Text size={1} muted>
-						From the orders themselves, so this is exact and unaffected by whatever GA4 is doing.
+						From your orders, so exact.
 						Tier and term are separate rows, because they are the two variables in the pricing
 						question and a tier that sells well at one year may not at perpetual.
 					</Text>
