@@ -18,7 +18,7 @@
  * and the panel says why.
  */
 
-import type { CrossSourceDay, EmailCampaign, MeasurementHealthData, DailyPoint, TimelineEvent } from '../../reportData'
+import type { CrossSourceDay, EmailCampaign, MeasurementHealthData, TimelineEvent } from '../../reportData'
 import { SEND_WINDOW_DAYS, provisionalDates, shiftDays } from '../../core/ranges'
 import type { DateRange, MetricValue } from '../../types'
 import { partial, estimated, ok, unavailable } from '../../types'
@@ -605,11 +605,6 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		? Array.from(new Set([...ga4ByDate.keys(), ...vercelDates]))
 		: Array.from(ga4ByDate.keys())
 
-	const daily: DailyPoint[] = seriesDates.sort().map((date) => ({
-		date,
-		ga4: ga4ByDate.has(date) ? (ga4ByDate.get(date) as number) : null,
-		vercel: vercelIsDaily && typeof vercelByDate[date] === 'number' ? vercelByDate[date] : null,
-	}))
 
 	// Mailchimp. The audience a foundry owns, and the only count here that is neither consent-gated
 	// nor blockable — which is why it replaces the site's own subscribe event rather than sitting
@@ -776,7 +771,6 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		ordersWithTotal,
 		consentRate,
 		interpretation: interpret(ga4Pageviews, vercelPageviews, shortfallRatio, consentRate),
-		daily,
 	}
 }
 

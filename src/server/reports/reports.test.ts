@@ -605,7 +605,10 @@ describe('measurementHealth daily series', () => {
 			sanity: null,
 		})
 
-		expect(data.daily).toEqual([
+		// Retargeted from the old `daily` field, which was built and transmitted on every request
+		// and rendered nowhere. crossSource carries the same alignment guarantee and is the series
+		// the chart actually draws, so the behaviour stays under test on the field that survived.
+		expect(data.crossSource.map((d) => ({ date: d.date, ga4: d.ga4Pageviews, vercel: d.vercelPageviews }))).toEqual([
 			{ date: '2026-08-20', ga4: 471, vercel: 494 },
 			{ date: '2026-08-21', ga4: 422, vercel: 503 },
 			{ date: '2026-08-22', ga4: 389, vercel: 387 },
@@ -633,9 +636,9 @@ describe('measurementHealth daily series', () => {
 			sanity: null,
 		})
 
-		const middle = data.daily.find((d) => d.date === '2026-08-21')
-		expect(middle?.ga4).toBeNull()
-		expect(middle?.vercel).toBe(503)
+		const middle = data.crossSource.find((d) => d.date === '2026-08-21')
+		expect(middle?.ga4Pageviews).toBeNull()
+		expect(middle?.vercelPageviews).toBe(503)
 	})
 })
 

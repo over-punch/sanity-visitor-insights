@@ -149,7 +149,7 @@ describe('MeasurementHealthPanel', () => {
 					revenue: ok(4820), currency: 'USD', orderStatuses: { verified: 60, refunded: 4 },
 					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
 					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [], crossSource: [], timelineEvents: [],
-					interpretation: 'Sources agree.', daily: [],
+					interpretation: 'Sources agree.',
 				}}
 			/>,
 		)
@@ -167,7 +167,7 @@ describe('MeasurementHealthPanel', () => {
 					revenue: unavailable('source_error'), currency: null, orderStatuses: {},
 					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
 					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [], crossSource: [], timelineEvents: [],
-					daily: [],
+					
 			interpretation: 'Only one pageview source answered.',
 				}}
 			/>,
@@ -570,7 +570,7 @@ describe('layout does not depend on design tokens resolving', () => {
 					revenue: ok(910), currency: 'USD', orderStatuses: {},
 					capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null }, estimatedSessions: unavailable('not_applicable'),
 					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [], crossSource: [], timelineEvents: [],
-					interpretation: 'Sources differ.', daily: [],
+					interpretation: 'Sources differ.',
 				}}
 			/>,
 		)
@@ -764,7 +764,7 @@ describe('panels survive an older API route', () => {
 				data={{
 					ga4Pageviews: ok(543), vercelPageviews: ok(2392), shortfallRatio: 0.773,
 					ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
-					interpretation: 'Sources differ.', daily: [],
+					interpretation: 'Sources differ.',
 				} as never}
 			/>,
 		)
@@ -814,7 +814,7 @@ describe('capture model rendering', () => {
 		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
 		vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 		revenue: ok(910), currency: 'USD', orderStatuses: {},
-		interpretation: 'Sources differ.', daily: [],
+		interpretation: 'Sources differ.',
 		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [], crossSource: [], timelineEvents: [],
 	}
 
@@ -890,7 +890,7 @@ describe('CrossSourceTimeline', () => {
 		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 		capture: { estimates: [], rate: 0.25, low: 0.2, high: 0.3, discrepancy: null },
 		estimatedSessions: unavailable('not_applicable'),
-		interpretation: 'Sources differ.', daily: [],
+		interpretation: 'Sources differ.',
 		crossSource: days.map((date, i) => ({
 			// ga4Pageviews, not sessions — the shaded region differences these against vercelPageviews
 			// and both sides must be the same unit.
@@ -1004,7 +1004,7 @@ describe('the chart says in words what it draws', () => {
 		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
 		estimatedSessions: unavailable('not_applicable'),
-		interpretation: 'x', daily: [],
+		interpretation: 'x',
 		crossSource: days.map((date, i) => ({
 			date, vercelPageviews: 300 + i * 10, ga4Pageviews: 70 + i * 3, ga4Sessions: 60 + i, orders: i, revenue: i * 120,
 		})),
@@ -1043,7 +1043,7 @@ describe('panel structure', () => {
 		campaigns: [{ title: 'September release', subject: 's', sentAt: '2026-09-03T10:00:00Z', sent: 1200, opens: 400, clicks: 84, unsubscribed: 2 }],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
 		estimatedSessions: unavailable('not_applicable'),
-		interpretation: 'Sources differ.', daily: [],
+		interpretation: 'Sources differ.',
 		crossSource: [], timelineEvents: [],
 	}
 
@@ -1125,7 +1125,7 @@ describe('brushing and details on demand', () => {
 		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
 		estimatedSessions: unavailable('not_applicable'),
-		interpretation: 'x', daily: [],
+		interpretation: 'x',
 		crossSource: days.map((date, i) => ({
 			date, vercelPageviews: 300 + i * 10, ga4Pageviews: 70 + i * 3, ga4Sessions: 60 + i, orders: i, revenue: i * 120,
 		})),
@@ -1198,7 +1198,7 @@ describe('the verdict can name the failure it exists for', () => {
 		audience: ok(4210), audienceGrowth: ok(108), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
 		estimatedSessions: unavailable('not_applicable'),
-		interpretation: 'x', daily: [], crossSource: [], timelineEvents: [],
+		interpretation: 'x', crossSource: [], timelineEvents: [],
 	}
 
 	it('calls a large shortfall broken, even when the capture model cannot triangulate', () => {
@@ -1234,7 +1234,7 @@ describe('Overview survives an older API route', () => {
 		const legacy = {
 			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
 			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
-			interpretation: 'Sources differ.', daily: [],
+			interpretation: 'Sources differ.',
 		}
 		expect(() => render(<OverviewPanel data={legacy as never} />)).not.toThrow()
 		const html = render(<OverviewPanel data={legacy as never} />)
@@ -1257,7 +1257,7 @@ describe('Overview survives an older API route', () => {
 			consentRate: unavailable('not_instrumented'), vercelVisitors: ok(1), vercelDailyUnavailable: true,
 			revenue: ok(1), currency: 'USD', orderStatuses: {}, audience: ok(1), audienceGrowth: ok(0),
 			campaigns: [], capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
-			estimatedSessions: unavailable('not_applicable'), interpretation: 'x', daily: [],
+			estimatedSessions: unavailable('not_applicable'), interpretation: 'x',
 			crossSource: ['2026-09-01', '2026-09-02', '2026-09-03'].map((date) => ({
 				date, vercelPageviews: null, ga4Pageviews: 10, ga4Sessions: 8, orders: 0, revenue: 0,
 			})),
@@ -1277,7 +1277,7 @@ describe('the chart draws at a 1:1 scale', () => {
 		audience: ok(1), audienceGrowth: ok(0), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
 		estimatedSessions: unavailable('not_applicable'),
-		interpretation: 'x', daily: [],
+		interpretation: 'x',
 		crossSource: days.map((date, i) => ({
 			date, vercelPageviews: 300 + i * 10, ga4Pageviews: 70 + i * 3, ga4Sessions: 60 + i, orders: i, revenue: i * 120,
 		})),
@@ -1319,7 +1319,7 @@ describe('chrome sits on the side of the figures that matches what it does', () 
 		revenue: ok(910), currency: 'USD', orderStatuses: {},
 		audience: ok(4000), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
-		estimatedSessions: unavailable('not_applicable'), interpretation: 'x', daily: [],
+		estimatedSessions: unavailable('not_applicable'), interpretation: 'x',
 		crossSource: [], timelineEvents: [],
 	}
 
@@ -1380,7 +1380,7 @@ describe('discrete events are not drawn as a continuous line', () => {
 		audience: ok(1), audienceGrowth: ok(0), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
 		estimatedSessions: unavailable('not_applicable'),
-		interpretation: 'x', daily: [],
+		interpretation: 'x',
 		// Two orders in thirty days — the shape Darden actually has.
 		crossSource: days.map((date, i) => ({
 			date, vercelPageviews: 300, ga4Pageviews: 70, ga4Sessions: 60,
@@ -1532,7 +1532,7 @@ describe('the capture cards do not flatter the instrument', () => {
 			ga4Sessions: ok(357), orders: ok(8), consentRate: unavailable('not_instrumented'),
 			vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 			revenue: ok(910), currency: 'USD', orderStatuses: {},
-			interpretation: 'x', daily: [], capture: model,
+			interpretation: 'x', capture: model,
 			estimatedSessions: unavailable('not_applicable'),
 			audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
 			campaigns: [], crossSource: [], timelineEvents: [],
@@ -1601,7 +1601,7 @@ describe('disagreement is a quantity, not only a shaded area', () => {
 			revenue: ok(0), currency: 'USD', orderStatuses: {},
 			audience: ok(1), audienceGrowth: ok(0), campaigns: [],
 			capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
-			estimatedSessions: unavailable('not_applicable'), interpretation: 'x', daily: [],
+			estimatedSessions: unavailable('not_applicable'), interpretation: 'x',
 			crossSource: ['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04'].map((date, i) => ({
 				date, vercelPageviews: 300, ga4Pageviews: i === 2 ? 20 : 250, ga4Sessions: 60, orders: 0, revenue: null,
 			})),
@@ -1713,7 +1713,7 @@ describe('every tab renders its own panel', () => {
 		revenue: ok(910), currency: 'USD', orderStatuses: {},
 		audience: ok(4000), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
-		estimatedSessions: unavailable('not_applicable'), interpretation: 'x', daily: [],
+		estimatedSessions: unavailable('not_applicable'), interpretation: 'x',
 		crossSource: [], timelineEvents: [],
 		sources: [], totalSessions: ok(357), designIndustryShare: unavailable('not_applicable'),
 		unattributedShare: unavailable('not_applicable'),
@@ -1869,7 +1869,7 @@ describe('a lifetime figure is not shown as a period figure', () => {
 			revenue: ok(910), currency: 'USD', orderStatuses: {},
 			audience: ok(4210), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 			capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
-			estimatedSessions: unavailable('not_applicable'), interpretation: 'x', daily: [],
+			estimatedSessions: unavailable('not_applicable'), interpretation: 'x',
 			crossSource: [], timelineEvents: [],
 		} as never} />)
 		expect(html).toContain('Mailing list, total')
@@ -2175,7 +2175,7 @@ describe('the headline agrees with the cards under it', () => {
 		revenue: ok(1000), currency: 'USD', orderStatuses: {},
 		audience: ok(4000), audienceGrowth: unavailable('not_applicable'), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
-		estimatedSessions: unavailable('not_applicable'), interpretation: 'x', daily: [],
+		estimatedSessions: unavailable('not_applicable'), interpretation: 'x',
 		crossSource: [], timelineEvents: [],
 	}
 
@@ -2465,7 +2465,7 @@ describe('the chart anchors each row against the period before it', () => {
 		revenue: ok(0), currency: 'USD', orderStatuses: {},
 		audience: ok(1), audienceGrowth: ok(0), campaigns: [],
 		capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
-		estimatedSessions: unavailable('not_applicable'), interpretation: 'x', daily: [],
+		estimatedSessions: unavailable('not_applicable'), interpretation: 'x',
 		timelineEvents: [],
 	}
 	const series = (ga4: number) => days.map((date) => ({
@@ -2623,7 +2623,7 @@ describe('small-sample and absent figures say so on the panels', () => {
 			audience: ok(4210),
 			audienceGrowth: unavailable('not_applicable', 'Mailchimp reports list growth by calendar month, so this range has no start figure'),
 			campaigns: [], capture: { estimates: [], rate: null, low: null, high: null, discrepancy: null },
-			estimatedSessions: unavailable('not_applicable'), interpretation: 'x', daily: [],
+			estimatedSessions: unavailable('not_applicable'), interpretation: 'x',
 			crossSource: [], timelineEvents: [],
 		} as never} />)
 		expect(html).toContain('list growth by calendar month')
@@ -2717,7 +2717,7 @@ describe('the email campaigns table', () => {
 		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
 		vercelVisitors: ok(1580), ordersWithTotal: 7, vercelDailyUnavailable: false,
 		revenue: ok(910), currency: 'USD', orderStatuses: {},
-		interpretation: 'Sources differ.', daily: [],
+		interpretation: 'Sources differ.',
 		audience: ok(4210), audienceGrowth: ok(12), campaigns, crossSource: [], timelineEvents: [],
 	})
 
@@ -2971,7 +2971,7 @@ describe('section hierarchy and progressive disclosure', () => {
 					ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
 					vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
 					revenue: ok(910), currency: 'USD', orderStatuses: {},
-					interpretation: 'Sources differ.', daily: [],
+					interpretation: 'Sources differ.',
 					audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
 					campaigns: [], crossSource: [], timelineEvents: [],
 				} as never}
@@ -3142,7 +3142,7 @@ describe('small samples do not get a percentage', () => {
 			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
 			vercelVisitors: ok(1400), ordersWithTotal: 2, vercelDailyUnavailable: false,
 			revenue: { status: 'partial', value: 910, coveredFrom: '', note: '' }, currency: 'USD',
-			orderStatuses: {}, interpretation: '', daily: [],
+			orderStatuses: {}, interpretation: '',
 			audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
 			campaigns: [], crossSource: [], timelineEvents: [],
 		} as never} />)
@@ -3163,7 +3163,7 @@ describe('the drawing honours the mark registry', () => {
 		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
 		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
 		vercelVisitors: ok(1400), ordersWithTotal: 7, vercelDailyUnavailable: false,
-		revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '', daily: [],
+		revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '',
 		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
 		campaigns: [], timelineEvents: [],
 		crossSource: [
@@ -3304,7 +3304,7 @@ describe('the rank on the exact cards', () => {
 			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
 			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
 			vercelVisitors: ok(1400), ordersWithTotal: 7, vercelDailyUnavailable: false,
-			revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '', daily: [],
+			revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '',
 			audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
 			campaigns: [], timelineEvents: [], crossSource: series,
 		} as never} previous={{ orders: ok(4), revenue: ok(560) } as never} />)
@@ -3320,7 +3320,7 @@ describe('the rank on the exact cards', () => {
 			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
 			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
 			vercelVisitors: ok(1400), ordersWithTotal: 7, vercelDailyUnavailable: false,
-			revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '', daily: [],
+			revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '',
 			audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
 			campaigns: [], timelineEvents: [], crossSource: series,
 		} as never} />)
@@ -3335,7 +3335,7 @@ describe('the shortfall drawn as containment', () => {
 		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
 		vercelVisitors: ok(1400), ordersWithTotal: 7, vercelDailyUnavailable: false,
 		revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: 'Sources differ.',
-		daily: [], audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
+		 audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
 		campaigns: [], crossSource: [], timelineEvents: [],
 	})
 
@@ -3386,5 +3386,37 @@ describe('the shortfall drawn as containment', () => {
 		const html = render(<DataHealthPanel data={health(2356, 475) as never} />)
 		expect(html).not.toContain('not a rival measurement')
 		expect(html).not.toContain('Blocked less than GA4')
+	})
+})
+
+describe('columns a reader is told not to read, and columns that are two other columns', () => {
+	it('no longer offers an Opens column', () => {
+		// The caption above the table used to say, in the tool's own words, to sort on clicks and
+		// not opens. A column whose own caption instructs you not to read it should not be there.
+		const html = render(<OverviewPanel data={{
+			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+			vercelVisitors: ok(1400), ordersWithTotal: 7, vercelDailyUnavailable: false,
+			revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '',
+			audience: ok(4210), audienceGrowth: ok(12), crossSource: [], timelineEvents: [],
+			campaigns: [{ title: 'Freight release', subject: 'x', sentAt: '2026-08-20T19:00:00+00:00',
+				sent: 2000, opens: 900, clicks: 120, unsubscribed: 3 }],
+		} as never} />)
+		expect(html).toContain('Clicks')
+		expect(html).not.toContain('>Opens<')
+		// And the warning is shorter, because it no longer has to talk the reader out of a column.
+		expect(html).not.toContain('sort on clicks, not opens')
+	})
+
+	it('no longer offers a Test rate column', () => {
+		// tested ÷ viewed, from the two columns immediately to its left.
+		const html = render(<TypefaceInterestPanel data={{
+			rows: [{ typeface: 'Freight', viewed: ok(40), tested: ok(10), bought: ok(2),
+				revenue: ok(300), testRate: 0.25, buyRate: 0.05 }],
+			currency: 'USD', rowsWithheld: false, rowsTruncated: false,
+			interpretationNote: '', licenceTiers: [],
+		} as never} />)
+		expect(html).toContain('Freight')
+		expect(html).not.toContain('Test rate')
 	})
 })

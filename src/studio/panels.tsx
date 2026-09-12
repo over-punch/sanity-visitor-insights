@@ -578,8 +578,8 @@ export function OverviewPanel({ data, previous, onBrush }: {
 				<Stack space={3}>
 					<SectionTitle title="Email campaigns" />
 					<Text size={1} muted>
-						Clicks are distinct subscribers. Opens are inflated by Apple Mail Privacy Protection,
-						which fetches images on the recipient&rsquo;s behalf — so sort on clicks, not opens.
+						Clicks are distinct subscribers. Opens are not shown: Apple Mail fetches images on
+						the recipient&rsquo;s behalf, so an open is often the mail client rather than a person.
 					</Text>
 					{/* Said once, above the table, rather than in a tooltip on every cell. The claim these
 					    columns do NOT make is the important half, and a reader who takes "after" for
@@ -611,7 +611,11 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								),
 							},
 							{ key: 'sent', label: 'Sent', numeric: true, sortValue: (c) => c.sent, render: (c) => <Text size={1}>{formatCount(c.sent)}</Text> },
-							{ key: 'opens', label: 'Opens', numeric: true, sortValue: (c) => c.opens, render: (c) => <Text size={1} muted>{formatCount(c.opens)}</Text> },
+							// No Opens column. The caption above the table told the reader, in the tool's
+							// own words, to "sort on clicks, not opens" because Apple Mail Privacy
+							// Protection fetches images on the recipient's behalf. A column whose own
+							// caption instructs you not to read it should not be a column — and the
+							// warning gets shorter as a result.
 							{ key: 'clicks', label: 'Clicks', numeric: true, sortValue: (c) => c.clicks, render: (c) => <Text size={1}>{formatCount(c.clicks)}</Text> },
 							{
 								key: 'unsub',
@@ -1871,18 +1875,11 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 								)
 							},
 						},
-						{
-							key: 'testRate',
-							label: 'Test rate',
-							numeric: true,
-							sortValue: (row) => finiteOrNull(row.testRate),
-							exportValue: (row) => { const r = finiteOrNull(row.testRate); return r === null ? null : formatPercent(r, 1) },
-							render: (row) => (
-								<Text size={1} muted aria-label={finiteOrNull(row.testRate) === null ? `${row.typeface} test rate unavailable` : undefined}>
-									{finiteOrNull(row.testRate) === null ? '—' : formatPercent(row.testRate as number, 1)}
-								</Text>
-							),
-						},
+						// No Test rate column. It was tested ÷ viewed, rendered muted, from the two
+						// columns immediately to its left — and typefaceInterest's own note says that
+						// where a site maps several tester events onto the step (TDF names three) the
+						// numerator is not a person count, so the ratio ranks page layout as much as
+						// interest. A reader who wants it can see both terms side by side.
 					]}
 				/>
 			</Stack>
