@@ -3454,3 +3454,42 @@ describe('the words a reader actually meets', () => {
 		expect(html).not.toContain('Does not apply')
 	})
 })
+
+describe('what a reader meets first', () => {
+	const base = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1400), ordersWithTotal: 7, vercelDailyUnavailable: false,
+		revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '',
+		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
+		campaigns: [], crossSource: [], timelineEvents: [],
+	}
+
+	it('says something when nothing arrived, instead of rendering dashes and a footer', () => {
+		// This branch is reached exactly where the reader most needs a sentence: a new site, an
+		// empty window, or a route older than the fields the verdict reads. Returning null there
+		// reads as the tool being broken rather than the window being empty.
+		const empty = {
+			...base,
+			revenue: unavailable('route_outdated'), orders: unavailable('route_outdated'),
+			vercelPageviews: unavailable('source_error'), shortfallRatio: null,
+		}
+		const html = render(<OverviewPanel data={empty as never} />)
+		expect(html).toContain('No figures arrived for this window')
+	})
+
+	it('includes orders in the verdict, the least noisy signal it has', () => {
+		// Scoped to the verdict's own SENTENCE. A bare /Orders/ passes on the card label further
+		// down the panel, so dropping the clause from the verdict left the test green — the same
+		// coincidence match that let a deleted radiogroup keep its test.
+		const html = render(<OverviewPanel data={base as never} previous={{ orders: ok(4), revenue: ok(560), vercelPageviews: ok(2200) } as never} />)
+		expect(html).toContain('Orders 7, was 4')
+	})
+
+	it('no longer prints a blurb restating the tab label', () => {
+		const tool = readFileSync(new URL('./VisitorInsightsTool.tsx', import.meta.url), 'utf8')
+		expect(tool).not.toContain('active.blurb')
+		// And the dead field is gone, not merely unrendered.
+		expect(tool).not.toContain('blurb:')
+	})
+})

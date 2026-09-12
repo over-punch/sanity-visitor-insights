@@ -174,12 +174,12 @@ const RANGES: Array<{ key: Exclude<RangeKey, 'custom'>; label: string; span: str
  */
 const GA4_ONLY_TABS = ['acquisition', 'journey', 'typeface-interest']
 
-const PANELS: Array<{ id: string; report: ReportName; label: string; blurb: string }> = [
-	{ id: 'overview', report: 'measurement-health', label: 'Overview', blurb: 'Money, traffic and what moved this period' },
-	{ id: 'acquisition', report: 'acquisition', label: 'Acquisition', blurb: 'Where visitors come from' },
-	{ id: 'journey', report: 'journey', label: 'Journey', blurb: 'How far visitors get' },
-	{ id: 'typeface-interest', report: 'typeface-interest', label: 'Typeface interest', blurb: 'Viewed, tested and bought, by family' },
-	{ id: 'data-health', report: 'measurement-health', label: 'Data health', blurb: 'Whether to trust what the other tabs are telling you' },
+const PANELS: Array<{ id: string; report: ReportName; label: string }> = [
+	{ id: 'overview', report: 'measurement-health', label: 'Overview' },
+	{ id: 'acquisition', report: 'acquisition', label: 'Acquisition' },
+	{ id: 'journey', report: 'journey', label: 'Journey' },
+	{ id: 'typeface-interest', report: 'typeface-interest', label: 'Typeface interest' },
+	{ id: 'data-health', report: 'measurement-health', label: 'Data health' },
 ]
 
 /** Options supplied by the plugin config, carried on the Sanity tool definition. */
@@ -947,7 +947,13 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 					<Heading size={2}>Visitor insights</Heading>
 					<Stack space={2}>
 						<RangeSelector value={range} custom={custom} onChange={setRange} onCustomChange={setCustom} />
-						<BasisSelector value={compare} onChange={setCompare} />
+						{/* Only where a delta is actually drawn.
+						
+						    It rendered on all five tabs and visibly changed nothing on three of them,
+						    while still re-keying the fetch cache — a live control in the masthead
+						    that does nothing is worse than no control, because the reader concludes
+						    the tool is unresponsive rather than that the setting is irrelevant here. */}
+						{COMPARED_TABS.includes(activePanel) && <BasisSelector value={compare} onChange={setCompare} />}
 					</Stack>
 				</Flex>
 
@@ -1028,7 +1034,6 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 					style={{ position: 'relative' }}
 				>
 					<Stack space={4}>
-						{active && <Text size={1} muted>{active.blurb}</Text>}
 						{/* Keyed on the tab, so a throw on one panel does not render the error card for
 						    every other. Without the key the boundary held `error` forever and its own
 						    copy — "The other panels are unaffected" — became false. */}

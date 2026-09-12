@@ -15,7 +15,7 @@
 
 import React from 'react'
 import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ChartData, ComparisonBar, ContainmentBar, Delta, FunnelChart, MetricFigure, NoticeList, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, visuallyHidden, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
+import { ChartData, ComparisonBar, ContainmentBar, Delta, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, visuallyHidden, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import { SEND_WINDOW_DAYS } from '../core/ranges'
 import { describeRank, weeklyRank } from '../core/rank'
@@ -714,10 +714,21 @@ function Verdict({ data, previous }: { data: MeasurementHealthData; previous?: M
 		else if (unit === 'money') {
 			parts.push(`${label} ${change > 0 ? 'up' : 'down'} to ${formatMoney(a, data.currency ?? null)} from ${formatMoney(b, data.currency ?? null)}`)
 		}
+		// Counts below the floor state themselves rather than a ratio, exactly as Delta now does on
+		// the card beside this sentence. Otherwise the verdict read "Orders up 75%" in the largest
+		// type on the tab while the Orders card directly beneath it said "↑ from 4" with no
+		// percentage at all — the headline and its own evidence disagreeing on one screen, which is
+		// the specific failure this whole review kept finding.
+		else if (Math.abs(b) < MIN_DELTA_BASE) {
+			parts.push(`${label} ${formatCount(a)}, was ${formatCount(b)}`)
+		}
 		else parts.push(`${label} ${change > 0 ? 'up' : 'down'} ${formatPercent(Math.abs(change), 0)}`)
 	}
 
 	say('Revenue', data.revenue, previous?.revenue, 'money')
+	// Orders, between the two. At single-digit volumes this is the least noisy business signal the
+	// tool has, and the verdict omitted it while finding room for a clause about GA4's health.
+	say('Orders', data.orders, previous?.orders, 'count')
 	say('Traffic', data.vercelPageviews, previous?.vercelPageviews, 'count')
 
 	const sends = data.campaigns?.length ?? 0
@@ -754,7 +765,20 @@ function Verdict({ data, previous }: { data: MeasurementHealthData; previous?: M
 					: null
 	if (broken) parts.push(broken)
 
-	if (parts.length === 0) return null
+	// Not null.
+	//
+	// `parts` fills only from figures that arrived, so this branch is reached exactly where the
+	// reader most needs a sentence: a new site, a window with no orders, or a route older than the
+	// fields the verdict reads. The tab then rendered six em-dashes and a footer, with nothing
+	// anywhere saying there was nothing to report — which reads as the tool being broken rather
+	// than the window being empty.
+	if (parts.length === 0) {
+		return (
+			<Card padding={3} radius={2} tone="transparent" border style={{ borderLeftWidth: 3, borderLeftStyle: 'solid' }}>
+				<Text size={4}>No figures arrived for this window.</Text>
+			</Card>
+		)
+	}
 
 	// "Nothing broken" needs a positive test, not the absence of a warning. It used to be appended
 	// whenever `capture.discrepancy` was falsy — which includes capture being absent entirely, so an
