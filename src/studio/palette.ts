@@ -148,6 +148,7 @@ export const MARKS: Record<string, Mark> = {
 	'bar.fill': { key: 'vercel', alpha: 1, role: 'data', note: 'Every proportion, comparison and funnel bar' },
 	'bar.track': { key: 'neutral', alpha: 0.12, role: 'furniture', note: 'The rail a bar sits in' },
 	'bar.lost': { key: 'revenue', alpha: 1, role: 'data', note: 'People who did not continue past a funnel rung' },
+	'bar.seen': { key: 'ga4Pageviews', alpha: 1, role: 'data', note: 'The share of a complete count that the lossy source saw' },
 }
 
 /**

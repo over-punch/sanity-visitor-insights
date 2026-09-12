@@ -13,6 +13,7 @@ import React, { useRef, useState } from 'react'
 import { Badge, Box, Card, Flex, Heading, Stack, Text, Tooltip } from '@liiift-studio/sanity-ui-compat'
 import { SERIES, mark } from './palette'
 import type { MetricValue, UnavailableReason } from '../types'
+import { valueOrNull } from '../types'
 
 /** Human-readable explanation for each unavailable reason. */
 const REASON_TEXT: Record<UnavailableReason, string> = {
@@ -1040,6 +1041,88 @@ export function SectionTitle({
 				{title}
 			</Heading>
 		</div>
+	)
+}
+
+/**
+ * A part drawn INSIDE its whole, rather than beside it.
+ *
+ * The tool's central fact — GA4 sees a fifth of the traffic Vercel counts — was drawn as two peer
+ * bars scaled to the larger of the pair. Vercel is always the larger, so its bar was always full
+ * width on every site and every range: it carried no information at all, while a caption underneath
+ * had to explain in words that one bar was "a subset of the bar above, not a rival measurement".
+ * Two bars side by side encode RIVALS. The encoding asserted the opposite of the truth and the
+ * prose was there to take it back.
+ *
+ * One bar says it without the sentence: the whole is the track, the part is filled inside it, and
+ * what is left over is the quantity the reader came for.
+ *
+ * REFUSES when the part exceeds the whole. That happens for real — GA4 counts more than Vercel
+ * wherever Vercel's collection started later than the range, which is routine on MCKL — and
+ * containment is then simply the wrong picture. The caller falls back rather than this component
+ * drawing a fill wider than its own track.
+ */
+/**
+ * Whether one figure is genuinely contained by another, so a part-inside-whole bar is honest.
+ *
+ * False where either side is unmeasured, and false where the part exceeds the whole — which is
+ * real rather than hypothetical: GA4 counts more than Vercel wherever Vercel's collection started
+ * after the range began, as it does on MCKL. Exported so the caller can choose its encoding rather
+ * than discovering a null mid-render.
+ *
+ * @param whole - the complete count
+ * @param part - the lossier count that should sit inside it
+ */
+export function isContainment(whole: MetricValue, part: MetricValue): boolean {
+	const w = valueOrNull(whole)
+	const p = valueOrNull(part)
+	return w !== null && p !== null && w > 0 && p <= w
+}
+
+export function ContainmentBar({
+	wholeLabel,
+	whole,
+	partLabel,
+	part,
+	missingLabel,
+}: {
+	wholeLabel: string
+	whole: MetricValue
+	partLabel: string
+	part: MetricValue
+	/** What the unfilled remainder means, e.g. "not seen by GA4". */
+	missingLabel: string
+}): React.ReactElement | null {
+	const wholeValue = valueOrNull(whole)
+	const partValue = valueOrNull(part)
+
+	// Either side unmeasured, or the part larger than the whole: not a containment.
+	if (!isContainment(whole, part)) return null
+	if (wholeValue === null || partValue === null) return null
+
+	const share = partValue / wholeValue
+	const missing = wholeValue - partValue
+
+	return (
+		<Stack space={2}>
+			<div style={barHeader}>
+				<Text size={1}>{wholeLabel}</Text>
+				<Text size={1} weight="medium">{formatCount(wholeValue)}</Text>
+			</div>
+			{/* The track IS the whole. Nothing here is scaled to a maximum computed from the pair,
+			    so neither bar can be full width by construction. */}
+			<div aria-hidden="true" style={{ ...barTrack, background: mark('bar.fill'), height: 14 }}>
+				<div style={{ height: '100%', width: `${share * 100}%`, background: mark('bar.seen'), borderRadius: 2 }} />
+			</div>
+			<div style={barHeader}>
+				<Text size={0} muted>
+					{partLabel}: {formatCount(partValue)} ({formatPercent(share, 0)})
+				</Text>
+				<Text size={0} muted>
+					{formatCount(missing)} {missingLabel}
+				</Text>
+			</div>
+		</Stack>
 	)
 }
 

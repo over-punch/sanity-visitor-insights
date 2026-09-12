@@ -15,7 +15,7 @@
 
 import React from 'react'
 import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ChartData, ComparisonBar, Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
+import { ChartData, ComparisonBar, ContainmentBar, Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, isContainment, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import { SEND_WINDOW_DAYS } from '../core/ranges'
 import { describeRank, weeklyRank } from '../core/rank'
@@ -789,17 +789,41 @@ function Verdict({ data, previous }: { data: MeasurementHealthData; previous?: M
  */
 export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealthData; diagnostics?: DiagnosticReport }): React.ReactElement {
 	const pageviewMax = maxOf([data.ga4Pageviews, data.vercelPageviews])
+	// Whether a part-inside-whole bar is honest here — see the comment at the render site.
+	const contained = isContainment(data.vercelPageviews, data.ga4Pageviews)
 
 	return (
 		<Stack space={4}>
 			<Stack space={3}>
 				<SectionTitle title="Pageviews, source against source" />
 				<Text size={1} muted>
-					The same unit on both sides. Vercel is cookieless and ungated; GA4 is consent-gated and
-					blockable, so GA4 seeing fewer is expected.
+					Both counting pageviews. Google Analytics is blockable, so seeing fewer is normal.
 				</Text>
-				<ComparisonBar label="Vercel pageviews" metric={data.vercelPageviews} max={pageviewMax} outOf="Blocked less than GA4, but not immune to it." />
-				<ComparisonBar label="GA4 pageviews" metric={data.ga4Pageviews} max={pageviewMax} outOf="A subset of the bar above, not a rival measurement." />
+				{/* One bar, because this is a part inside a whole and not two rivals.
+				
+				    As two peer bars scaled to the larger of the pair, Vercel's was full width on
+				    every site and every range — no information at all — and a caption had to say in
+				    words that the other was "a subset of the bar above, not a rival measurement".
+				    The encoding asserted the opposite of the truth and the prose took it back.
+				
+				    ContainmentBar returns null where the part exceeds the whole, which is real:
+				    GA4 counts more than Vercel wherever Vercel's collection started after the range
+				    began. There the two-bar form is still the honest picture, so it is kept as the
+				    fallback rather than forcing a containment that does not hold. */}
+				{contained ? (
+					<ContainmentBar
+						wholeLabel="Pageviews Vercel counted"
+						whole={data.vercelPageviews}
+						partLabel="Seen by Google Analytics"
+						part={data.ga4Pageviews}
+						missingLabel="it missed"
+					/>
+				) : (
+					<>
+						<ComparisonBar label="Vercel pageviews" metric={data.vercelPageviews} max={pageviewMax} />
+						<ComparisonBar label="GA4 pageviews" metric={data.ga4Pageviews} max={pageviewMax} />
+					</>
+				)}
 			</Stack>
 
 			{/* The reading is always shown. It used to be nested inside the shortfall block, so a

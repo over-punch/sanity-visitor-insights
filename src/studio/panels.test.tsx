@@ -55,7 +55,7 @@ vi.mock('sanity', () => ({
 	definePlugin: (definition: unknown) => definition,
 }))
 import visitorInsights from '../index'
-import { Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, splitGrid } from './Figure'
+import { ContainmentBar, Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, isContainment, splitGrid } from './Figure'
 import { holdsPreviousAnswer } from './useReport'
 import { ok, partial, unavailable } from '../types'
 import { UI } from '@liiift-studio/sanity-ui-compat'
@@ -3303,5 +3303,65 @@ describe('the rank on the exact cards', () => {
 		} as never} />)
 		// Two ranks — orders and revenue — and no more.
 		expect(html.match(/best of the last 4 weeks/g)).toHaveLength(2)
+	})
+})
+
+describe('the shortfall drawn as containment', () => {
+	const health = (vercel: number, ga4: number) => ({
+		ga4Pageviews: ok(ga4), vercelPageviews: ok(vercel), shortfallRatio: (vercel - ga4) / vercel,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1400), ordersWithTotal: 7, vercelDailyUnavailable: false,
+		revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: 'Sources differ.',
+		daily: [], audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
+		campaigns: [], crossSource: [], timelineEvents: [],
+	})
+
+	it('draws one bar, with the lossy count inside the complete one', () => {
+		// Two peer bars scaled to the larger meant Vercel was ALWAYS full width — no information —
+		// and a caption had to explain that the other was a subset rather than a rival.
+		const html = render(<DataHealthPanel data={health(2356, 475) as never} />)
+		expect(html).toContain('Pageviews Vercel counted')
+		expect(html).toContain('Seen by Google Analytics')
+		// The remainder is the quantity the reader came for, stated rather than left to subtract.
+		expect(html).toContain('1,881')
+		expect(html).toContain('it missed')
+	})
+
+	it('fills the bar to the part\'s SHARE of the whole, which is the whole point', () => {
+		// The text being right proves nothing about the picture. A fill hard-coded to 100% passes
+		// every assertion above — the figures still read 2,356 and 475 — while drawing a GA4 bar
+		// the full width of Vercel's, which is the exact claim this encoding replaced.
+		const html = render(<DataHealthPanel data={health(2356, 475) as never} />)
+		const widths = [...html.matchAll(/width:\s*([0-9.]+)%/g)].map((m) => Number(m[1]))
+		// 475 of 2,356 is 20.2%.
+		expect(widths.some((w) => Math.abs(w - 20.16) < 0.5)).toBe(true)
+		expect(widths).not.toContain(100)
+	})
+
+	it('does not claim containment when the part exceeds the whole', () => {
+		// Real, not hypothetical: GA4 counts more than Vercel wherever Vercel's collection started
+		// after the range began, as on MCKL. Containment is simply the wrong picture there.
+		expect(isContainment(ok(100) as never, ok(140) as never)).toBe(false)
+		expect(ContainmentBar({
+			wholeLabel: 'w', whole: ok(100) as never, partLabel: 'p', part: ok(140) as never, missingLabel: 'missed',
+		})).toBeNull()
+	})
+
+	it('falls back to two bars rather than forcing a containment that does not hold', () => {
+		const html = render(<DataHealthPanel data={health(100, 140) as never} />)
+		expect(html).toContain('Vercel pageviews')
+		expect(html).toContain('GA4 pageviews')
+		expect(html).not.toContain('Pageviews Vercel counted')
+	})
+
+	it('refuses when either side was not measured', () => {
+		expect(isContainment(unavailable('source_error') as never, ok(10) as never)).toBe(false)
+		expect(isContainment(ok(10) as never, unavailable('source_error') as never)).toBe(false)
+	})
+
+	it('no longer explains in prose what the encoding now shows', () => {
+		const html = render(<DataHealthPanel data={health(2356, 475) as never} />)
+		expect(html).not.toContain('not a rival measurement')
+		expect(html).not.toContain('Blocked less than GA4')
 	})
 })
