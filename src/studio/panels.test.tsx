@@ -3493,3 +3493,50 @@ describe('what a reader meets first', () => {
 		expect(tool).not.toContain('blurb:')
 	})
 })
+
+describe('Data health answers before it argues', () => {
+	const data = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1400), ordersWithTotal: 7, vercelDailyUnavailable: false,
+		revenue: ok(910), currency: 'USD', orderStatuses: { paid: 7 },
+		interpretation: 'GA4 recorded 80% fewer pageviews than Vercel.',
+		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
+		campaigns: [], crossSource: [], timelineEvents: [],
+		// The capture section is conditional on these; without them the tab renders four blocks,
+		// not five, and the order test below would be checking a shorter page than a reader sees.
+		capture: { estimates: [{ basis: 'orders', rate: 0.2, note: '' }], discrepancy: null },
+	}
+	const diagnostics = { checks: [{ key: 'ga4', label: 'GA4 credentials', status: 'pass', detail: 'Configured' }] }
+
+	/** Where each landmark appears in the rendered markup. */
+	const positions = (html: string) => ({
+		reading: html.indexOf('fewer pageviews than Vercel'),
+		evidence: html.indexOf('Pageviews, source against source'),
+		fixes: html.indexOf('GA4 credentials'),
+		reference: html.indexOf('Order statuses in this range'),
+	})
+
+	it('states its conclusion before the bars that support it', () => {
+		// The tab exists to answer one question. It opened with a title, a note and a bar, and
+		// stated the answer fourth — the working before the conclusion.
+		const p = positions(render(<DataHealthPanel data={data as never} diagnostics={diagnostics as never} />))
+		expect(p.reading).toBeGreaterThan(-1)
+		expect(p.reading).toBeLessThan(p.evidence)
+	})
+
+	it('puts the things a reader can fix above the things they can only read', () => {
+		// Configuration is the only block on the tab carrying remedies, and it was fifth.
+		const p = positions(render(<DataHealthPanel data={data as never} diagnostics={diagnostics as never} />))
+		expect(p.fixes).toBeGreaterThan(-1)
+		expect(p.fixes).toBeLessThan(p.reference)
+	})
+
+	it('still renders everything it did before, just in a different order', () => {
+		const html = render(<DataHealthPanel data={data as never} diagnostics={diagnostics as never} />)
+		for (const marker of ['Pageviews, source against source', 'How much GA4 is seeing',
+			'Order statuses in this range', 'GA4 credentials']) {
+			expect(html).toContain(marker)
+		}
+	})
+})

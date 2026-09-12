@@ -823,6 +823,32 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 
 	return (
 		<Stack space={4}>
+			{/* The reading is always shown. It used to be nested inside the shortfall block, so a
+			    range where only one source answered rendered bare numbers and no explanation of why
+			    there was nothing to compare — the state where the explanation matters most. */}
+			<Card padding={3} radius={2} tone="transparent" border>
+				<Stack space={2}>
+					{data.shortfallRatio !== null && (
+						<Text size={1} weight="semibold">
+							{/* Named by direction rather than always as a GA4 shortfall. The ratio goes
+							    negative whenever GA4 sees more than Vercel — routine where Vercel's
+							    collection started later than the range, as on MCKL — and the label used
+							    to read "GA4 shortfall" over an absolute value, stating the opposite of
+							    the truth while the sentence below it said "more". */}
+							{data.shortfallRatio >= 0
+								? `GA4 saw ${formatPercent(data.shortfallRatio, 1)} fewer pageviews than Vercel`
+								: `GA4 saw ${formatPercent(-data.shortfallRatio, 1)} more pageviews than Vercel`}
+						</Text>
+					)}
+					<Text size={1} muted>{data.interpretation}</Text>
+				</Stack>
+			</Card>
+
+			{/* The evidence, AFTER the reading it supports.
+			
+			    This tab exists to answer one question — can I trust the other tabs — and it opened
+			    with a section title, an explanatory line and a bar, then stated the answer fourth.
+			    A reader with five minutes met the working before the conclusion. */}
 			<Stack space={3}>
 				<SectionTitle title="Pageviews, source against source" />
 				<Text size={1} muted>
@@ -855,26 +881,28 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 				)}
 			</Stack>
 
-			{/* The reading is always shown. It used to be nested inside the shortfall block, so a
-			    range where only one source answered rendered bare numbers and no explanation of why
-			    there was nothing to compare — the state where the explanation matters most. */}
-			<Card padding={3} radius={2} tone="transparent" border>
-				<Stack space={2}>
-					{data.shortfallRatio !== null && (
-						<Text size={1} weight="semibold">
-							{/* Named by direction rather than always as a GA4 shortfall. The ratio goes
-							    negative whenever GA4 sees more than Vercel — routine where Vercel's
-							    collection started later than the range, as on MCKL — and the label used
-							    to read "GA4 shortfall" over an absolute value, stating the opposite of
-							    the truth while the sentence below it said "more". */}
-							{data.shortfallRatio >= 0
-								? `GA4 saw ${formatPercent(data.shortfallRatio, 1)} fewer pageviews than Vercel`
-								: `GA4 saw ${formatPercent(-data.shortfallRatio, 1)} more pageviews than Vercel`}
-						</Text>
-					)}
-					<Text size={1} muted>{data.interpretation}</Text>
-				</Stack>
-			</Card>
+
+			{/* Moved up from the bottom of the tab.
+			
+			    Its own checks are the only thing on this tab a reader can ACT on — each carries a
+			    remedy — and it sat fifth, after two sections of measurement and two of reference.
+			    The tab asks "can I trust this"; the answer to "then what do I fix" should not be
+			    below the material it explains. */}
+			{diagnostics && (
+				/* Open, and primary. This is the longest block on the tab and the obvious candidate
+				   for folding away — but the tab it sits on exists to answer "what should I fix
+				   before trusting any of this", and these checks ARE that answer. Folding it would
+				   have left Data health opening on a summary of the problem with the solution behind
+				   a click. It stays collapsible so a reader who has read it can get it out of the
+				   way. */
+				<Section
+					title="Configuration"
+					subtitle="What this site has wired up, and what it is missing."
+					collapsible
+				>
+					<DiagnosticsPanel data={diagnostics} />
+				</Section>
+			)}
 
 			{((data.capture?.estimates?.length ?? 0) > 0 || data.estimatedSessions?.status === 'estimated') && (
 				<Stack space={3}>
@@ -988,21 +1016,6 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 				</div>
 			</Section>
 
-			{diagnostics && (
-				/* Open, and primary. This is the longest block on the tab and the obvious candidate
-				   for folding away — but the tab it sits on exists to answer "what should I fix
-				   before trusting any of this", and these checks ARE that answer. Folding it would
-				   have left Data health opening on a summary of the problem with the solution behind
-				   a click. It stays collapsible so a reader who has read it can get it out of the
-				   way. */
-				<Section
-					title="Configuration"
-					subtitle="What this site has wired up, and what it is missing."
-					collapsible
-				>
-					<DiagnosticsPanel data={diagnostics} />
-				</Section>
-			)}
 		</Stack>
 	)
 }
