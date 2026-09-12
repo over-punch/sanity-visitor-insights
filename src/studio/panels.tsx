@@ -15,7 +15,7 @@
 
 import React from 'react'
 import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ChartData, ComparisonBar, ContainmentBar, Delta, EstimateDotPlot, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, visuallyHidden, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
+import { ChartData, ComparisonBar, ContainmentBar, Delta, EstimateDotPlot, ShiftRows, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, visuallyHidden, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import { SEND_WINDOW_DAYS } from '../core/ranges'
 import { describeRank, weeklyRank } from '../core/rank'
@@ -1478,6 +1478,84 @@ export function revenueCoversEveryOrder(data: MeasurementHealthData): boolean {
 	const withTotal = finiteOrNull(data.ordersWithTotal)
 	if (counted === null || withTotal === null) return false
 	return counted === withTotal
+}
+
+/** One channel, this period against last. */
+export interface ChannelShift {
+	channel: string
+	now: number
+	before: number | null
+}
+
+/**
+ * Sessions by channel, this period against the previous one.
+ *
+ * `previous` is already fetched on every Acquisition request and spent on three scalar deltas; the
+ * per-channel rows inside it are discarded. This is the one period-over-period cut in the dataset
+ * whose denominators clear the package's own floors: at 357 sessions across twenty-odd SOURCE rows
+ * the median row is single digits, but aggregated to CHANNEL a handful of groups carry most of it.
+ *
+ * Channels under the floor are pooled rather than drawn. A row for a channel with four sessions is
+ * a line whose length is noise, and drawing it alongside a real one invites the comparison.
+ *
+ * Honest framing, which the caller must carry: sessions come from GA4 and are lossy. What survives
+ * that loss is the SHAPE of the mix and its change — the same argument revenueShare and the buy-rate
+ * index already rest on — not the levels, which are a fifth of reality.
+ *
+ * @param rows - this period's acquisition rows
+ * @param previousRows - the same for the previous period, when it was fetched
+ * @param floor - below this many sessions a channel is pooled into "Everything else"
+ */
+export function channelMix(
+	rows: readonly SourceRow[],
+	previousRows: readonly SourceRow[] | undefined,
+	floor = MIN_DELTA_BASE,
+): ChannelShift[] {
+	const sum = (list: readonly SourceRow[]) => {
+		const out = new Map<string, number>()
+		for (const row of list) {
+			const key = row.channel || 'Unknown'
+			out.set(key, (out.get(key) ?? 0) + (Number.isFinite(row.sessions) ? row.sessions : 0))
+		}
+		return out
+	}
+
+	const now = sum(rows)
+	const before = previousRows ? sum(previousRows) : null
+
+	const big: ChannelShift[] = []
+	let pooledNow = 0
+	let pooledBefore = 0
+	let pooledAny = false
+
+	for (const [channel, value] of now) {
+		// The floor applies to the CURRENT period: a channel that mattered last period and has
+		// collapsed is exactly what this chart is for, so it must not be pooled away for being
+		// small now.
+		const previousValue = before?.get(channel) ?? null
+		if (value >= floor || (previousValue !== null && previousValue >= floor)) {
+			big.push({ channel, now: value, before: previousValue })
+			continue
+		}
+		pooledAny = true
+		pooledNow += value
+		pooledBefore += previousValue ?? 0
+	}
+
+	// Channels that existed last period and have vanished entirely this one.
+	if (before) {
+		for (const [channel, previousValue] of before) {
+			if (now.has(channel)) continue
+			if (previousValue >= floor) big.push({ channel, now: 0, before: previousValue })
+			else { pooledAny = true; pooledBefore += previousValue }
+		}
+	}
+
+	big.sort((a, b) => b.now - a.now || (b.before ?? 0) - (a.before ?? 0))
+	if (pooledAny) {
+		big.push({ channel: 'Everything else', now: pooledNow, before: before ? pooledBefore : null })
+	}
+	return big
 }
 
 export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElement {

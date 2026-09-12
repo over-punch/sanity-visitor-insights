@@ -152,6 +152,9 @@ export const MARKS: Record<string, Mark> = {
 	'estimate.dot': { key: 'ga4Pageviews', alpha: 1, role: 'data', note: 'One independent estimate of how much GA4 sees' },
 	'estimate.interval': { key: 'ga4Pageviews', alpha: 0.35, role: 'fill', boundary: 'estimate.dot', note: 'How wide the sample leaves that estimate — the dot is its own boundary' },
 	'estimate.rule': { key: 'neutral', alpha: 0.45, role: 'furniture', note: 'The 100% reference a capture rate is read against' },
+	'shift.now': { key: 'vercel', alpha: 1, role: 'data', note: 'A channel this period' },
+	'shift.before': { key: 'neutral', alpha: 0.55, role: 'furniture', note: 'The same channel last period — context, not a second answer' },
+	'shift.link': { key: 'neutral', alpha: 0.35, role: 'furniture', note: 'The distance between the two, which is the finding' },
 }
 
 /**

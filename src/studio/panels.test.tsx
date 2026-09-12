@@ -39,6 +39,7 @@ import {
 	coverageOf,
 	firstStepRate,
 	gapOf,
+	channelMix,
 	rankLine,
 	revenueCoversEveryOrder,
 	revenuePerThousandSent,
@@ -56,7 +57,7 @@ vi.mock('sanity', () => ({
 	definePlugin: (definition: unknown) => definition,
 }))
 import visitorInsights from '../index'
-import { ContainmentBar, Delta, EstimateDotPlot, FunnelChart, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, isContainment, splitGrid } from './Figure'
+import { ContainmentBar, Delta, EstimateDotPlot, FunnelChart, ShiftRows, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, isContainment, splitGrid } from './Figure'
 import { holdsPreviousAnswer } from './useReport'
 import { ok, partial, unavailable } from '../types'
 import { UI } from '@liiift-studio/sanity-ui-compat'
@@ -3685,5 +3686,81 @@ describe('three estimates of one number, on one axis', () => {
 
 	it('draws nothing when there is nothing to compare', () => {
 		expect(EstimateDotPlot({ estimates: [], labelFor: (b) => b, intervalFor: interval })).toBeNull()
+	})
+})
+
+describe('channelMix', () => {
+	const row = (channel: string, sessions: number) => ({
+		source: `${channel}.example`, channel, medium: null, campaign: null, sessions,
+		engagedSessions: null, engagementRate: null, designIndustry: false, unattributed: false,
+	})
+
+	it('aggregates sources up to channels', () => {
+		const mix = channelMix([row('Referral', 60), row('Referral', 40), row('Organic Search', 90)] as never, undefined)
+		expect(mix.find((c) => c.channel === 'Referral')?.now).toBe(100)
+		expect(mix.find((c) => c.channel === 'Organic Search')?.now).toBe(90)
+	})
+
+	it('pairs each channel with the same channel last period', () => {
+		const mix = channelMix([row('Referral', 100)] as never, [row('Referral', 60)] as never)
+		expect(mix[0]).toMatchObject({ channel: 'Referral', now: 100, before: 60 })
+	})
+
+	it('pools channels too small to read rather than drawing a line made of noise', () => {
+		const mix = channelMix([row('Referral', 100), row('Display', 4), row('Affiliate', 3)] as never, undefined)
+		expect(mix.map((c) => c.channel)).toEqual(['Referral', 'Everything else'])
+		expect(mix.find((c) => c.channel === 'Everything else')?.now).toBe(7)
+	})
+
+	it('keeps a channel that has collapsed, which is the case the chart exists for', () => {
+		// Floored on the CURRENT period alone, a channel that mattered last period and has gone to
+		// two sessions would be pooled away — deleting the finding.
+		const mix = channelMix([row('Referral', 2)] as never, [row('Referral', 200)] as never)
+		expect(mix.find((c) => c.channel === 'Referral')).toMatchObject({ now: 2, before: 200 })
+	})
+
+	it('shows a channel that has vanished entirely', () => {
+		const mix = channelMix([row('Referral', 100)] as never, [row('Referral', 80), row('Paid Search', 90)] as never)
+		expect(mix.find((c) => c.channel === 'Paid Search')).toMatchObject({ now: 0, before: 90 })
+	})
+
+	it('reports no baseline rather than zero when the previous period was not fetched', () => {
+		// A missing comparison is not a channel that had none. Zero would draw a full-width line.
+		expect(channelMix([row('Referral', 100)] as never, undefined)[0]?.before).toBeNull()
+	})
+
+	it('orders by this period, so the biggest thing is first', () => {
+		const mix = channelMix([row('Referral', 40), row('Organic Search', 120)] as never, undefined)
+		expect(mix[0]?.channel).toBe('Organic Search')
+	})
+})
+
+describe('ShiftRows', () => {
+	const rows = [
+		{ channel: 'Organic Search', now: 120, before: 60 },
+		{ channel: 'Referral', now: 40, before: 80 },
+	]
+
+	it('places the two periods at their own positions on a shared scale', () => {
+		const html = render(<ShiftRows rows={rows} nowLabel="this period" beforeLabel="before" />)
+		const filled = [...html.matchAll(/border-radius:50%;background:rgba\(76, 143, 208, 1\);left:([\d.]+)%/g)].map((m) => Number(m[1]))
+		// 120 is the peak, so it sits at 100%; 40 sits at a third of it.
+		expect(filled[0]).toBeCloseTo(100, 0)
+		expect(filled[1]).toBeCloseTo(33.3, 0)
+	})
+
+	it('draws the connector only where there is a previous period to connect to', () => {
+		const html = render(<ShiftRows rows={[{ channel: 'New', now: 50, before: null }]} nowLabel="a" beforeLabel="b" />)
+		expect(html).not.toContain(mark('shift.link'))
+	})
+
+	it('states both figures in words, since the dots are aria-hidden', () => {
+		const html = render(<ShiftRows rows={rows} nowLabel="this period" beforeLabel="before" />)
+		expect(html).toContain('120')
+		expect(html).toContain('was 60')
+	})
+
+	it('draws nothing when there is nothing to compare', () => {
+		expect(ShiftRows({ rows: [], nowLabel: 'a', beforeLabel: 'b' })).toBeNull()
 	})
 })

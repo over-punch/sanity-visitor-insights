@@ -1229,6 +1229,73 @@ export function EstimateDotPlot<E extends EstimateForPlot>({
 	)
 }
 
+/**
+ * One row per category, two dots, and the distance between them.
+ *
+ * The Acquisition table is a single-period snapshot: it can say the design press sent 120 sessions
+ * and cannot say whether that is a rise, a fall or a flat line. The previous period is already in
+ * the envelope and was spent on three scalar deltas.
+ *
+ * A dumbbell rather than the obvious slope chart, for a reason that is about this codebase rather
+ * than taste: a slope chart needs its end labels de-collided, de-collision needs text measurement,
+ * and text measurement is a DOM read — which this package cannot do, because everything renders
+ * through renderToStaticMarkup with no jsdom in the test environment. A row owns its own slot, so
+ * two dots and a connector need no measurement at all and answer the same question.
+ *
+ * It states two POSITIONS and never a ratio, so its failure mode at low volume is "the line is
+ * short", not a confident percentage on four sessions.
+ */
+export function ShiftRows({
+	rows,
+	unit = 'count',
+	nowLabel,
+	beforeLabel,
+}: {
+	rows: ReadonlyArray<{ channel: string; now: number; before: number | null }>
+	unit?: 'count' | 'percent'
+	/** What the filled dot means, e.g. "this period". */
+	nowLabel: string
+	/** What the hollow dot means. */
+	beforeLabel: string
+}): React.ReactElement | null {
+	if (rows.length === 0) return null
+
+	const peak = Math.max(1, ...rows.flatMap((r) => [r.now, r.before ?? 0]))
+	const pct = (v: number) => `${(v / peak) * 100}%`
+	const format = (v: number) => unit === 'percent' ? formatPercent(v, 0) : formatCount(v)
+
+	return (
+		<Stack space={3}>
+			{rows.map((row) => {
+				const hasBefore = row.before !== null
+				const lo = hasBefore ? Math.min(row.now, row.before as number) : row.now
+				const hi = hasBefore ? Math.max(row.now, row.before as number) : row.now
+				return (
+					<Stack key={row.channel} space={2}>
+						<div style={barHeader}>
+							<Text size={1}>{row.channel}</Text>
+							<Text size={1} weight="medium">
+								{format(row.now)}
+								{hasBefore && <Text as="span" size={0} muted> was {format(row.before as number)}</Text>}
+							</Text>
+						</div>
+						<div aria-hidden="true" style={shiftTrack}>
+							{hasBefore && (
+								<div style={{ ...shiftLink, left: pct(lo), width: `calc(${pct(hi)} - ${pct(lo)})` }} />
+							)}
+							{hasBefore && <div style={{ ...shiftBefore, left: pct(row.before as number) }} />}
+							<div style={{ ...shiftNow, left: pct(row.now) }} />
+						</div>
+					</Stack>
+				)
+			})}
+			<Text size={0} muted>
+				Filled dot: {nowLabel}. Hollow: {beforeLabel}. The gap is the change.
+			</Text>
+		</Stack>
+	)
+}
+
 /** Props for SortableTable. */
 export interface SortableTableProps<Row> {
 	caption: string
@@ -1656,6 +1723,45 @@ const estimateDot: React.CSSProperties = {
 	marginLeft: -5,
 	borderRadius: '50%',
 	background: mark('estimate.dot'),
+}
+
+/** The rail a channel's two positions sit on. */
+const shiftTrack: React.CSSProperties = {
+	position: 'relative',
+	height: 16,
+	borderRadius: 2,
+	background: mark('bar.track'),
+}
+
+/** The distance between the two periods, which is the thing worth seeing. */
+const shiftLink: React.CSSProperties = {
+	position: 'absolute',
+	top: 7,
+	height: 2,
+	background: mark('shift.link'),
+}
+
+/** Last period. Hollow, because it is context rather than a second answer. */
+const shiftBefore: React.CSSProperties = {
+	position: 'absolute',
+	top: 3,
+	width: 10,
+	height: 10,
+	marginLeft: -5,
+	borderRadius: '50%',
+	border: `2px solid ${mark('shift.before')}`,
+	background: 'transparent',
+}
+
+/** This period. */
+const shiftNow: React.CSSProperties = {
+	position: 'absolute',
+	top: 3,
+	width: 10,
+	height: 10,
+	marginLeft: -5,
+	borderRadius: '50%',
+	background: mark('shift.now'),
 }
 
 /** The filter box. */
