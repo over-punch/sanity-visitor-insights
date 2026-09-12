@@ -438,13 +438,25 @@ export function OverviewPanel({ data, previous, onBrush }: {
 									source: 'GA4' as const,
 									complete: true,
 									unit: 'percent' as const,
-									// Fixed, not scaled to its own best day — otherwise a site at a flat 20%
-									// draws a full-height line and reads as healthy.
-									domain: [0, 1] as [number, number],
+									// Fixed at the bottom, open at the top.
+									//
+									// The lower bound is fixed so a site at a flat 20% cannot scale itself
+									// to full height and read as healthy. The UPPER bound is not clamped,
+									// because over-counting is a real fault with its own interpretation
+									// branch — and the card further down this very file refuses the same
+									// clamp in prose, saying `Math.min(1, …)` rendered a tag reporting
+									// 250% of reality as a flat 100% under the heading "How much GA4 is
+									// seeing", i.e. perfect. One quantity, two opposite policies, one
+									// file: the row drew a double-firing tag as a healthy flat line while
+									// the sentence beside it called the over-count out.
+									domain: [0, Math.max(1, ...(data.crossSource ?? [])
+										.map((d) => (d.vercelPageviews !== null && d.ga4Pageviews !== null && d.vercelPageviews > 0
+											? d.ga4Pageviews / d.vercelPageviews
+											: 0)))] as [number, number],
 									points: (data.crossSource ?? []).map((d) => ({
 										date: d.date,
 										value: d.vercelPageviews !== null && d.ga4Pageviews !== null && d.vercelPageviews > 0
-											? Math.min(1, d.ga4Pageviews / d.vercelPageviews)
+											? d.ga4Pageviews / d.vercelPageviews
 											: null,
 									})),
 									// The most valuable ghost in the chart: a collapse reads as a step away
@@ -452,31 +464,46 @@ export function OverviewPanel({ data, previous, onBrush }: {
 									comparison: (previous?.crossSource ?? []).map((d) => ({
 										date: d.date,
 										value: d.vercelPageviews !== null && d.ga4Pageviews !== null && d.vercelPageviews > 0
-											? Math.min(1, d.ga4Pageviews / d.vercelPageviews)
+											? d.ga4Pageviews / d.vercelPageviews
 											: null,
 									})),
 								}]
 								: []),
-							...(data.crossSource?.some((d) => d.revenue !== null)
+							// ORDERS ALWAYS, revenue only when it covers every order.
+							//
+							// This used to draw revenue whenever ANY day had a revenue figure, and
+							// otherwise orders — never both. Combined with the server filling a day's
+							// revenue as `revenueByDate[date] ?? 0`, that meant a day carrying a real
+							// order with no recorded amount arrived as a measured ZERO, and the row drew
+							// a zero-tick on it: the mark whose own comment says "measured, and it was
+							// nothing".
+							//
+							// At Darden 11 of 69 orders carry an amount, so the flagship chart was
+							// asserting that no sale happened on 58 days that had sales — the package's
+							// founding distinction inverted inside its most prominent encoding. Orders
+							// are exact and complete whatever the amounts say, so they are the row that
+							// is always honest.
+							{
+								key: 'orders',
+								label: 'Orders',
+								source: 'Sanity' as const,
+								complete: true,
+								unit: 'count' as const,
+								// A sale is an event on a date, not a level that varies day to day.
+								mark: 'events' as const,
+								points: (data.crossSource ?? []).map((d) => ({ date: d.date, value: d.orders })),
+							},
+							...(revenueCoversEveryOrder(data)
 								? [{
 									key: 'revenue',
 									label: 'Revenue',
 									source: 'Sanity' as const,
 									complete: true,
 									unit: 'money' as const,
-									// A sale is an event on a date, not a level that varies day to day.
 									mark: 'events' as const,
 									points: (data.crossSource ?? []).map((d) => ({ date: d.date, value: d.revenue })),
 								}]
-								: [{
-									key: 'orders',
-									label: 'Orders',
-									source: 'Sanity' as const,
-									complete: true,
-									unit: 'count' as const,
-									mark: 'events' as const,
-									points: (data.crossSource ?? []).map((d) => ({ date: d.date, value: d.orders })),
-								}]),
+								: []),
 						]}
 					/>
 
@@ -1446,6 +1473,26 @@ function SegmentTable({ segments, dimension }: { segments: JourneySegment[]; dim
 			</Card>
 		</Stack>
 	)
+}
+
+/**
+ * Whether every counted order carries an amount, so a daily revenue series is safe to draw.
+ *
+ * The server fills a day's revenue as `revenueByDate[date] ?? 0`, which is right when every order
+ * has a total and a catastrophe when they do not: a day with a real sale and no recorded amount
+ * becomes a MEASURED ZERO, and the timeline draws the tick that means "we looked, and nothing
+ * happened" on a day something did. At Darden that is 58 of 69 days.
+ *
+ * So the revenue row is drawn only when the two counts agree. Orders are exact regardless, which is
+ * why they are now always drawn instead.
+ *
+ * @param data - the measurement-health payload
+ */
+export function revenueCoversEveryOrder(data: MeasurementHealthData): boolean {
+	const counted = metricSortValue(data.orders)
+	const withTotal = finiteOrNull(data.ordersWithTotal)
+	if (counted === null || withTotal === null) return false
+	return counted === withTotal
 }
 
 export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElement {

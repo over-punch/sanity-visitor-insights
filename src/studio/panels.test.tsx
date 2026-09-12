@@ -40,6 +40,7 @@ import {
 	firstStepRate,
 	gapOf,
 	rankLine,
+	revenueCoversEveryOrder,
 	revenuePerThousandSent,
 	spread,
 	visitorsPerOrder,
@@ -3538,5 +3539,84 @@ describe('Data health answers before it argues', () => {
 			'Order statuses in this range', 'GA4 credentials']) {
 			expect(html).toContain(marker)
 		}
+	})
+})
+
+describe('the timeline does not report a selling day as a measured zero', () => {
+	/** Three days: two with orders, one of which records no amount. */
+	const crossSource = [
+		{ date: '2026-08-20', vercelPageviews: 400, ga4Pageviews: 90, ga4Sessions: 70, orders: 1, revenue: 300 },
+		{ date: '2026-08-21', vercelPageviews: 380, ga4Pageviews: 85, ga4Sessions: 66, orders: 1, revenue: 0 },
+		{ date: '2026-08-22', vercelPageviews: 420, ga4Pageviews: 95, ga4Sessions: 74, orders: 0, revenue: 0 },
+	]
+	const data = (ordersWithTotal: number | null) => ({
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+		ga4Sessions: ok(357), orders: ok(2), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1400), ordersWithTotal, vercelDailyUnavailable: false,
+		revenue: ok(300), currency: 'USD', orderStatuses: {}, interpretation: '',
+		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
+		campaigns: [], crossSource, timelineEvents: [],
+	})
+
+	it('withholds the revenue row when some orders carry no amount', () => {
+		// The server fills a day's revenue as `?? 0`, so a real sale with no recorded amount became
+		// a measured zero and the chart drew the "we looked, and nothing happened" tick on it. At
+		// Darden that is 58 of 69 days.
+		expect(revenueCoversEveryOrder(data(1) as never)).toBe(false)
+		// Counted, not matched. "Revenue" is also a metric card label on this panel, so a bare
+		// not.toContain passes for the wrong reason — the coincidence match that has bitten this
+		// suite repeatedly. One occurrence is the card; two would mean the chart row came back.
+		const html = render(<OverviewPanel data={data(1) as never} />)
+		expect(html).toContain('Orders')
+		const withRow = render(<OverviewPanel data={data(2) as never} />)
+		expect((html.match(/Revenue/g) ?? []).length)
+			.toBeLessThan((withRow.match(/Revenue/g) ?? []).length)
+	})
+
+	it('draws the revenue row when every order carries an amount', () => {
+		expect(revenueCoversEveryOrder(data(2) as never)).toBe(true)
+		const html = render(<OverviewPanel data={data(2) as never} />)
+		expect(html).toContain('Revenue')
+	})
+
+	it('always draws orders, which are exact whatever the amounts say', () => {
+		for (const withTotal of [0, 1, 2, null]) {
+			expect(render(<OverviewPanel data={data(withTotal) as never} />)).toContain('Orders')
+		}
+	})
+
+	it('withholds revenue when the order count cannot be read at all', () => {
+		expect(revenueCoversEveryOrder({ ...data(null), orders: unavailable('source_error') } as never)).toBe(false)
+	})
+})
+
+describe('the coverage row does not clamp an over-count to perfect', () => {
+	it('scales above 100% when GA4 counts more than the complete source', () => {
+		// A double-firing tag is the loudest fixable fault the tool can find. Clamped, it drew as a
+		// healthy flat line at 100% — while the card further down the same file refuses that exact
+		// clamp in prose. One quantity, two opposite policies, one file.
+		// Four days: the chart needs more than a couple to draw at all, and a two-day fixture
+		// silently rendered no SVG, so the assertion below was passing judgement on an empty string.
+		const over = [
+			{ date: '2026-08-20', vercelPageviews: 100, ga4Pageviews: 250, ga4Sessions: 200, orders: 0, revenue: null },
+			{ date: '2026-08-21', vercelPageviews: 100, ga4Pageviews: 240, ga4Sessions: 190, orders: 0, revenue: null },
+			{ date: '2026-08-22', vercelPageviews: 100, ga4Pageviews: 230, ga4Sessions: 180, orders: 0, revenue: null },
+			{ date: '2026-08-23', vercelPageviews: 100, ga4Pageviews: 245, ga4Sessions: 195, orders: 0, revenue: null },
+		]
+		const html = render(<OverviewPanel data={{
+			ga4Pageviews: ok(490), vercelPageviews: ok(200), shortfallRatio: -1.45,
+			ga4Sessions: ok(390), orders: ok(0), consentRate: unavailable('not_instrumented'),
+			vercelVisitors: ok(150), ordersWithTotal: 0, vercelDailyUnavailable: false,
+			revenue: unavailable('not_applicable'), currency: 'USD', orderStatuses: {}, interpretation: '',
+			audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
+			campaigns: [], crossSource: over, timelineEvents: [],
+		} as never} />)
+		// The axis maximum must exceed 100%, or the over-count is invisible.
+		// The AXIS, not the table beneath it. A bare match on "2xx.x%" passes on the data table,
+		// which prints the raw daily values and is unaffected by the row's domain — so the clamp
+		// could come back and the assertion would still be green. Only <text> is the chart.
+		expect(html).toContain('Share GA4 saw')
+		const axisLabels = [...html.matchAll(/<text[^>]*>([^<]+)</g)].map((m) => m[1])
+		expect(axisLabels.some((t) => /^2[0-9][0-9]\.[0-9]%$/.test(t ?? ''))).toBe(true)
 	})
 })
