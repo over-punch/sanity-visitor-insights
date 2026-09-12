@@ -511,7 +511,7 @@ export interface FunnelChartProps {
  * still shown, because how many people reached a step is a fact at any size; it is the ratio that
  * needs a population.
  */
-const MIN_RATE_DENOMINATOR = 30
+export const MIN_RATE_DENOMINATOR = 30
 
 /**
  * A funnel.
@@ -1636,7 +1636,7 @@ function sortButton(numeric: boolean): React.CSSProperties {
 const sortMark: React.CSSProperties = { opacity: 0.7, fontSize: '0.9em' }
 
 /** Present to screen readers, absent visually — the caption names the table without repeating the heading. */
-const visuallyHidden: React.CSSProperties = {
+export const visuallyHidden: React.CSSProperties = {
 	position: 'absolute',
 	width: 1,
 	height: 1,

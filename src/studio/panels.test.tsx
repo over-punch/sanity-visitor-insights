@@ -3045,14 +3045,37 @@ describe('the funnel breakdown', () => {
 		outcomes: [], topLandingPages: [],
 	})
 
-	it('puts each segment\'s own rate on its control, so the difference is legible unclicked', () => {
-		// A bare row of device names makes the reader press three buttons to discover that one of
-		// them is the entire story.
+	it('shows every segment at once, in a table, rather than behind a control', () => {
+		// This test used to assert the rates appeared "on the control". It kept passing after the
+		// control was deleted, because spread()'s sentence also prints them — a test whose name
+		// described removed behaviour, still green. It now asserts the table.
 		const html = render(<JourneyPanel data={journey([desktop, mobile]) as never} />)
 		expect(html).toContain('Desktop')
 		expect(html).toContain('Mobile')
-		expect(html).toContain('1.27%')
-		expect(html).toContain('0.14%')
+		// Both segments' counts are present simultaneously, which is the thing the control prevented.
+		expect(html).toContain('8,804')
+		expect(html).toContain('8,408')
+		// And no radiogroup remains.
+		expect(html).not.toContain('radiogroup')
+	})
+
+	it('prints every rate with the denominator it is a share of', () => {
+		// The control printed a bare rate to two decimals with no denominator and no floor — the
+		// same claim spread() refuses below 200 users, through the back door.
+		const html = render(<JourneyPanel data={journey([desktop, mobile]) as never} />)
+		expect(html).toMatch(/of 8,804/)
+		expect(html).toMatch(/of 8,408/)
+	})
+
+	it('withholds a rate whose denominator is too small, but still shows the count', () => {
+		// How many people reached a step is a fact at any sample size; only the ratio needs
+		// protecting.
+		const tiny = { key: 'tablet', label: 'Tablet', steps: [
+			step('landed', 'Landed', 12, null), step('viewed', 'Viewed', 3, 0.25),
+		] }
+		const html = render(<JourneyPanel data={journey([desktop, tiny]) as never} />)
+		expect(html).toContain('12')
+		expect(html).not.toContain('of 12')
 	})
 
 	it('says in words when the segments differ by a multiple', () => {

@@ -15,7 +15,7 @@
 
 import React from 'react'
 import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ChartData, ComparisonBar, ContainmentBar, Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, isContainment, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
+import { ChartData, ComparisonBar, ContainmentBar, Delta, FunnelChart, MetricFigure, NoticeList, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, visuallyHidden, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import { SEND_WINDOW_DAYS } from '../core/ranges'
 import { describeRank, weeklyRank } from '../core/rank'
@@ -118,26 +118,27 @@ const figureRow: React.CSSProperties = {
 /** The segment control: one row of options, wrapping on a narrow pane. */
 const segmentRow: React.CSSProperties = { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }
 
-/** One segment option, carrying its own headline figure. */
-function segmentButton(selected: boolean): React.CSSProperties {
-	return {
-		appearance: 'none',
-		background: selected ? 'var(--card-bg-color, rgba(128,128,128,0.12))' : 'transparent',
-		border: `1px solid ${selected ? 'currentColor' : 'var(--card-border-color, rgba(128,128,128,0.3))'}`,
-		borderRadius: 3,
-		color: 'inherit',
-		font: 'inherit',
-		fontSize: '0.85em',
-		padding: '4px 10px',
-		cursor: 'pointer',
-		display: 'flex',
-		alignItems: 'baseline',
-		gap: 7,
-	}
+/** Column head in the segment table. Quiet, because the step names are the content. */
+const segmentHeadCell: React.CSSProperties = {
+	textAlign: 'left',
+	fontSize: '0.78em',
+	letterSpacing: '0.06em',
+	textTransform: 'uppercase',
+	fontWeight: 500,
+	opacity: 0.7,
+	padding: '8px 12px',
+	borderBottom: '1px solid var(--card-border-color, rgba(128,128,128,0.3))',
+	whiteSpace: 'nowrap',
 }
 
-/** The figure on the option. Quieter than the name, and tabular so the row of them lines up. */
-const segmentRate: React.CSSProperties = { opacity: 0.65, fontVariantNumeric: 'tabular-nums' }
+/** A cell in the segment table. */
+const segmentRowCell: React.CSSProperties = {
+	textAlign: 'left',
+	fontWeight: 400,
+	padding: '8px 12px',
+	borderBottom: '1px solid var(--card-border-color, rgba(128,128,128,0.18))',
+	verticalAlign: 'baseline',
+}
 
 const sourceLink: React.CSSProperties = {
 	color: 'inherit',
@@ -1320,19 +1321,99 @@ export function rankLine(series: CrossSourceDay[] | undefined, pick: (d: CrossSo
 	return ranked ? describeRank(ranked) : null
 }
 
-export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElement {
-	/**
-	 * Which slice of the audience the funnel is drawn for.
-	 *
-	 * Null is everyone, which is what the tab has always shown. The segments arrive in the same
-	 * envelope as the whole funnel — GA4 returns both in one response — so switching between them
-	 * costs no request and the control can be instant.
-	 */
-	const [segmentKey, setSegmentKey] = React.useState<string | null>(null)
-	const segments = data.segments ?? []
-	const segment = segmentKey === null ? null : segments.find((row) => row.key === segmentKey) ?? null
+/**
+ * The funnel, split by device, all segments visible at once.
+ *
+ * This replaced a radiogroup that swapped which funnel was drawn. The single most actionable fact
+ * in a foundry's data — at Darden, mobile reaching the second step at a ninth of desktop's rate —
+ * was therefore serialised through an interaction: seeing both meant clicking, remembering, and
+ * clicking back. A comparison you have to hold in your head is not a comparison the tool made.
+ *
+ * Each cell carries its DENOMINATOR. The buttons this replaces printed a bare rate to two decimal
+ * places with no denominator and no floor, which is the same claim `spread()` refuses below 200
+ * users, arriving through the back door with more implied precision than the honest version.
+ *
+ * A rate is withheld below MIN_RATE_DENOMINATOR, exactly as the funnel itself withholds one. The
+ * COUNT is always shown: how many people reached a step is a fact at any sample size, and only the
+ * ratio needs protecting.
+ */
+function SegmentTable({ segments, dimension }: { segments: JourneySegment[]; dimension: string }): React.ReactElement | null {
+	if (segments.length < 2) return null
 
-	const allSteps = segment ? segment.steps : data.steps ?? []
+	// Step order comes from the widest segment, so a segment GA4 stopped reporting partway down
+	// leaves a gap rather than shortening the table for everyone.
+	const spine = [...segments].sort((a, b) => b.steps.length - a.steps.length)[0]?.steps ?? []
+	if (spine.length === 0) return null
+
+	return (
+		<Stack space={3}>
+			<Text size={1} muted>
+				Every {dimension} at once. A rate needs {MIN_RATE_DENOMINATOR} people at the step before
+				it; below that only the count is shown.
+			</Text>
+			<Card radius={2} tone="transparent" border style={{ overflowX: 'auto', width: '100%' }}>
+				<table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 360 }}>
+					<caption style={visuallyHidden}>Funnel steps by {dimension}</caption>
+					<thead>
+						<tr>
+							<th scope="col" style={segmentHeadCell}>Step</th>
+							{segments.map((segment) => (
+								<th key={segment.key} scope="col" style={{ ...segmentHeadCell, textAlign: 'right' }}>
+									{segment.label}
+								</th>
+							))}
+						</tr>
+					</thead>
+					<tbody>
+						{spine.map((step, index) => (
+							<tr key={step.key}>
+								<th scope="row" style={segmentRowCell}>
+									<Text size={1}>{step.label}</Text>
+								</th>
+								{segments.map((segment) => {
+									const cell = segment.steps.find((s) => s.key === step.key)
+									const count = cell ? metricSortValue(cell.count) : null
+									const before = index > 0
+										? metricSortValue(segment.steps.find((s) => s.key === spine[index - 1]!.key)?.count)
+										: null
+									const rate = cell?.conversionFromPrevious ?? null
+									// The denominator is the step BEFORE this one, which is what the rate
+									// is a share of — and what decides whether it may be stated at all.
+									const showRate = index > 0 && rate !== null && before !== null && before >= MIN_RATE_DENOMINATOR
+
+									return (
+										<td key={segment.key} style={{ ...segmentRowCell, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+											{count === null
+												? <Text size={1} muted>—</Text>
+												: (
+													<Stack space={1}>
+														<Text size={1}>{formatCount(count)}</Text>
+														{showRate && (
+															<Text size={0} muted>
+																{formatPercent(rate, 1)} of {formatCount(before)}
+															</Text>
+														)}
+													</Stack>
+												)}
+										</td>
+									)
+								})}
+							</tr>
+						))}
+					</tbody>
+				</table>
+			</Card>
+		</Stack>
+	)
+}
+
+export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElement {
+	const segments = data.segments ?? []
+
+	// The funnel draws EVERYONE. Per-segment shapes moved into SegmentTable above it, where they
+	// can be compared side by side; a funnel that silently became one device's funnel, with only a
+	// pressed button to say so, was the thing that made the comparison invisible.
+	const allSteps = data.steps ?? []
 
 	// Steps this site does not instrument are hidden rather than drawn as empty rails. An
 	// uninstrumented rung told the reader nothing except that the funnel had a hole in it, and it
@@ -1365,48 +1446,17 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 				</Stack>
 			</Card>
 
-			{segments.length > 1 && (
-				<Stack space={3}>
-					{/* The control, and beside each option the number that makes it worth pressing.
-					    A bare set of device names would make the reader click three times to find
-					    out that one of them is the story; the first-step rate is printed on the
-					    button so the difference is legible before anything is chosen. */}
-					<div style={segmentRow} role="radiogroup" aria-label={`Funnel by ${data.segmentDimension ?? 'segment'}`}>
-						<button
-							type="button"
-							role="radio"
-							aria-checked={segmentKey === null}
-							style={segmentButton(segmentKey === null)}
-							onClick={() => setSegmentKey(null)}
-						>
-							Everyone
-						</button>
-						{segments.map((row) => {
-							const rate = firstStepRate(row.steps)
-							return (
-								<button
-									key={row.key}
-									type="button"
-									role="radio"
-									aria-checked={segmentKey === row.key}
-									style={segmentButton(segmentKey === row.key)}
-									onClick={() => setSegmentKey(row.key)}
-								>
-									{row.label}
-									{rate !== null && <span style={segmentRate}>{formatPercent(rate, 2)}</span>}
-								</button>
-							)
-						})}
-					</div>
-					{spread(segments) && (
-						/* Said in words, once, where the funnel is. The whole reason to split a funnel
-						   is that the halves differ; when they differ by a multiple rather than a
-						   margin, the undivided funnel above describes nobody and the reader should
-						   be told rather than left to press the buttons and notice. */
-						<Text size={1}>{spread(segments)}</Text>
-					)}
-				</Stack>
-			)}
+			{/* Every segment at once, instead of a control that swapped between them.
+			
+			    The radiogroup this replaces put the most actionable fact in the data — mobile
+			    reaching the second step at a ninth of desktop's rate — behind clicking, remembering,
+			    and clicking back. A comparison the reader has to hold in their head is not a
+			    comparison the tool made. Its buttons also printed a bare rate to two decimals with
+			    no denominator and no floor: the same claim spread() refuses below 200 users,
+			    arriving through the back door with more implied precision. */}
+			<SegmentTable segments={segments} dimension={data.segmentDimension ?? 'segment'} />
+
+			{spread(segments) && <Text size={1}>{spread(segments)}</Text>}
 
 			<FunnelChart stages={stages} measurement={data.measurement ?? 'independent-totals'} />
 
