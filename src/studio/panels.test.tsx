@@ -23,7 +23,7 @@ import { decodeView, encodeView, mergeIntoHash } from './urlState'
 import { captureModel, fromOrders, fromPageviews, grossUp } from '../core/capture'
 import { forgetShortfalls, knownShortfall, rememberShortfall } from './useReport'
 import { CrossSourceTimeline, HoverCard, colorFor, dayIndexAt, findCoverageIncident } from './CrossSourceTimeline'
-import { SERIES } from './palette'
+import { MARKS, SERIES, mark } from './palette'
 import React from 'react'
 import {
 	AcquisitionPanel,
@@ -3122,5 +3122,55 @@ describe('small samples do not get a percentage', () => {
 			campaigns: [], crossSource: [], timelineEvents: [],
 		} as never} />)
 		expect(html).toContain('2 of 7 orders')
+	})
+})
+
+describe('the drawing honours the mark registry', () => {
+	/**
+	 * The other half of the contrast fix.
+	 *
+	 * palette.test.ts proves each registry entry clears 3:1 as composited. That is worth nothing if
+	 * a renderer ignores the registry and picks its own alpha — which is precisely how the original
+	 * defect happened. These tests assert the rendered SVG actually contains the registry's colours,
+	 * so the two cannot come apart again.
+	 */
+	const data = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1400), ordersWithTotal: 7, vercelDailyUnavailable: false,
+		revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '', daily: [],
+		audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
+		campaigns: [], timelineEvents: [],
+		crossSource: [
+			{ date: '2026-08-20', vercelPageviews: 400, ga4Pageviews: 90, ga4Sessions: 70, orders: 2, revenue: 300 },
+			{ date: '2026-08-21', vercelPageviews: 380, ga4Pageviews: 85, ga4Sessions: 66, orders: 0, revenue: 0 },
+			{ date: '2026-08-22', vercelPageviews: 420, ga4Pageviews: 95, ga4Sessions: 74, orders: 1, revenue: 610 },
+		],
+	}
+
+	it('draws the boundary the registry promises for the shortfall region', () => {
+		// The region is allowed under 3:1 ONLY because MARKS names a boundary that is not. That
+		// boundary was declared and never drawn — a contract kept in the test and broken in the
+		// picture, which is the same defect the registry exists to prevent, one level up.
+		const html = render(<OverviewPanel data={data as never} />)
+		expect(html).toContain(mark('chart.regionEdge'))
+	})
+
+	it('fills the region at the registry alpha, not one chosen at the call site', () => {
+		const html = render(<OverviewPanel data={data as never} />)
+		expect(html).toContain(`rgba(221, 107, 63, ${MARKS['chart.region']!.alpha})`)
+	})
+
+	it('draws data marks at full strength, with no opacity reducing them below the tested value', () => {
+		// Every mark the registry calls `data` is declared at alpha 1. If a renderer reapplies an
+		// opacity on top, the composited contrast is no longer what palette.test.ts measured.
+		const html = render(<OverviewPanel data={data as never} />)
+		const dataColours = Object.entries(MARKS)
+			.filter(([, m]) => m.role === 'data' && m.key !== 'neutral')
+			.map(([name]) => mark(name))
+		// At least the line and the region edge must appear at their registry values.
+		expect(dataColours.some((c) => html.includes(c))).toBe(true)
+		// And no path may carry both a series colour and a fractional opacity.
+		expect(html).not.toMatch(/stroke="rgba\([^"]*, 1\)"[^>]*opacity="0\.[0-9]/)
 	})
 })

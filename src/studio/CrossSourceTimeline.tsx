@@ -27,7 +27,7 @@ import { scaleUtc, scaleLinear } from 'd3-scale'
 import { line as d3Line, area as d3Area, curveLinear } from 'd3-shape'
 import { max as d3Max } from 'd3-array'
 import { formatCount, formatMoney, formatPercent } from './Figure'
-import { SERIES, seriesFill, type SeriesKey } from './palette'
+import { MARKS, SERIES, mark, seriesFill, type SeriesKey } from './palette'
 
 /** One point on one series. `value` null where the source reported nothing for that day. */
 export interface SeriesPoint {
@@ -920,9 +920,8 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 								// reader date a peak without hovering, and stopping 38px short of the labels
 								// they connect to left exactly the gap they were meant to close.
 								y2={height - AXIS_HEIGHT + 4}
-								stroke="currentColor"
+								stroke={mark('chart.grid')}
 								strokeWidth={1}
-								opacity={0.18}
 							/>
 						)
 					})}
@@ -1034,7 +1033,14 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						// expose, was drawn as a smooth line straight through the missing days. The
 						// shaded region beneath already broke correctly, so the fill and the line
 						// disagreed about the same days and the one on top was the one that lied.
-						const shortfallLine = row.shortfall && revealed ? lineGen(shortfallPoints) ?? '' : ''
+						// ALWAYS, not only when revealed.
+						//
+						// This was gated on the hover/pin state, so the region's own boundary existed
+						// only while someone was pointing at the chart — and at rest the region was a
+						// 1.40:1 wash with no perceivable extent at all. MARKS permits a fill under the
+						// contrast floor only because it names a boundary that clears it; a boundary
+						// behind an interaction does not satisfy that, it just hides the shortfall.
+						const shortfallLine = row.shortfall ? lineGen(shortfallPoints) ?? '' : ''
 
 						// Every mark is clipped to its own band.
 						//
@@ -1114,10 +1120,9 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 									<path
 										d={ghost}
 										fill="none"
-										stroke="currentColor"
+										stroke={mark('chart.ghost')}
 										strokeWidth={1}
 										strokeDasharray="2 3"
-										opacity={0.35}
 									/>
 								)}
 								{/* The region is what the LOSSIER source missed, so it carries that source's
@@ -1126,14 +1131,33 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 								{gap && (
 									<path
 										d={gap}
-										fill={shortfallStroke ? seriesFill(colorFor(row.shortfall!.source, row.unit, row.shortfall!.color), 0.3) : 'currentColor'}
+										fill={shortfallStroke
+											? seriesFill(colorFor(row.shortfall!.source, row.unit, row.shortfall!.color), MARKS['chart.region']!.alpha)
+											: 'currentColor'}
 										opacity={shortfallStroke ? 1 : 0.48}
 									/>
 								)}
 
+								{/* The region's BOUNDARY, drawn because the registry promises it.
+								
+								    A fill this light cannot carry 3:1 and is not supposed to — what it
+								    covers has to stay readable. MARKS therefore lets it sit under the
+								    floor only by naming a `boundary` mark that does clear it, and until
+								    now that boundary was declared and never drawn: a contract honoured in
+								    the test and not in the picture, which is the exact defect the
+								    registry was built to stop. This is the line that makes the region's
+								    extent perceivable. */}
 								{shortfallLine && (
-									<path d={shortfallLine} fill="none" stroke={shortfallStroke ?? 'currentColor'} strokeWidth={1.5} strokeDasharray="6 4" opacity={0.8} />
+									<path
+										d={shortfallLine}
+										fill="none"
+										stroke={mark('chart.regionEdge')}
+										strokeWidth={1.5}
+										strokeDasharray="6 4"
+									/>
 								)}
+
+
 
 								{zeroes.map((p) => {
 									const cx = at(p)
@@ -1149,7 +1173,6 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 											width={stemWidth}
 											height={3}
 											fill={stroke}
-											opacity={0.7}
 										/>
 									)
 								})}
@@ -1173,7 +1196,6 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 											// it did not.
 											height={Math.max(1.5, Math.abs(zeroY - headY))}
 											fill={stroke}
-											opacity={0.9}
 										/>
 									)
 								})}
@@ -1185,8 +1207,11 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 									strokeWidth={2}
 									// Dashed only where the LINE's own source misses things. A row whose
 									// line is complete stays solid even when it carries a blind-spot fill.
+									//
+									// Opaque, too. Opacity used to carry incompleteness alongside the dash,
+									// which dropped an incomplete line to 2.6:1 on the light theme — one
+									// encoding doing double duty and losing contrast for it.
 									strokeDasharray={row.complete ? undefined : '6 4'}
-									opacity={row.complete ? 0.95 : 0.7}
 								/>}
 								</g>
 							</g>
