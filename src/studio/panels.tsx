@@ -18,6 +18,7 @@ import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/s
 import { ChartData, ComparisonBar, Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import { SEND_WINDOW_DAYS } from '../core/ranges'
+import { describeRank, weeklyRank } from '../core/rank'
 import type {
 	AcquisitionData,
 	CheckStatus,
@@ -227,6 +228,17 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								: <MetricFigure metric={metricOr(data.revenue, OLDER_ROUTE)} label="Revenue" />}
 							<Delta current={metricSortValue(data.revenue)} previous={metricSortValue(previous?.revenue)} />
 						</div>
+						{/* The rank, beside the change rather than instead of it.
+						
+						    A percentage on these counts is the part that misleads — seven orders
+						    against four is "+75%" and moves twenty-five points on one more sale —
+						    but the change is still what a reader looks for first, so it stays. The
+						    rank is what tells them whether the week was normal, which the percentage
+						    never could. Exact quantities only: ranking a GA4 figure would rank the
+						    instrument's mood alongside the business. */}
+						{rankLine(data.crossSource, (d) => d.revenue) && (
+							<Text size={0} muted>{rankLine(data.crossSource, (d) => d.revenue)}</Text>
+						)}
 					</Stack>
 				</Card>
 				<Card padding={3} radius={2} tone="transparent" border>
@@ -236,6 +248,9 @@ export function OverviewPanel({ data, previous, onBrush }: {
 							<MetricFigure metric={data.orders} label="Orders" />
 							<Delta current={metricSortValue(data.orders)} previous={metricSortValue(previous?.orders)} />
 						</div>
+						{rankLine(data.crossSource, (d) => d.orders) && (
+							<Text size={0} muted>{rankLine(data.crossSource, (d) => d.orders)}</Text>
+						)}
 					</Stack>
 				</Card>
 				<Card padding={3} radius={2} tone="transparent" border>
@@ -1259,6 +1274,26 @@ export function shortListNote(truncated: boolean, withheld: boolean, tail: strin
 			? 'GA4 returned only its top rows'
 			: 'GA4 withheld rows with too few people to report'
 	return `${cause}, so this list is shorter than reality. ${tail}`
+}
+
+/**
+ * The rank line under an exact figure, or nothing.
+ *
+ * Drawn from the daily series already in the envelope, so it costs no request and — because orders
+ * and revenue come from the foundry's own records — inherits none of GA4's loss. Offered only for
+ * the EXACT quantities: ranking a GA4 figure would rank the instrument's mood alongside the
+ * business.
+ *
+ * Returns null rather than a hedge when there are too few whole weeks, so a short range simply
+ * says less instead of saying something weaker.
+ *
+ * @param series - the cross-source daily rows
+ * @param pick - which exact quantity to rank
+ */
+export function rankLine(series: CrossSourceDay[] | undefined, pick: (d: CrossSourceDay) => number | null): string | null {
+	if (!series || series.length === 0) return null
+	const ranked = weeklyRank(series.map((d) => ({ date: d.date, value: pick(d) })))
+	return ranked ? describeRank(ranked) : null
 }
 
 export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElement {

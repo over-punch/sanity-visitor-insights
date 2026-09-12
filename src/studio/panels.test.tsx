@@ -39,6 +39,7 @@ import {
 	coverageOf,
 	firstStepRate,
 	gapOf,
+	rankLine,
 	revenuePerThousandSent,
 	spread,
 	visitorsPerOrder,
@@ -3246,5 +3247,61 @@ describe('the coverage ribbon says only what the reader must act on', () => {
 		const tool = readFileSync(new URL('./VisitorInsightsTool.tsx', import.meta.url), 'utf8')
 		const visible = tool.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 		expect(visible).not.toContain('coming from Sanity')
+	})
+})
+
+describe('the rank on the exact cards', () => {
+	/** Four whole weeks of exact orders, the latest the second best. */
+	const series = Array.from({ length: 28 }, (_, i) => ({
+		date: `2026-01-${String(i + 1).padStart(2, '0')}`,
+		vercelPageviews: 100, ga4Pageviews: 20, ga4Sessions: 15,
+		// Weekly totals, oldest to newest: 3, 9, 5, 7.
+		orders: i % 7 === 0 ? [3, 9, 5, 7][Math.floor(i / 7)] as number : 0,
+		revenue: i % 7 === 0 ? ([3, 9, 5, 7][Math.floor(i / 7)] as number) * 100 : 0,
+	}))
+
+	it('says where the week sits rather than only how much it moved', () => {
+		expect(rankLine(series as never, (d) => d.orders)).toBe('2nd best of the last 4 weeks')
+	})
+
+	it('says nothing when the range holds too few whole weeks', () => {
+		// A short range says less, rather than saying something weaker.
+		expect(rankLine(series.slice(0, 14) as never, (d) => d.orders)).toBeNull()
+	})
+
+	it('says nothing at all when there is no series', () => {
+		expect(rankLine(undefined, (d) => d.orders)).toBeNull()
+		expect(rankLine([] as never, (d) => d.orders)).toBeNull()
+	})
+
+	it('renders beside the change, not instead of it', () => {
+		// The percentage is what misleads at these counts; the change is still what a reader looks
+		// for first. Both, or the card loses the thing it is for.
+		const html = render(<OverviewPanel data={{
+			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+			vercelVisitors: ok(1400), ordersWithTotal: 7, vercelDailyUnavailable: false,
+			revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '', daily: [],
+			audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
+			campaigns: [], timelineEvents: [], crossSource: series,
+		} as never} previous={{ orders: ok(4), revenue: ok(560) } as never} />)
+		expect(html).toContain('best of the last 4 weeks')
+		// And the baseline is still there.
+		expect(html).toContain('from 4')
+	})
+
+	it('does not rank a GA4 figure', () => {
+		// Ranking a lossy series would rank the instrument's mood alongside the business. Only the
+		// order-derived cards carry a rank.
+		const html = render(<OverviewPanel data={{
+			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+			vercelVisitors: ok(1400), ordersWithTotal: 7, vercelDailyUnavailable: false,
+			revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '', daily: [],
+			audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
+			campaigns: [], timelineEvents: [], crossSource: series,
+		} as never} />)
+		// Two ranks — orders and revenue — and no more.
+		expect(html.match(/best of the last 4 weeks/g)).toHaveLength(2)
 	})
 })
