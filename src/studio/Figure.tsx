@@ -11,7 +11,7 @@
 
 import React, { useRef, useState } from 'react'
 import { Badge, Box, Card, Flex, Heading, Stack, Text, Tooltip } from '@liiift-studio/sanity-ui-compat'
-import { SERIES } from './palette'
+import { SERIES, mark } from './palette'
 import type { MetricValue, UnavailableReason } from '../types'
 
 /** Human-readable explanation for each unavailable reason. */
@@ -96,6 +96,20 @@ export interface DeltaProps {
  * Renders nothing at all when there is no comparison — an absent delta must never be drawn as
  * "no change", which is a different and much more reassuring claim.
  */
+/**
+ * How large a baseline must be before a percentage change means anything.
+ *
+ * Twenty-five. At a foundry's volumes the headline cards routinely compare single digits: seven
+ * orders against four rendered "↑ +75%" in the largest type on the default tab, where one order
+ * moves it twenty-five points. The server layer refuses far better-supported claims than that —
+ * it will not rank a typeface on 28 views, and it withholds a funnel rate under a denominator of
+ * 30 — while this component had no floor at all and reintroduced the claim in the presentation.
+ *
+ * Below the floor the figures are still shown; only the PERCENTAGE is withheld. "7 orders, was 4"
+ * is the whole fact and is not improved by a ratio.
+ */
+export const MIN_DELTA_BASE = 25
+
 export function Delta({ current, previous, riseIsGood = true, unit = 'count' }: DeltaProps): React.ReactElement | null {
 	// isFinite, not a null check. An older API route sends undefined for a field it does not know
 	// about, and a NaN can reach here from a division the server got wrong — both pass `!== null`
@@ -130,8 +144,17 @@ export function Delta({ current, previous, riseIsGood = true, unit = 'count' }: 
 	// 43.2% consent rate is the same defect MetricFigure's `unit` was added to fix.
 	const baseline = unit === 'percent' ? `${before.toFixed(1)}%` : formatCount(before)
 
+	// Too small a baseline for a ratio to mean anything — see MIN_DELTA_BASE. Placed AFTER the
+	// zero-baseline case, which has its own wording: a first-ever order is "new", not "was 0".
+	// The DIRECTION stays, and stays true; only the percentage is withheld, because at these counts
+	// the percentage is the part that misleads. Counts only — a percentage-point move on a rate
+	// carries its own denominator, which this component cannot see.
+	const tooFewToRate = change !== null && unit !== 'percent' && Math.abs(before) < MIN_DELTA_BASE
+
 	const magnitude = change === null
 		? (rising ? 'new' : 'gone')
+		: tooFewToRate
+		? ''
 		: unit === 'percent'
 			// Percentage points, not a percentage of a percentage: a consent rate moving 40% → 44%
 			// rose by 4 points, and calling that "+10%" is a different and confusing claim.
@@ -534,25 +557,36 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
 				return (
 					<li key={stage.key} style={funnelItem}>
 						{previous && (
-							<div style={funnelGap} aria-hidden="true">
-								{/* Drawn to scale, and ONLY for a tracked funnel.
+							<div style={funnelGap}>
+								{/* Drawn on the SAME RAIL as the stage bars, and that is the whole point.
 								
-								    GA4 calls this abandonment and gives it a limb of its own, which is
-								    the right instinct: the interesting quantity at each rung is not how
-								    many continued but how many stopped, and stating it in six words of
-								    muted type made the largest number on the tab the quietest thing on
-								    it. As a bar it is comparable between rungs at a glance.
+								    This previously had a rail of its own at `width: 38%` with the fill a
+								    percentage OF THAT RAIL — so a drop-off of half your entrants rendered
+								    at 19% of the width a 50% stage bar occupies, understated by a factor
+								    of 2.6, beneath a comment claiming the two shared a scale. The test
+								    asserted `width: 75%` for a 750-of-1000 loss and passed, because the
+								    fill really was 75% of its own rail: it checked the arithmetic and
+								    never the relationship.
 								
-								    Under independent totals the difference between two steps is NOT a
-								    drop-off — the counts are of different acts by possibly different
-								    people — so there is nothing to draw and drawing it would invent
-								    the one reading the fallback's caveat exists to forbid. */}
+								    Full width, right-aligned, same 100% as every rung above and below. */}
 								{measurement === 'sequence' && delta > 0 && entry > 0 && (
-									<div style={lostTrack}>
-										<div style={{ ...lostFill, width: `${Math.max(1, Math.min(1, delta / entry) * 100)}%` }} />
+									<div aria-hidden="true" style={{ ...barTrack, height: 6, flex: 1 }}>
+										<div
+											style={{
+												marginLeft: 'auto',
+												height: '100%',
+												borderRadius: 2,
+												background: mark('bar.lost'),
+												width: `${Math.max(1, Math.min(1, delta / entry) * 100)}%`,
+											}}
+										/>
 									</div>
 								)}
-								<Text size={0} muted>{gapLabel(delta, measurement)}</Text>
+								{/* NOT inside the aria-hidden. The whole gap block used to be hidden, so a
+								    screen-reader user got five stage counts and nothing about drop-off at
+								    all — including the warning that the gaps are not drop-offs under the
+								    fallback. Only the bar is decoration; the sentence is the finding. */}
+								<Text size={0} muted>{gapLabel(delta, measurement, entry)}</Text>
 							</div>
 						)}
 
@@ -632,9 +666,16 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
  *
  * @param delta - previous step's value minus this one's; negative means this step is larger
  */
-function gapLabel(delta: number, measurement: 'sequence' | 'independent-totals'): string {
+function gapLabel(delta: number, measurement: 'sequence' | 'independent-totals', entry = 0): string {
 	if (delta === 0) return measurement === 'sequence' ? 'no drop-off' : 'no difference'
-	if (delta > 0) return measurement === 'sequence' ? `−${formatCount(delta)} did not continue` : `${formatCount(delta)} fewer`
+	if (delta > 0) {
+		if (measurement !== 'sequence') return `${formatCount(delta)} fewer`
+		// The share as well as the count, because the share is what the bar beside it encodes — and
+		// a screen-reader user, who gets no bar at all, would otherwise have no way to know how big
+		// the loss was relative to everyone who landed.
+		const share = entry > 0 ? ` — ${formatPercent(delta / entry, 0)} of everyone who landed` : ''
+		return `−${formatCount(delta)} did not continue${share}`
+	}
 	// A closed funnel cannot grow, so a negative here means the fallback is in use and the two
 	// counts are of different acts, not of the same people continuing.
 	return `${formatCount(-delta)} more — not a subset of the step above`
@@ -721,11 +762,10 @@ function funnelStage(active: boolean): React.CSSProperties {
 const barFill: React.CSSProperties = {
 	height: '100%',
 	borderRadius: 2,
-	// The reference blue, as everywhere else the tool draws "people who were here". Previously
-	// currentColor at 0.55, which made the funnel a stack of grey bars whose only variable was
-	// length — legible, and giving the eye nothing to hold on to across five rungs.
-	background: SERIES.vercel,
-	opacity: 0.85,
+	// Through the registry, not a hex plus an opacity chosen here. Drawn at 0.85 this sat at 2.77:1
+	// on the light theme while palette.test.ts asserted 3.42:1 against the bare constant — the test
+	// measured a colour that was never drawn. MARKS is what both now read.
+	background: mark('bar.fill'),
 }
 
 /** The track a bar sits in. Visible on its own, so an empty bar still reads as a bar. */
@@ -733,8 +773,9 @@ const barTrack: React.CSSProperties = {
 	height: 8,
 	borderRadius: 2,
 	overflow: 'hidden',
-	background: 'currentColor',
-	opacity: 0.12,
+	// Furniture, not data: a rail is not a value, so 3:1 does not apply to it — but it is declared
+	// in MARKS so that exemption is stated somewhere a reader can check rather than assumed.
+	background: mark('bar.track'),
 }
 
 

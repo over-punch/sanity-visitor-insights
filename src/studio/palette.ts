@@ -93,3 +93,86 @@ export function contrast(a: string, b: string): number {
 	const lb = luminance(b)
 	return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
 }
+
+// ---------------------------------------------------------------------------
+// The mark registry
+// ---------------------------------------------------------------------------
+
+/**
+ * What a mark is for, which decides whether 3:1 applies to it.
+ *
+ * `data` — carries a value the reader must perceive: a line, a bar, a stem. WCAG 1.4.11 applies.
+ * `fill` — a region tinted behind or beneath data. Deliberately light so what it covers stays
+ *          readable, so it CANNOT carry 3:1 and must name a `boundary` mark that does.
+ * `furniture` — rails, grids, baselines. Not a value; exempt, but still drawn visibly.
+ */
+export type MarkRole = 'data' | 'fill' | 'furniture'
+
+/** One drawn mark: the colour, the alpha it is ACTUALLY drawn at, and what it is for. */
+export interface Mark {
+	key: SeriesKey | 'neutral'
+	/** The opacity the renderer applies. This is the number the contrast test composites with. */
+	alpha: number
+	role: MarkRole
+	/** For a `fill`: the `data` mark whose stroke makes this region's extent perceivable. */
+	boundary?: string
+	/** Why this mark exists, for the next person reading the test output. */
+	note: string
+}
+
+/**
+ * Every mark this package draws.
+ *
+ * THIS IS THE POINT OF THIS MODULE. The previous version exported five hex constants, asserted 3:1
+ * against them, and left each renderer free to multiply by whatever opacity it liked — so the test
+ * validated a colour that was never drawn, and the shipped shortfall region sat at 1.40:1 while a
+ * green suite said the palette was sound. Twenty-nine tests, mutation-checked, all measuring a
+ * constant.
+ *
+ * Renderers read their alpha from here. The test walks this registry and composites each entry over
+ * both grounds. The two cannot drift, because they are the same object.
+ */
+export const MARKS: Record<string, Mark> = {
+	'chart.line': { key: 'vercel', alpha: 1, role: 'data', note: 'A source series in the timeline' },
+	'chart.lossyLine': { key: 'ga4Pageviews', alpha: 1, role: 'data', note: 'The lossier source, dashed' },
+	'chart.coverage': { key: 'ga4Sessions', alpha: 1, role: 'data', note: 'Share one source saw of another' },
+	'chart.stem': { key: 'orders', alpha: 1, role: 'data', note: 'One day that had orders' },
+	'chart.zeroTick': { key: 'orders', alpha: 1, role: 'data', note: 'A day MEASURED at zero — the package\'s founding distinction' },
+	'chart.regionEdge': { key: 'ga4Pageviews', alpha: 1, role: 'data', note: 'The upper boundary of the shortfall region' },
+	'chart.region': {
+		key: 'ga4Pageviews', alpha: 0.22, role: 'fill', boundary: 'chart.regionEdge',
+		note: 'What the lossier source missed. Light on purpose — the line it covers must stay readable',
+	},
+	'chart.ghost': { key: 'neutral', alpha: 0.55, role: 'furniture', note: 'The same window last period, behind everything' },
+	'chart.grid': { key: 'neutral', alpha: 0.18, role: 'furniture', note: 'Grid rules' },
+	'bar.fill': { key: 'vercel', alpha: 1, role: 'data', note: 'Every proportion, comparison and funnel bar' },
+	'bar.track': { key: 'neutral', alpha: 0.12, role: 'furniture', note: 'The rail a bar sits in' },
+	'bar.lost': { key: 'revenue', alpha: 1, role: 'data', note: 'People who did not continue past a funnel rung' },
+}
+
+/**
+ * The rgba a mark is drawn in.
+ *
+ * @param name - a key of MARKS
+ */
+export function mark(name: string): string {
+	const m = MARKS[name]
+	if (!m) throw new Error(`Unknown mark: ${name}`)
+	if (m.key === 'neutral') return `rgba(127, 127, 127, ${m.alpha})`
+	return seriesFill(m.key, m.alpha)
+}
+
+/**
+ * Composite a colour at an alpha over a ground, so contrast can be measured as DRAWN.
+ *
+ * @param hex - the mark colour
+ * @param alpha - the opacity the renderer applies
+ * @param ground - what it is drawn on top of
+ */
+export function composite(hex: string, alpha: number, ground: string): string {
+	const mix = (at: number): number => Math.round(
+		parseInt(hex.slice(at, at + 2), 16) * alpha + parseInt(ground.slice(at, at + 2), 16) * (1 - alpha),
+	)
+	const hexOf = (n: number) => n.toString(16).padStart(2, '0')
+	return `#${hexOf(mix(1))}${hexOf(mix(3))}${hexOf(mix(5))}`
+}

@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { GROUNDS, REGION_ALPHA, SERIES, contrast, luminance, seriesFill, type SeriesKey } from './palette'
+import { GROUNDS, MARKS, REGION_ALPHA, SERIES, composite, contrast, luminance, mark, seriesFill, type SeriesKey } from './palette'
 
 /** Simulate how a colour appears to a dichromat, via the standard LMS projection. */
 function simulate(hex: string, kind: 'deuteranopia' | 'protanopia'): [number, number, number] {
@@ -114,5 +114,63 @@ describe('seriesFill', () => {
 
 	it('stays well under the stroke, so a region never reads as a line', () => {
 		expect(REGION_ALPHA).toBeLessThan(0.35)
+	})
+})
+
+describe('every mark clears contrast AS DRAWN, not as declared', () => {
+	/**
+	 * The test this module needed and did not have.
+	 *
+	 * The old suite asserted 3:1 against the raw hex while each renderer multiplied it by an
+	 * opacity — so it passed while the shortfall region, the tool's central encoding, rendered at
+	 * 1.40:1 on the light theme. Twenty-nine green tests, mutation-checked, all measuring a colour
+	 * that was never drawn.
+	 *
+	 * This walks the registry the RENDERERS read from, composites each mark at the alpha it is
+	 * actually drawn with, and measures that. The test and the drawing cannot drift apart because
+	 * they are the same object.
+	 */
+	const entries = Object.entries(MARKS)
+
+	for (const [name, m] of entries.filter(([, m]) => m.role === 'data')) {
+		it(`${name} clears 3:1 on both grounds when composited`, () => {
+			const hex = m.key === 'neutral' ? '#7f7f7f' : SERIES[m.key]
+			for (const ground of [GROUNDS.light, GROUNDS.dark]) {
+				expect(contrast(composite(hex, m.alpha, ground), ground)).toBeGreaterThanOrEqual(3)
+			}
+		})
+	}
+
+	for (const [name, m] of entries.filter(([, m]) => m.role === 'fill')) {
+		it(`${name} is a light fill, so it names a boundary that carries the contrast`, () => {
+			// A region must stay light or it hides the line beneath it. That is a legitimate reason
+			// to sit under 3:1 — but only if its EXTENT is perceivable some other way, so it has to
+			// name a data mark that is.
+			expect(m.boundary).toBeTruthy()
+			const edge = MARKS[m.boundary as string]
+			expect(edge).toBeTruthy()
+			expect(edge?.role).toBe('data')
+		})
+	}
+
+	it('refuses a fill that claims to carry its own contrast', () => {
+		// The failure mode this registry exists to prevent: quietly relabelling a region as data so
+		// the suite goes green, without making its edge visible.
+		const cheating = Object.entries(MARKS)
+			.filter(([, m]) => m.role === 'data' && m.alpha < 0.8)
+		expect(cheating).toEqual([])
+	})
+
+	it('draws every mark through the registry, so an alpha cannot be invented at the call site', () => {
+		expect(mark('bar.fill')).toBe(seriesFill('vercel', 1))
+		expect(mark('chart.region')).toBe(seriesFill('ga4Pageviews', 0.22))
+		expect(() => mark('nonexistent')).toThrow()
+	})
+
+	it('composites the way a browser does', () => {
+		// Anchored, so the guard above cannot pass because the compositing maths is wrong.
+		expect(composite('#000000', 1, '#ffffff')).toBe('#000000')
+		expect(composite('#000000', 0, '#ffffff')).toBe('#ffffff')
+		expect(composite('#ffffff', 0.5, '#000000')).toBe('#808080')
 	})
 })

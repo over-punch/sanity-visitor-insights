@@ -320,10 +320,23 @@ export function OverviewPanel({ data, previous, onBrush }: {
 							const value = metricSortValue(average)
 							if (value === null) return <MetricFigure metric={average} label="Average order value" />
 							return (
-								<div style={figureRow}>
-									<Text size={4}>{formatMoney(value, data.currency ?? null)}</Text>
-									{average.status === 'partial' && <Text size={0} muted>partial</Text>}
-								</div>
+								<Stack space={2}>
+									<div style={figureRow}>
+										<Text size={4}>{formatMoney(value, data.currency ?? null)}</Text>
+									</div>
+									{/* The denominator, not the bare word `partial`.
+									
+									    averageOrderValue already builds "Averaged over the 2 of 7 orders
+									    that carry an amount" — and this card threw it away, printing one
+									    lowercase word instead, because it bypasses MetricFigure to format
+									    currency. A reader could not tell whether $455 was their average
+									    order or the average of two of them. Those are different
+									    businesses, and the tool refuses to rank a typeface on 28 views
+									    while it was happy to state this one unqualified. */}
+									{average.status === 'partial' && average.note && (
+										<Text size={0} muted>{average.note}</Text>
+									)}
+								</Stack>
 							)
 						})()}
 						<Text size={0} muted>

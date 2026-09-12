@@ -262,7 +262,7 @@ describe('JourneyPanel', () => {
 		// Both bars full width — the second is clamped, not rescaled. Matched on the fill's own
 		// declaration: the funnel bars carry the reference blue, so this also pins that a rung is
 		// drawn as a rung rather than picking up the abandonment colour.
-		expect(html.match(new RegExp(`background:${SERIES.vercel};opacity:0\\.85;width:100%`, 'g'))).toHaveLength(2)
+		expect(html.match(new RegExp(`background:rgba\\(76, 143, 208, 1\\);width:100%`, 'g'))).toHaveLength(2)
 		// But the printed share is NOT clamped. Showing "100.0%" here would hide the anomaly.
 		expect(html).toContain('500.0% of landed')
 		// And a step larger than the one above it is named as such, not as "no difference".
@@ -2987,13 +2987,29 @@ describe('the funnel draws what was lost', () => {
 		{ key: 'tested', label: 'Tested', event: 'tester_engaged', count: ok(250), conversionFromPrevious: 0.25 },
 	]
 
-	it('gives the drop-off a bar of its own, to the same scale as the rungs', () => {
-		// The interesting quantity at each rung is how many STOPPED. Stated in six words of muted
-		// type, the largest number on the tab was the quietest thing on it.
+	it('draws the drop-off on the same rail as the rungs, at the same scale', () => {
+		// THE regression this test exists for. The drop-off used to have a rail of its own at
+		// width:38%, with its fill a percentage OF THAT RAIL — so 750 of 1,000 drew at 28% of the
+		// width a 750 rung would occupy. The old test asserted width:75% and passed, because the
+		// fill really was 75% of its own little rail: it checked the arithmetic, never the
+		// relationship it claimed. This checks the relationship.
 		const html = render(<JourneyPanel data={{ steps, measurement: 'sequence', approximate: false, approximationNote: 'Tracked.', outcomes: [], topLandingPages: [] } as never} />)
-		expect(html).toContain(SERIES.ga4Pageviews)
-		// 750 of 1,000 lost — three quarters of the entry width.
+
+		// 750 lost of 1,000 entrants. A rung holding 750 would draw at 75% of the full rail, so the
+		// loss must too.
 		expect(html).toMatch(/width:\s*75%/)
+		// And there must be no nested rail rescaling it. Any fractional-width track reintroduces the
+		// bug whatever the fill inside it says.
+		expect(html).not.toMatch(/width:\s*38%/)
+		// Drawn in the loss colour, which is its own key — not GA4's, which means a source.
+		expect(html).toContain('rgba(191, 93, 155, 1)')
+	})
+
+	it('states the drop-off as a share for readers who get no bar at all', () => {
+		// The whole gap block used to sit inside aria-hidden, so a screen-reader user received five
+		// stage counts and nothing about abandonment.
+		const html = render(<JourneyPanel data={{ steps, measurement: 'sequence', approximate: false, approximationNote: 'Tracked.', outcomes: [], topLandingPages: [] } as never} />)
+		expect(html).toContain('75% of everyone who landed')
 	})
 
 	it('draws no drop-off arm under independent totals, where there is no drop-off', () => {
@@ -3065,5 +3081,46 @@ describe('the funnel breakdown', () => {
 		expect(firstStepRate(desktop.steps as never)).toBeCloseTo(0.0127, 5)
 		expect(firstStepRate([step('landed', 'Landed', 10, null)] as never)).toBeNull()
 		expect(firstStepRate([step('a', 'A', 10, null), step('b', 'B', 1, null)] as never)).toBeNull()
+	})
+})
+
+describe('small samples do not get a percentage', () => {
+	it('withholds the ratio when the baseline is below the floor, but keeps the direction', () => {
+		// "7 orders ↑ +75% from 4" rendered in the largest type on the default tab. One order moves
+		// that twenty-five points, and the server refuses far better-supported claims.
+		const html = render(<Delta current={7} previous={4} />)
+		expect(html).not.toContain('75')
+        expect(html).not.toContain('%')
+		expect(html).toContain('from 4')
+		expect(html).toContain('↑')
+	})
+
+	it('still gives a percentage once the baseline can carry one', () => {
+		const html = render(<Delta current={2356} previous={1800} />)
+		expect(html).toMatch(/\+31%/)
+	})
+
+	it('keeps saying "new" for a first-ever figure rather than "was 0"', () => {
+		// The floor must not swallow the zero-baseline case, which has its own wording.
+		expect(render(<Delta current={3} previous={0} />)).toContain('new')
+	})
+
+	it('leaves percentage-point moves alone, since their denominator is not visible here', () => {
+		const html = render(<Delta current={44} previous={40} unit="percent" />)
+		expect(html).toContain('pts')
+	})
+
+	it('shows the average-order denominator rather than the bare word partial', () => {
+		// The card computed "Averaged over the N of M orders that carry an amount" and threw it away.
+		const html = render(<OverviewPanel data={{
+			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+			vercelVisitors: ok(1400), ordersWithTotal: 2, vercelDailyUnavailable: false,
+			revenue: { status: 'partial', value: 910, coveredFrom: '', note: '' }, currency: 'USD',
+			orderStatuses: {}, interpretation: '', daily: [],
+			audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
+			campaigns: [], crossSource: [], timelineEvents: [],
+		} as never} />)
+		expect(html).toContain('2 of 7 orders')
 	})
 })
