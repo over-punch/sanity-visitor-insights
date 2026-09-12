@@ -149,6 +149,9 @@ export const MARKS: Record<string, Mark> = {
 	'bar.track': { key: 'neutral', alpha: 0.12, role: 'furniture', note: 'The rail a bar sits in' },
 	'bar.lost': { key: 'revenue', alpha: 1, role: 'data', note: 'People who did not continue past a funnel rung' },
 	'bar.seen': { key: 'ga4Pageviews', alpha: 1, role: 'data', note: 'The share of a complete count that the lossy source saw' },
+	'estimate.dot': { key: 'ga4Pageviews', alpha: 1, role: 'data', note: 'One independent estimate of how much GA4 sees' },
+	'estimate.interval': { key: 'ga4Pageviews', alpha: 0.35, role: 'fill', boundary: 'estimate.dot', note: 'How wide the sample leaves that estimate — the dot is its own boundary' },
+	'estimate.rule': { key: 'neutral', alpha: 0.45, role: 'furniture', note: 'The 100% reference a capture rate is read against' },
 }
 
 /**

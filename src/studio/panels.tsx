@@ -15,10 +15,11 @@
 
 import React from 'react'
 import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ChartData, ComparisonBar, ContainmentBar, Delta, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, visuallyHidden, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
+import { ChartData, ComparisonBar, ContainmentBar, Delta, EstimateDotPlot, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, visuallyHidden, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import { SEND_WINDOW_DAYS } from '../core/ranges'
 import { describeRank, weeklyRank } from '../core/rank'
+import { samplingInterval } from '../core/capture'
 import type {
 	AcquisitionData,
 	CheckStatus,
@@ -934,35 +935,19 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 			{((data.capture?.estimates?.length ?? 0) > 0 || data.estimatedSessions?.status === 'estimated') && (
 				<Stack space={3}>
 					<SectionTitle title="How much GA4 is seeing" />
-					<div style={cardGrid}>
-						{(data.capture?.estimates ?? []).map((estimate) => (
-							<Card key={estimate.basis} padding={3} radius={2} tone="transparent" border>
-								<Stack space={3}>
-									<Label size={1} muted>
-										{estimate.basis === 'orders' ? 'Checked against your orders'
-											: estimate.basis === 'email' ? 'Checked against email clicks'
-												: 'Checked against Vercel'}
-									</Label>
-									{/* Unclamped. `Math.min(1, …)` rendered a tag reporting 250% of reality as a
-									    flat 100% under the heading "How much GA4 is seeing" — i.e. perfect —
-									    and over-counting is a real failure this package has a whole
-									    interpretation branch for. It is also the one case where the corrected
-									    figures silently disappear, because grossUp returns null above a rate
-									    of 1, so hiding its cause left the reader with no explanation. */}
-									<Text size={4}>{formatPercent(estimate.rate, 0)}</Text>
-									{estimate.rate > 1.05 && (
-										<Text size={0}>
-											Above 100%: GA4 is counting more than the source it is measured against.
-											That is usually a tag firing twice, not extra traffic.
-										</Text>
-									)}
-									<Text size={0} muted>
-										{formatCount(estimate.observed)} of {formatCount(estimate.actual)}. {estimate.note}
-									</Text>
-								</Stack>
-							</Card>
-						))}
-					</div>
+					{/* One axis, not three cards.
+					
+					    capture.ts is explicit that the three estimates are deliberately NOT averaged,
+					    because the disagreement between them is the useful output. A card grid makes
+					    that disagreement a subtraction the reader does by eye — and auto-fit reorders
+					    the cards by pane width, so even their sequence moves. */}
+					<EstimateDotPlot
+						estimates={data.capture?.estimates ?? []}
+						labelFor={(basis) => basis === 'orders' ? 'Checked against your orders'
+							: basis === 'email' ? 'Checked against email clicks'
+								: 'Checked against Vercel'}
+						intervalFor={samplingInterval}
+					/>
 
 					{/* The point of holding three estimates. Rendered in caution tone because a
 					    disagreement is a finding, not context. */}

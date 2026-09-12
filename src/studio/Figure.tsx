@@ -1130,6 +1130,105 @@ export function ContainmentBar({
 	)
 }
 
+/**
+ * Three independent estimates of one number, on one axis.
+ *
+ * The capture model computes how much of reality GA4 is seeing three separate ways — against the
+ * order book, against email clicks, against Vercel — and `capture.ts` is explicit that they are
+ * deliberately NOT averaged, because the DISAGREEMENT between them is the useful output. Rendered
+ * as three cards in a grid, that disagreement is a subtraction the reader performs by eye, and the
+ * grid reorders itself by pane width so even their sequence is unstable.
+ *
+ * On one axis it is a distance. Three dots, a rule at 100%, and each dot carrying the interval its
+ * own sample size leaves — so the estimate built on seven orders draws a bar most of the axis wide
+ * and the reader can see, without being told, which of the three to discount.
+ *
+ * That interval already existed. `samplingInterval` has been in capture.ts throughout, documented
+ * with "printing that is the point", and was drawn nowhere.
+ *
+ * No d3-shape: an axis, three rows, a rule. The scale opens past 100% because a rate above 1 is a
+ * real fault this package reports rather than an impossibility — the same reason the coverage row
+ * is no longer clamped.
+ */
+/** What the plot needs of an estimate. Matches the core model's CaptureEstimate structurally. */
+export interface EstimateForPlot {
+	basis: string
+	rate: number
+	observed: number
+	actual: number
+	note: string
+}
+
+export function EstimateDotPlot<E extends EstimateForPlot>({
+	estimates,
+	labelFor,
+	intervalFor,
+}: {
+	estimates: ReadonlyArray<E>
+	/** How to name a basis to the reader. */
+	labelFor: (basis: E['basis']) => string
+	/**
+	 * The sampling interval for an estimate, from the core capture model.
+	 *
+	 * Takes the whole estimate rather than a narrowed shape: a structural `{ rate, actual }` looks
+	 * tidier and cannot be satisfied by `samplingInterval`, whose parameter is the full
+	 * CaptureEstimate — so the caller would have to wrap it for no benefit.
+	 */
+	intervalFor: (estimate: E) => { low: number; high: number }
+}): React.ReactElement | null {
+	if (estimates.length === 0) return null
+
+	const intervals = estimates.map((e) => intervalFor(e))
+	// Opens past 1 when anything exceeds it, so an over-count is visible rather than pinned to the
+	// right edge reading as "perfect".
+	const top = Math.max(1, ...estimates.map((e) => e.rate), ...intervals.map((i) => i.high))
+	const pct = (v: number) => `${(Math.max(0, Math.min(1, v / top))) * 100}%`
+
+	return (
+		<Stack space={3}>
+			{estimates.map((estimate, index) => {
+				const interval = intervals[index] as { low: number; high: number }
+				const wide = interval.high - interval.low > 0.4
+				return (
+					<Stack key={estimate.basis} space={2}>
+						<div style={barHeader}>
+							<Text size={1}>{labelFor(estimate.basis)}</Text>
+							<Text size={1} weight="medium">{formatPercent(estimate.rate, 0)}</Text>
+						</div>
+						<div aria-hidden="true" style={estimateTrack}>
+							{/* The rule first, so a dot at 100% sits on top of it rather than under. */}
+							<div style={{ ...estimateRule, left: pct(1) }} />
+							<div
+								style={{
+									...estimateInterval,
+									left: pct(interval.low),
+									width: `calc(${pct(interval.high)} - ${pct(interval.low)})`,
+								}}
+							/>
+							<div style={{ ...estimateDot, left: pct(estimate.rate) }} />
+						</div>
+						<Text size={0} muted>
+							{formatCount(estimate.observed)} of {formatCount(estimate.actual)}
+							{/* Said in words as well as drawn, because the bar is aria-hidden and because
+							    "this one is too thin to lean on" is the conclusion, not the picture. */}
+							{wide && ' — too small a sample to lean on'}
+							{/* The CAUSE, not just the fact. "Over 100%" states the reading; "usually a tag
+							    firing twice" is the half a reader can act on, and dropping it when this
+							    moved from cards to a plot would have been a quiet loss — caught by the
+							    test that pinned it. */}
+							{estimate.rate > 1.05 && ' — over 100%, so GA4 is counting more than the source it is checked against. That is usually a tag firing twice, not extra traffic.'}
+						</Text>
+					</Stack>
+				)
+			})}
+			<Text size={0} muted>
+				Each is a separate way of asking the same question. Where they disagree, the spread is the
+				answer&rsquo;s uncertainty — the rule marks 100%.
+			</Text>
+		</Stack>
+	)
+}
+
 /** Props for SortableTable. */
 export interface SortableTableProps<Row> {
 	caption: string
@@ -1520,6 +1619,43 @@ export const splitGrid: React.CSSProperties = {
 	gridTemplateColumns: 'repeat(auto-fit, minmax(min(26rem, 100%), 1fr))',
 	gap: 24,
 	alignItems: 'start',
+}
+
+/** The axis a capture estimate is plotted on. Relative, so the marks position against it. */
+const estimateTrack: React.CSSProperties = {
+	position: 'relative',
+	height: 18,
+	borderRadius: 2,
+	background: mark('bar.track'),
+}
+
+/** The 100% reference. A capture rate means nothing without it. */
+const estimateRule: React.CSSProperties = {
+	position: 'absolute',
+	top: 0,
+	bottom: 0,
+	width: 1,
+	background: mark('estimate.rule'),
+}
+
+/** How wide the sample leaves this estimate. */
+const estimateInterval: React.CSSProperties = {
+	position: 'absolute',
+	top: 6,
+	height: 6,
+	borderRadius: 3,
+	background: mark('estimate.interval'),
+}
+
+/** The estimate itself. Its own boundary, which is why the interval may sit under 3:1. */
+const estimateDot: React.CSSProperties = {
+	position: 'absolute',
+	top: 4,
+	width: 10,
+	height: 10,
+	marginLeft: -5,
+	borderRadius: '50%',
+	background: mark('estimate.dot'),
 }
 
 /** The filter box. */

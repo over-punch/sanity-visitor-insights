@@ -141,7 +141,7 @@ export function fromEmail(ga4Users: number, mailchimpClicks: number): CaptureEst
  *
  * @param estimate - the single estimate the model has
  */
-function samplingInterval(estimate: CaptureEstimate): { low: number; high: number } {
+export function samplingInterval(estimate: CaptureEstimate): { low: number; high: number } {
 	const n = estimate.actual
 	if (!Number.isFinite(n) || n <= 0) return { low: estimate.rate, high: estimate.rate }
 	/*

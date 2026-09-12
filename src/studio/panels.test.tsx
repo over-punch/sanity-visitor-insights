@@ -56,7 +56,7 @@ vi.mock('sanity', () => ({
 	definePlugin: (definition: unknown) => definition,
 }))
 import visitorInsights from '../index'
-import { ContainmentBar, Delta, FunnelChart, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, isContainment, splitGrid } from './Figure'
+import { ContainmentBar, Delta, EstimateDotPlot, FunnelChart, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, isContainment, splitGrid } from './Figure'
 import { holdsPreviousAnswer } from './useReport'
 import { ok, partial, unavailable } from '../types'
 import { UI } from '@liiift-studio/sanity-ui-compat'
@@ -3618,5 +3618,72 @@ describe('the coverage row does not clamp an over-count to perfect', () => {
 		expect(html).toContain('Share GA4 saw')
 		const axisLabels = [...html.matchAll(/<text[^>]*>([^<]+)</g)].map((m) => m[1])
 		expect(axisLabels.some((t) => /^2[0-9][0-9]\.[0-9]%$/.test(t ?? ''))).toBe(true)
+	})
+})
+
+describe('three estimates of one number, on one axis', () => {
+	const estimates = [
+		{ basis: 'orders', rate: 0.29, observed: 2, actual: 7, note: '' },
+		{ basis: 'email', rate: 0.21, observed: 25, actual: 120, note: '' },
+		{ basis: 'pageviews', rate: 0.20, observed: 475, actual: 2356, note: '' },
+	]
+	const interval = (e: { rate: number; actual: number }) => {
+		// A crude normal approximation, enough to exercise the plot: tiny samples get wide bars.
+		const spread = Math.min(0.9, 1 / Math.sqrt(Math.max(1, e.actual)))
+		return { low: Math.max(0, e.rate - spread), high: e.rate + spread }
+	}
+	const plot = (rows = estimates) => render(
+		<EstimateDotPlot estimates={rows} labelFor={(b) => `against ${b}`} intervalFor={interval} />,
+	)
+
+	it('plots each estimate against a shared scale rather than in its own card', () => {
+		const html = plot()
+		// One track per estimate, all positioned against the same maximum.
+		expect((html.match(/position:relative/g) ?? []).length).toBe(3)
+		expect(html).toContain('against orders')
+		expect(html).toContain('against pageviews')
+	})
+
+	it('places a lower estimate further left than a higher one', () => {
+		// The whole point: disagreement becomes a distance. Positions must track the rates.
+		const html = plot()
+		const lefts = [...html.matchAll(/border-radius:50%[^"]*left:([\d.]+)%/g)].map((m) => Number(m[1]))
+		// Rendered in order orders (0.29) > email (0.21) > pageviews (0.20).
+		expect(lefts.length).toBe(3)
+		expect(lefts[0]).toBeGreaterThan(lefts[1] as number)
+		expect(lefts[1]).toBeGreaterThan(lefts[2] as number)
+	})
+
+	it('says which estimate the sample is too thin to lean on', () => {
+		// n=7 leaves an interval most of the axis wide. That is the reader's cue to discount it,
+		// and it must be in words too, because the bar is aria-hidden.
+		expect(plot()).toContain('too small a sample to lean on')
+	})
+
+	it('keeps the diagnosis when an estimate exceeds 100%, not just the reading', () => {
+		const over = [{ basis: 'orders', rate: 2.5, observed: 250, actual: 100, note: '' }]
+		const html = plot(over)
+		expect(html).toContain('over 100%')
+		expect(html).toContain('usually a tag firing twice')
+	})
+
+	it('opens the scale past 100% so an over-count is not pinned to the edge', () => {
+		// Clamped, a tag reporting 250% of reality draws as perfect — the same defect the coverage
+		// row carried.
+		const over = [
+			{ basis: 'orders', rate: 2.5, observed: 250, actual: 100, note: '' },
+			{ basis: 'pageviews', rate: 0.2, observed: 475, actual: 2356, note: '' },
+		]
+		const lefts = [...plot(over).matchAll(/border-radius:50%[^"]*left:([\d.]+)%/g)].map((m) => Number(m[1]))
+		// Precise, not merely ordered. With the scale opening to 2.5 the healthy estimate sits at
+		// 0.2/2.5 = 8% of the axis; clamped at 1 it would sit at 20% — and a loose "< 30" passes
+		// for both, so the clamp could come back unnoticed. This is the fourth assertion in this
+		// suite to have been satisfied by a coincidence rather than by the thing it names.
+		expect(lefts[0]).toBeGreaterThan(90)
+		expect(lefts[1]).toBeLessThan(12)
+	})
+
+	it('draws nothing when there is nothing to compare', () => {
+		expect(EstimateDotPlot({ estimates: [], labelFor: (b) => b, intervalFor: interval })).toBeNull()
 	})
 })
