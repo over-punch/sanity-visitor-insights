@@ -476,7 +476,12 @@ export function OverviewPanel({ data, previous, onBrush }: {
 					)}
 
 					<ChartData<CrossSourceDay>
-						note="A negative miss means GA4 counted more than Vercel that day — usually a tag firing twice, not extra traffic."
+						// No note. "A negative miss means GA4 counted more than Vercel that day —
+						// usually a tag firing twice" was the THIRD copy of that sentence on one
+						// screen: the timeline's caution card says it against a live finding, and the
+						// over-count notice says it again beside the capture estimates. A reader who
+						// meets a claim three times stops reading the register it arrives in. It
+						// stays where it is attached to something that actually happened.
 						label="Show these figures as a table"
 						rows={data.crossSource ?? []}
 						rowKey={(d) => d.date}
@@ -1020,9 +1025,11 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 					filterOn={(row) => `${row.source} ${row.channel} ${row.medium ?? ''} ${row.campaign ?? ''}`}
 					filterPlaceholder="Filter sources"
 					exportName="traffic-sources"
-					truncatedNote={data.rowsTruncated
-						? 'GA4 held more source rows than are shown here, so this is the top of a longer list — for a foundry, the tail of small design blogs is often the referral story.'
-						: undefined}
+					truncatedNote={shortListNote(
+						Boolean(data.rowsTruncated),
+						Boolean(data.rowsWithheld),
+						'For a foundry the tail of small design blogs is often the referral story.',
+					)}
 					columns={[
 						{
 							key: 'source',
@@ -1166,9 +1173,6 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 				)}
 			</Stack>
 
-			{data.rowsWithheld && (
-				<NoticeList notices={['GA4 withheld some low-traffic rows for privacy, so this list is shorter than reality.']} />
-			)}
 		</Stack>
 	)
 }
@@ -1227,6 +1231,33 @@ export function spread(segments: JourneySegment[]): string | null {
 	return `${worst.label} reaches the second step at ${formatPercent(worst.rate, 2)} against `
 		+ `${best.label}'s ${formatPercent(best.rate, 2)} — about ${Math.round(ratio)} times worse, on `
 		+ `${formatCount(worst.users)} visitors. The combined funnel above averages the two and describes neither.`
+}
+
+/**
+ * Why a table is shorter than reality, in one line.
+ *
+ * Two different causes used to produce two separate notices two sentences apart: `rowsTruncated`
+ * (GA4 held more rows than the query's limit returned) rendered a quiet line under the table, and
+ * `rowsWithheld` (GA4 suppressed low-count rows for privacy) rendered a second amber Caveat card
+ * below it. The distinction is real and worth keeping in the wording — the reader's takeaway is
+ * identical either way, and the same fact in two registers two lines apart is how a reader learns
+ * to stop reading amber.
+ *
+ * Returns undefined when the list IS complete, so nothing is said. Silence is the honest default
+ * here: a note that always renders carries no information.
+ *
+ * @param truncated - GA4 held more rows than it returned
+ * @param withheld - GA4 suppressed low-count rows for privacy
+ * @param tail - what the missing rows mean for this particular table
+ */
+export function shortListNote(truncated: boolean, withheld: boolean, tail: string): string | undefined {
+	if (!truncated && !withheld) return undefined
+	const cause = truncated && withheld
+		? 'GA4 returned only its top rows, and withheld others with too few people to report'
+		: truncated
+			? 'GA4 returned only its top rows'
+			: 'GA4 withheld rows with too few people to report'
+	return `${cause}, so this list is shorter than reality. ${tail}`
 }
 
 export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElement {
@@ -1613,9 +1644,11 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 					filterOn={(row) => row.typeface}
 					filterPlaceholder="Filter typefaces"
 					exportName="typeface-interest"
-					truncatedNote={data.rowsTruncated
-						? 'GA4 returned only its top rows, so families past the cap show as unknown rather than as zero. For a foundry the long tail is most of the catalogue.'
-						: undefined}
+					truncatedNote={shortListNote(
+						Boolean(data.rowsTruncated),
+						Boolean(data.rowsWithheld),
+						'A family missing from this table has not necessarily gone quiet — and for a foundry the long tail is most of the catalogue.',
+					)}
 					columns={[
 						{
 							key: 'typeface',
@@ -1772,9 +1805,6 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 
 			{/* Both completeness flags were computed by the server and drawn nowhere, so a table
 			    holding part of the catalogue was presented as the catalogue. */}
-			{data.rowsWithheld && (
-				<NoticeList notices={['GA4 withheld some low-count rows for privacy. A family missing from this table has not necessarily gone quiet.']} />
-			)}
 
 			{/* One apportionment note for the panel, not one per section. The licence table and the
 			    family table were each printing a near-identical sentence about even splitting,

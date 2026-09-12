@@ -19,6 +19,7 @@ import { dailyWindows } from '../server/vercel'
 import { zonedDay } from '../server/orders'
 import { formatInTimeZone } from '../core/ranges'
 import { columnIsEmpty, formatCount, formatMoney } from './Figure'
+import { shortListNote } from './panels'
 import { decodeView, encodeView, mergeIntoHash } from './urlState'
 import { captureModel, fromOrders, fromPageviews, grossUp } from '../core/capture'
 import { forgetShortfalls, knownShortfall, rememberShortfall } from './useReport'
@@ -3172,5 +3173,48 @@ describe('the drawing honours the mark registry', () => {
 		expect(dataColours.some((c) => html.includes(c))).toBe(true)
 		// And no path may carry both a series colour and a fractional opacity.
 		expect(html).not.toMatch(/stroke="rgba\([^"]*, 1\)"[^>]*opacity="0\.[0-9]/)
+	})
+})
+
+describe('saying the short-list caveat once', () => {
+	it('says nothing when the list is complete', () => {
+		// A note that always renders carries no information. Silence is the honest default.
+		expect(shortListNote(false, false, 'tail')).toBeUndefined()
+	})
+
+	it('names the cause when GA4 hit its row limit', () => {
+		expect(shortListNote(true, false, 'tail')).toContain('only its top rows')
+	})
+
+	it('names the cause when GA4 suppressed low-count rows', () => {
+		expect(shortListNote(false, true, 'tail')).toContain('too few people to report')
+	})
+
+	it('says both causes in one sentence when both apply, not two notices', () => {
+		// This is the whole point: these were a quiet under-table line AND a second amber card two
+		// sentences apart. The distinction is real; meeting it twice is what teaches a reader to
+		// stop reading amber.
+		const both = shortListNote(true, true, 'tail')
+		expect(both).toContain('only its top rows')
+		expect(both).toContain('too few people to report')
+		expect(both?.split('.').filter((p) => p.trim()).length).toBeLessThanOrEqual(2)
+	})
+
+	it('carries the per-table consequence, which differs between the two tables', () => {
+		expect(shortListNote(true, false, 'The long tail is most of the catalogue.'))
+			.toContain('The long tail is most of the catalogue.')
+	})
+
+	it('renders no separate amber notice alongside it', () => {
+		const data = {
+			rows: [{ source: 'fontsinuse.com', channel: 'Referral', medium: 'referral', campaign: null,
+				sessions: 120, engagedSessions: 90, engagementRate: 0.75, designIndustry: true,
+				unattributed: false, purchases: 2, revenueShare: null, trackedRevenue: 0, apportionedRevenue: null }],
+			totalSessions: 120, designIndustryShare: 0.3, unattributedShare: 0.1,
+			rowsWithheld: true, rowsTruncated: true, campaigns: [],
+		}
+		const html = render(<AcquisitionPanel data={data as never} />)
+		// One statement of the fact, not two.
+		expect(html.match(/shorter than reality/g)).toHaveLength(1)
 	})
 })
