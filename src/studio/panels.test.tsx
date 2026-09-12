@@ -121,7 +121,7 @@ describe('MetricFigure', () => {
 	it('marks a partial value as partial while still showing the number', () => {
 		const html = render(<MetricFigure metric={partial(120, '2026-09-01', 'Undercounted: outage')} label="Purchases" />)
 		expect(html).toContain('120')
-		expect(html).toContain('Partial')
+		expect(html).toContain('Some orders only')
 	})
 })
 
@@ -217,7 +217,7 @@ describe('JourneyPanel', () => {
 
 	it('names the fallback as independent totals and keeps the caution', () => {
 		const html = render(<JourneyPanel data={data} />)
-		expect(html).toContain('Independent per-step totals')
+		expect(html).toContain('Not a tracked path')
 		expect(html).toContain('not tracked journeys')
 		// Cautionary tone, because independent totals invite a drop-off reading they cannot support.
 		expect(html).toContain('caution')
@@ -239,7 +239,7 @@ describe('JourneyPanel', () => {
 		}
 
 		const html = render(<JourneyPanel data={tracked} />)
-		expect(html).toContain('Tracked funnel')
+		expect(html).toContain('Tracked path')
 		// A real sequence is not a caveat, so it must not be dressed as one.
 		expect(html).not.toContain('caution')
 		expect(html).toContain('did not continue')
@@ -301,7 +301,7 @@ describe('AcquisitionPanel', () => {
 		)
 		expect(html).toContain('fontsinuse.com')
 		expect(html).toContain('design-industry')
-		expect(html).toContain('Unattributed')
+		expect(html).toContain('No source')
 		// Withheld rows must be admitted, or the list reads as exhaustive.
 		expect(html).toContain('withheld')
 	})
@@ -859,8 +859,8 @@ describe('capture model rendering', () => {
 		expect(html).toContain('The sources disagree')
 		expect(html).toContain('capturing purchases far better')
 		// Both estimates shown side by side rather than averaged into one number.
-		expect(html).toContain('Measured against orders')
-		expect(html).toContain('Measured against Vercel')
+		expect(html).toContain('Checked against your orders')
+		expect(html).toContain('Checked against Vercel')
 		expect(html).toContain('caution')
 	})
 
@@ -1608,7 +1608,7 @@ describe('disagreement is a quantity, not only a shaded area', () => {
 			timelineEvents: [],
 		} as never} />)
 		expect(html).toContain('Missed by GA4')
-		expect(html).toContain('GA4 coverage')
+		expect(html).toContain('Share GA4 saw')
 		// The collapsed day: 300 - 20 missed, at 7% coverage.
 		expect(html).toContain('280')
 		expect(html).toContain('7%')
@@ -1729,7 +1729,7 @@ describe('every tab renders its own panel', () => {
 	for (const [tabId, report, marker] of [
 		['overview', 'measurement-health', 'Revenue'],
 		['acquisition', 'acquisition', 'Sessions'],
-		['journey', 'journey', 'per-step totals'],
+		['journey', 'journey', 'Not a tracked path'],
 		['typeface-interest', 'typeface-interest', 'Sort by any column'],
 		['data-health', 'measurement-health', 'Vercel'],
 	] as const) {
@@ -1768,7 +1768,7 @@ describe('every tab renders its own panel', () => {
 		// nesting bug got wrong.
 		const journey = render(<ReadyReport envelope={withComparison as never} tabId="journey" {...props} />)
 		expect(journey).not.toContain('Changes are against')
-		expect(journey).toContain('per-step totals')
+		expect(journey).toContain('Not a tracked path')
 	})
 
 	it('names which baseline is in force rather than leaving it to the dates', () => {
@@ -3418,5 +3418,39 @@ describe('columns a reader is told not to read, and columns that are two other c
 		} as never} />)
 		expect(html).toContain('Freight')
 		expect(html).not.toContain('Test rate')
+	})
+})
+
+describe('the words a reader actually meets', () => {
+	/**
+	 * These pin the RENAMES, because the reason for each is not visible in the code.
+	 *
+	 * "Partial" reads as a loading state. "Caveat" is the register of small print, and small print
+	 * is what a reader skips — which defeats a list whose whole job is to be read. "Unattributed"
+	 * is a money word on a traffic figure. "Coverage" reads as insurance. Without a test, the next
+	 * person tidying labels puts the shorter, more technical word back.
+	 */
+	it('does not call a figure Partial, which reads as still loading', () => {
+		const html = render(<MetricFigure metric={{ status: 'partial', value: 455, coveredFrom: '', note: 'over 2 of 7' } as never} label="Average order" />)
+		expect(html).toContain('Some orders only')
+		expect(html).not.toContain('>Partial<')
+	})
+
+	it('does not label its warnings Caveat, which readers skip', () => {
+		const html = render(<NoticeList notices={['GA4 answered from a sample.']} />)
+		expect(html).toContain('Note')
+		expect(html).not.toContain('Caveat')
+	})
+
+	it('does not say a figure was withheld for privacy, which sounds like a legal hold', () => {
+		const html = render(<MetricFigure metric={unavailable('suppressed') as never} label="Tested" />)
+		expect(html).toContain('too few people')
+		expect(html).not.toContain('for privacy')
+	})
+
+	it('does not say a figure does not apply, which sounds like someone chose that', () => {
+		const html = render(<MetricFigure metric={unavailable('not_applicable') as never} label="Average order" />)
+		expect(html).toContain('Nothing here to work this out from')
+		expect(html).not.toContain('Does not apply')
 	})
 })

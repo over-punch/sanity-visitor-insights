@@ -434,7 +434,7 @@ export function OverviewPanel({ data, previous, onBrush }: {
 							...((data.crossSource ?? []).some((d) => d.vercelPageviews !== null && d.ga4Pageviews !== null)
 								? [{
 									key: 'coverage',
-									label: 'GA4 coverage',
+									label: 'Share GA4 saw',
 									source: 'GA4' as const,
 									complete: true,
 									unit: 'percent' as const,
@@ -543,7 +543,7 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								 * day that cost the most, this one finds the day the instrument worked
 								 * worst. Sorting on it is how a reader dates a collapse.
 								 */
-								key: 'coverage', label: 'GA4 coverage', numeric: true,
+								key: 'coverage', label: 'Share GA4 saw', numeric: true,
 								sortValue: (d) => coverageOf(d),
 								// The FORMATTED value, matching the cell. Passing the raw ratio through
 								// shipped 0.06666666666666667 into a CSV column whose cell reads "7%" —
@@ -860,9 +860,9 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 							<Card key={estimate.basis} padding={3} radius={2} tone="transparent" border>
 								<Stack space={3}>
 									<Label size={1} muted>
-										{estimate.basis === 'orders' ? 'Measured against orders'
-											: estimate.basis === 'email' ? 'Measured against email clicks'
-												: 'Measured against Vercel'}
+										{estimate.basis === 'orders' ? 'Checked against your orders'
+											: estimate.basis === 'email' ? 'Checked against email clicks'
+												: 'Checked against Vercel'}
 									</Label>
 									{/* Unclamped. `Math.min(1, …)` rendered a tag reporting 250% of reality as a
 									    flat 100% under the heading "How much GA4 is seeing" — i.e. perfect —
@@ -1037,7 +1037,7 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 				{unattributedShare !== null && (
 					<Card padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
-							<Label size={1} muted>Unattributed</Label>
+							<Label size={1} muted>No source</Label>
 							<div style={figureRow}>
 								<Text size={4}>{formatPercent(unattributedShare, 1)}</Text>
 								<Delta
@@ -1105,7 +1105,7 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 											: row.source}
 									</Text>
 									{row.designIndustry && <Badge tone="primary" fontSize={0}>Design</Badge>}
-									{row.unattributed && <Badge tone="caution" fontSize={0}>Unattributed</Badge>}
+									{row.unattributed && <Badge tone="caution" fontSize={0}>No source</Badge>}
 								</div>
 							),
 						},
@@ -1444,7 +1444,11 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 			<Card padding={3} radius={2} tone={tracked ? 'transparent' : 'caution'} border>
 				<Stack space={2}>
 					<Text size={1} weight="medium">
-						{tracked ? 'Tracked funnel' : 'Independent per-step totals'}
+						{/* "Independent per-step totals" was three words, none of which mean anything to
+						    a foundry owner, in the position a heading goes. The distinction it draws is
+						    real and load-bearing — it forbids reading the gaps as drop-off — so the
+						    wording changes and the claim does not. */}
+						{tracked ? 'Tracked path' : 'Not a tracked path'}
 					</Text>
 					<Text size={1} muted={tracked}>{data.approximationNote}</Text>
 				</Stack>

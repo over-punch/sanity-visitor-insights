@@ -19,10 +19,14 @@ import { valueOrNull } from '../types'
 const REASON_TEXT: Record<UnavailableReason, string> = {
 	not_instrumented: 'Not tracked on this site',
 	before_cutover: 'Not tracked during this period',
-	suppressed: 'Withheld by GA4 for privacy',
+	// "Withheld ... for privacy" reads as a legal hold on the reader's own data. What actually
+	// happened is that too few people did the thing for Google to report it.
+	suppressed: 'Google hid it: too few people',
 	outage: 'Not recorded during part of this period',
 	source_error: 'Source did not respond',
-	not_applicable: 'Does not apply to this site',
+	// "Does not apply" reads as a choice someone made. It is not — there is simply nothing here to
+	// compute it from.
+	not_applicable: 'Nothing here to work this out from',
 	// Its own reason, because it was borrowing not_applicable — so a figure that is temporarily
 	// missing rendered "Does not apply to this site. This site's API route predates this figure."
 	// Two flatly contradictory sentences, and a hurried reader takes the first: this foundry has no
@@ -266,7 +270,7 @@ export function MetricFigure({ metric, label, size = 4, unit = 'count' }: Metric
 					{formatted}
 					<span style={visuallyHidden}>, partial. {metric.note}</span>
 				</Text>
-				<Badge tone="caution" fontSize={0}>Partial</Badge>
+				<Badge tone="caution" fontSize={0}>Some orders only</Badge>
 			</Stack>
 		)
 	}
@@ -861,7 +865,7 @@ export function NoticeList({ notices }: NoticeListProps): React.ReactElement | n
 				    and the notice read "Caveasubscribe is counted…". */}
 				<div style={noticeRow}>
 					<span style={noticeBadge}>
-						<Badge tone="caution" fontSize={0}>Caveat</Badge>
+						<Badge tone="caution" fontSize={0}>Note</Badge>
 					</span>
 					<Text size={1}>{notice}</Text>
 				</div>
