@@ -57,7 +57,7 @@ vi.mock('sanity', () => ({
 	definePlugin: (definition: unknown) => definition,
 }))
 import visitorInsights from '../index'
-import { ContainmentBar, Delta, EstimateDotPlot, FunnelChart, ShiftRows, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, isContainment, splitGrid } from './Figure'
+import { ContainmentBar, Delta, EstimateDotPlot, FunnelChart, ShiftRows, SurvivalLines, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, isContainment, splitGrid } from './Figure'
 import { holdsPreviousAnswer } from './useReport'
 import { ok, partial, unavailable } from '../types'
 import { UI } from '@liiift-studio/sanity-ui-compat'
@@ -3372,11 +3372,35 @@ describe('the shortfall drawn as containment', () => {
 		})).toBeNull()
 	})
 
-	it('falls back to two bars rather than forcing a containment that does not hold', () => {
+	it('reverses the containment rather than falling back to peer bars', () => {
+		// When GA4 counts MORE than Vercel it is because Vercel started collecting after the range
+		// began — so Vercel's count is the subset, and it is still a containment with the operands
+		// swapped. Two peer bars scaled to the larger put GA4 at full width saying nothing, which is
+		// verbatim the defect ContainmentBar replaced.
 		const html = render(<DataHealthPanel data={health(100, 140) as never} />)
-		expect(html).toContain('Vercel pageviews')
-		expect(html).toContain('GA4 pageviews')
-		expect(html).not.toContain('Pageviews Vercel counted')
+		expect(html).toContain('Pageviews Google Analytics counted')
+		expect(html).toContain('Also counted by Vercel')
+		expect(html).toContain('collection started after this range began')
+	})
+
+	it('draws order statuses as shares of a stated total, not as peer cards', () => {
+		// The reader's question is what SHARE of the order book is the status configured as a sale.
+		// A card each, sorted by count, makes that a sum done by eye — and the configuration mistake
+		// that zeroes every order-derived figure stays arithmetic rather than becoming visible.
+		const withStatuses = { ...health(2356, 475), orderStatuses: { paid: 7, refunded: 2, draft: 1 } }
+		const html = render(<DataHealthPanel data={withStatuses as never} />)
+		expect(html).toContain('Orders in this range')
+		// A share is printed beside each status, which the card grid never did.
+		expect(html).toMatch(/70%|70\.0%/)
+	})
+
+	it('still shows what one source reported when the other did not answer', () => {
+		// Deleting ComparisonBar took this case with it: with GA4 down, both containments return
+		// null and the section rendered nothing at all — not even the figure Vercel did report.
+		const dead = { ...health(2620, 0), ga4Pageviews: unavailable('source_error'), shortfallRatio: null }
+		const html = render(<DataHealthPanel data={dead as never} />)
+		expect(html).toContain('2,620')
+		expect(html).toContain('nothing to compare')
 	})
 
 	it('refuses when either side was not measured', () => {
@@ -3762,5 +3786,64 @@ describe('ShiftRows', () => {
 
 	it('draws nothing when there is nothing to compare', () => {
 		expect(ShiftRows({ rows: [], nowLabel: 'a', beforeLabel: 'b' })).toBeNull()
+	})
+})
+
+describe('SurvivalLines', () => {
+	const steps = ['Landed', 'Viewed', 'Tested']
+	// DIFFERENT entry counts on purpose. With both at 1000, per-segment and shared-peak
+	// normalisation produce identical output, so the fixture could not tell them apart — and the
+	// mutation that switched to a shared peak passed.
+	const segs = [
+		{ key: 'desktop', label: 'Desktop', values: [1000, 400, 100] },
+		{ key: 'mobile', label: 'Mobile', values: [200, 8, 1] },
+	]
+
+	it('normalises each segment to its own entry, so different sizes are comparable', () => {
+		// Desktop and mobile both start at 100% of themselves. The question is what share of the
+		// people who arrived got this far, not how many there were.
+		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
+		const polylines = [...html.matchAll(/points="([^"]+)"/g)].map((m) => m[1])
+		expect(polylines).toHaveLength(2)
+		// Both begin at the top — 100% of their own entry — despite desktop starting at five times
+		// mobile's volume. Against a shared peak, mobile would begin a fifth of the way down.
+		expect(polylines[0]).toMatch(/^0,0 /)
+		expect(polylines[1]).toMatch(/^0,0 /)
+	})
+
+	it('drops a line lower for a segment that loses more of itself', () => {
+		// Mobile keeps 4% at step two against desktop's 40%, so its second point sits further down.
+		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
+		const ys = [...html.matchAll(/points="[^ ]+ [\d.]+,([\d.]+)/g)].map((m) => Number(m[1]))
+		expect(ys[1]).toBeGreaterThan(ys[0] as number)
+	})
+
+	it('stops a line where its denominator runs out rather than drawing a collapse', () => {
+		// Continuing past the floor would assert a fall the sample cannot distinguish from silence.
+		const thin = [
+			{ key: 'desktop', label: 'Desktop', values: [1000, 400, 100] },
+			{ key: 'tablet', label: 'Tablet', values: [40, 5, 1] },
+		]
+		const html = render(<SurvivalLines segments={thin} stepLabels={steps} minDenominator={30} />)
+		const polylines = [...html.matchAll(/points="([^"]+)"/g)].map((m) => (m[1] ?? '').split(' ').length)
+		// Desktop runs the full three steps; tablet stops after two, because 5 is below the floor.
+		expect(polylines[0]).toBe(3)
+		expect(polylines[1]).toBe(2)
+	})
+
+	it('distinguishes segments by dash as well as position', () => {
+		// The palette has one colour for "people who were here" and this draws several populations
+		// of exactly that, so colour cannot be the separator.
+		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
+		expect(html).toContain('stroke-dasharray')
+	})
+
+	it('draws nothing with only one segment, which is not a comparison', () => {
+		expect(SurvivalLines({ segments: [segs[0]!], stepLabels: steps })).toBeNull()
+	})
+
+	it('carries a text alternative naming the steps', () => {
+		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
+		expect(html).toContain('Landed, then Viewed, then Tested')
 	})
 })

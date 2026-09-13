@@ -155,6 +155,8 @@ export const MARKS: Record<string, Mark> = {
 	'shift.now': { key: 'vercel', alpha: 1, role: 'data', note: 'A channel this period' },
 	'shift.before': { key: 'neutral', alpha: 0.55, role: 'furniture', note: 'The same channel last period — context, not a second answer' },
 	'shift.link': { key: 'neutral', alpha: 0.35, role: 'furniture', note: 'The distance between the two, which is the finding' },
+	'survival.line': { key: 'vercel', alpha: 1, role: 'data', note: 'One audience segment falling through a funnel' },
+	'survival.grid': { key: 'neutral', alpha: 0.18, role: 'furniture', note: 'The 50% and 100% references a survival line is read against' },
 }
 
 /**

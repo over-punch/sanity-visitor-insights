@@ -15,7 +15,7 @@
 
 import React from 'react'
 import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ChartData, ComparisonBar, ContainmentBar, Delta, EstimateDotPlot, ShiftRows, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, visuallyHidden, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
+import { ChartData, ContainmentBar, Delta, EstimateDotPlot, ShiftRows, SurvivalLines, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, visuallyHidden, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import { SEND_WINDOW_DAYS } from '../core/ranges'
 import { describeRank, weeklyRank } from '../core/rank'
@@ -901,11 +901,46 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 						part={data.ga4Pageviews}
 						missingLabel="it missed"
 					/>
+				) : isContainment(data.ga4Pageviews, data.vercelPageviews) ? (
+					/* Still a containment — the operands are simply the other way round.
+					
+					   When GA4 counts MORE than Vercel, it is because Vercel started collecting after
+					   the range began, so Vercel's count is the subset. Falling back to two peer bars
+					   scaled to the larger put GA4 at full width saying nothing, which is verbatim the
+					   defect ContainmentBar was built to kill. */
+					<Stack space={2}>
+						<ContainmentBar
+							wholeLabel="Pageviews Google Analytics counted"
+							whole={data.ga4Pageviews}
+							partLabel="Also counted by Vercel"
+							part={data.vercelPageviews}
+							missingLabel="Vercel did not see"
+						/>
+						<Text size={0} muted>
+							Vercel counted fewer because its collection started after this range began, not
+							because the traffic was not there.
+						</Text>
+					</Stack>
 				) : (
-					<>
-						<ComparisonBar label="Vercel pageviews" metric={data.vercelPageviews} max={pageviewMax} />
-						<ComparisonBar label="GA4 pageviews" metric={data.ga4Pageviews} max={pageviewMax} />
-					</>
+					/* Neither containment holds, because only one source answered.
+					
+					   Deleting ComparisonBar took this case with it: with GA4 down, both containments
+					   return null and the section rendered NOTHING — not even the figure Vercel did
+					   report. That is the state where the reader most needs to see what survived, and
+					   it is the one the card below spends a comment explaining. */
+					<Stack space={3}>
+						<div style={figureRow}>
+							<Label size={1} muted>Pageviews Vercel counted</Label>
+							<MetricFigure metric={data.vercelPageviews} label="Vercel pageviews" size={3} />
+						</div>
+						<div style={figureRow}>
+							<Label size={1} muted>Seen by Google Analytics</Label>
+							<MetricFigure metric={data.ga4Pageviews} label="GA4 pageviews" size={3} />
+						</div>
+						<Text size={0} muted>
+							Only one source answered for this range, so there is nothing to compare.
+						</Text>
+					</Stack>
 				)}
 			</Stack>
 
@@ -982,18 +1017,22 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 						What the orders actually say, before any filtering. Use these values to set which
 						statuses count as a sale.
 					</Text>
-					<div style={cardGrid}>
-						{Object.entries(data.orderStatuses ?? {})
-							.sort((a, b) => b[1] - a[1])
-							.map(([status, count]) => (
-								<Card key={status} padding={3} radius={2} tone="transparent" border>
-									<Stack space={3}>
-										<Label size={1} muted>{status}</Label>
-										<Text size={3}>{formatCount(count)}</Text>
-									</Stack>
-								</Card>
-							))}
-					</div>
+					{/* A proportion, not a row of peer cards.
+					
+					    The reader's question is what SHARE of the order book is the status configured
+					    as a sale — and a card each, sorted by count, makes that a sum done by eye.
+					    ProportionChart already prints share-and-absolute against a stated total, so
+					    the configuration mistake that zeroes every order figure becomes visible
+					    rather than arithmetic. */}
+					<ProportionChart
+						bars={Object.entries(data.orderStatuses ?? {}).map(([status, count]) => ({
+							key: status,
+							label: status,
+							value: count,
+						}))}
+						format={(n) => formatCount(n)}
+						totalLabel="Orders in this range"
+					/>
 				</Stack>
 			)}
 
@@ -1561,6 +1600,10 @@ export function channelMix(
 export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElement {
 	const segments = data.segments ?? []
 
+	// Step order comes from the widest segment, so a segment GA4 stopped reporting partway down
+	// leaves a gap rather than shortening the chart for everyone.
+	const spine = [...segments].sort((a, b) => b.steps.length - a.steps.length)[0]?.steps ?? []
+
 	// The funnel draws EVERYONE. Per-segment shapes moved into SegmentTable above it, where they
 	// can be compared side by side; a funnel that silently became one device's funnel, with only a
 	// pressed button to say so, was the thing that made the comparison invisible.
@@ -1609,7 +1652,61 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 			    comparison the tool made. Its buttons also printed a bare rate to two decimals with
 			    no denominator and no floor: the same claim spread() refuses below 200 users,
 			    arriving through the back door with more implied precision. */}
-			<SegmentTable segments={segments} dimension={data.segmentDimension ?? 'segment'} />
+			{/* The shape first, the numbers behind a disclosure.
+			
+			    SegmentTable answers "how many" precisely and "where does it break" slowly — fifteen
+			    cells the reader has to hold in their head. The lines answer the second question at a
+			    glance and the table is still one click away, which is the right order for someone
+			    with five minutes. */}
+			<SurvivalLines
+				segments={segments.map((segment) => ({
+					key: segment.key,
+					label: segment.label,
+					values: spine.map((step) => {
+						const cell = segment.steps.find((s) => s.key === step.key)
+						return cell ? metricSortValue(cell.count) : null
+					}),
+				}))}
+				stepLabels={spine.map((step) => step.label)}
+			/>
+
+			<ChartData
+				label="Show the figures behind this"
+				rows={segments}
+				rowKey={(segment) => segment.key}
+				columns={[
+					{
+						key: 'segment',
+						label: data.segmentDimension ?? 'Segment',
+						sortValue: (segment: JourneySegment) => segment.label,
+						render: (segment: JourneySegment) => segment.label,
+					},
+					...spine.map((step) => ({
+						key: step.key,
+						label: step.label,
+						numeric: true,
+						sortValue: (segment: JourneySegment) =>
+							metricSortValue(segment.steps.find((s) => s.key === step.key)?.count),
+						render: (segment: JourneySegment) => {
+							const cell = segment.steps.find((s) => s.key === step.key)
+							const count = metricSortValue(cell?.count)
+							if (count === null) return '—'
+							// The rate AND its denominator, as SegmentTable carried them. Dropping the
+							// denominator here would reinstate the bare two-decimal rate the segment
+							// buttons used to print — the claim spread() refuses, through the back door.
+							const index = spine.findIndex((sp) => sp.key === step.key)
+							const before = index > 0
+								? metricSortValue(segment.steps.find((s) => s.key === spine[index - 1]!.key)?.count)
+								: null
+							const rate = cell?.conversionFromPrevious ?? null
+							const showRate = index > 0 && rate !== null && before !== null && before >= MIN_RATE_DENOMINATOR
+							return showRate
+								? `${formatCount(count)} · ${formatPercent(rate, 1)} of ${formatCount(before)}`
+								: formatCount(count)
+						},
+					})),
+				]}
+			/>
 
 			{spread(segments) && <Text size={1}>{spread(segments)}</Text>}
 

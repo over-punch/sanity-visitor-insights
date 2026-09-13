@@ -307,60 +307,6 @@ export function MetricFigure({ metric, label, size = 4, unit = 'count' }: Metric
 	return <Text size={size}>{formatted}</Text>
 }
 
-/** Props for ComparisonBar. */
-export interface ComparisonBarProps {
-	label: string
-	metric: MetricValue
-	/** Largest value across the sibling bars, used to scale width. */
-	max: number
-	/**
-	 * What full width means, named.
-	 *
-	 * A ComparisonBar scales to the largest sibling, so a full bar means only "biggest of these" —
-	 * and unlike the other two bar idioms, which print their share and their total, this one said
-	 * nothing at all. There was a `tone` prop instead, which both call sites passed different
-	 * values to and which the component destructured and never used.
-	 */
-	outOf?: string
-}
-
-/**
- * A horizontal bar with its value printed alongside.
- *
- * Deliberately CSS rather than a charting library: these panels compare and rank a handful of
- * values, which a labelled bar does as well as a chart while avoiding a large dependency in the
- * Studio bundle and the theme-token bridging that a chart library would need for light and dark.
- */
-export function ComparisonBar({ label, metric, max, outOf }: ComparisonBarProps): React.ReactElement {
-	const value = metric.status === 'unavailable' ? null : metric.value
-	const width = value !== null && max > 0 ? Math.max(2, (value / max) * 100) : 0
-
-	return (
-		<Stack space={2}>
-			<div style={barHeader}>
-				<Text size={1} weight="medium">{label}</Text>
-				<MetricFigure metric={metric} label={label} size={1} />
-			</div>
-
-			{value === null ? (
-				// A dashed rail, not a zero-width bar: absence must not read as a measured zero.
-				<Card
-					aria-hidden="true"
-					radius={2}
-					tone="transparent"
-					border
-					style={{ height: 8, borderStyle: 'dashed' }}
-				/>
-			) : (
-				<div aria-hidden="true" style={barTrack}>
-					<div style={{ ...barFill, width: `${width}%` }} />
-				</div>
-			)}
-			{outOf && <Text size={0} muted>{outOf}</Text>}
-		</Stack>
-	)
-}
-
 /** Props for ChartData. */
 export interface ChartDataProps<Row> {
 	/** What the disclosure is called. Names the chart it belongs to. */
@@ -1296,6 +1242,103 @@ export function ShiftRows({
 	)
 }
 
+/**
+ * Where each segment falls out, rather than only that it does.
+ *
+ * `SegmentTable` is three columns by five rows of counts and rates. Reading "mobile falls off a
+ * cliff between landing and viewing" out of fifteen cells is work the chart should be doing, and
+ * the sentence that states the conclusion only fires at a threefold gap on 200+ users — so the
+ * ordinary twofold case is invisible in both the table and the prose.
+ *
+ * Each line is normalised to its OWN segment's entry step, which is what makes segments of wildly
+ * different size comparable: the question is what share of the people who arrived got this far, not
+ * how many there were. That is the same anchoring the funnel itself uses.
+ *
+ * A line STOPS where its denominator runs out rather than continuing to zero. Extending it would
+ * draw a confident collapse where the truth is that the sample ended — at a foundry's volumes
+ * tablet usually drops out after the first step, and saying so is correct.
+ */
+export function SurvivalLines({
+	segments,
+	stepLabels,
+	minDenominator = MIN_RATE_DENOMINATOR,
+}: {
+	segments: ReadonlyArray<{ key: string; label: string; values: ReadonlyArray<number | null> }>
+	stepLabels: readonly string[]
+	minDenominator?: number
+}): React.ReactElement | null {
+	if (segments.length < 2 || stepLabels.length < 2) return null
+
+	const width = 100
+	const height = 46
+	const x = (i: number) => (i / (stepLabels.length - 1)) * width
+
+	return (
+		<Stack space={3}>
+			<svg
+				viewBox={`0 0 ${width} ${height}`}
+				preserveAspectRatio="none"
+				style={{ width: '100%', height: 150, overflow: 'visible' }}
+				role="img"
+				aria-label={`Share of each segment surviving to each step, ${stepLabels.join(', then ')}`}
+			>
+				{/* Two references: everybody, and half of everybody. More rules than that on a chart
+				    this short is texture rather than information. */}
+				{[0, 0.5].map((level) => (
+					<line
+						key={level}
+						x1={0}
+						x2={width}
+						y1={height * level}
+						y2={height * level}
+						stroke={mark('survival.grid')}
+						strokeWidth={0.4}
+					/>
+				))}
+				{segments.map((segment, index) => {
+					const entry = segment.values[0]
+					if (entry === null || entry === undefined || entry <= 0) return null
+
+					// Stop where the denominator runs out. A line drawn past that point asserts a
+					// collapse the sample cannot distinguish from silence.
+					const points: Array<[number, number]> = []
+					for (let i = 0; i < segment.values.length && i < stepLabels.length; i++) {
+						const value = segment.values[i]
+						const previous = i === 0 ? entry : segment.values[i - 1]
+						if (value === null || value === undefined) break
+						if (i > 0 && (previous === null || previous === undefined || previous < minDenominator)) break
+						points.push([x(i), height - (Math.min(1, value / entry) * height)])
+					}
+					if (points.length < 2) return null
+
+					return (
+						<polyline
+							key={segment.key}
+							points={points.map(([px, py]) => `${px},${py}`).join(' ')}
+							fill="none"
+							stroke={mark('survival.line')}
+							strokeWidth={0.8}
+							vectorEffect="non-scaling-stroke"
+							// Segments are distinguished by dash as well as position, because the
+							// palette has one colour for "people who were here" and this chart draws
+							// several populations of exactly that.
+							strokeDasharray={index === 0 ? undefined : index === 1 ? '4 3' : '1 2'}
+							opacity={index === 0 ? 1 : 0.75}
+						/>
+					)
+				})}
+			</svg>
+			<div style={survivalLegend}>
+				{segments.map((segment, index) => (
+					<Text key={segment.key} size={0} muted>
+						{index === 0 ? '——' : index === 1 ? '– –' : '· ·'} {segment.label}
+					</Text>
+				))}
+			</div>
+		</Stack>
+	)
+}
+
 /** Props for SortableTable. */
 export interface SortableTableProps<Row> {
 	caption: string
@@ -1763,6 +1806,9 @@ const shiftNow: React.CSSProperties = {
 	borderRadius: '50%',
 	background: mark('shift.now'),
 }
+
+/** The key beneath the survival chart. Dash patterns, because position alone does not name a line. */
+const survivalLegend: React.CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap' }
 
 /** The filter box. */
 const filterInput: React.CSSProperties = {
