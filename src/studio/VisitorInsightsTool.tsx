@@ -14,6 +14,7 @@ import { decodeView, mergeIntoHash, type ViewState } from './urlState'
 import type { ReportEnvelope } from '../types'
 import { daysBetween, shiftDays } from '../core/ranges'
 import { NoticeList } from './Figure'
+import { COMPARISON, withAlpha } from './palette'
 import { Badge } from '@liiift-studio/sanity-ui-compat'
 import { AcquisitionPanel, DataHealthPanel, JourneyPanel, OverviewPanel, TypefaceInterestPanel } from './panels'
 
@@ -103,6 +104,37 @@ function rangeButton(selected: boolean): React.CSSProperties {
 		fontSize: '0.85em',
 		fontWeight: selected ? 600 : 400,
 		padding: '5px 10px',
+		cursor: 'pointer',
+		whiteSpace: 'nowrap',
+	}
+}
+
+/**
+ * The comparison-basis toggle.
+ *
+ * Deliberately NOT `rangeButton`. It sat directly beneath the range selector in the same stack,
+ * with the same border radius, weight and selected treatment, so nothing on screen connected it to
+ * the figures it governs — and it read as a second row of ranges.
+ *
+ * Three channels separate them, only one of which is colour: a pill radius against the range row's
+ * 3px, a dashed border on the unselected state, and COMPARISON on the selected one. A monochrome
+ * or colour-blind reader still tells the two rows apart by shape alone.
+ *
+ * The tint sits well under 3:1 by design — its extent is carried by the 1px solid border, which is
+ * at 4.28:1. That is the same fill-plus-boundary rule the palette registry enforces for regions.
+ */
+function basisButton(selected: boolean): React.CSSProperties {
+	return {
+		appearance: 'none',
+		background: selected ? withAlpha(COMPARISON, 0.12) : 'transparent',
+		border: `1px ${selected ? 'solid' : 'dashed'} ${selected ? COMPARISON : 'var(--card-border-color, rgba(128,128,128,0.3))'}`,
+		borderRadius: 999,
+		color: selected ? COMPARISON : 'inherit',
+		opacity: selected ? 1 : 0.7,
+		font: 'inherit',
+		fontSize: '0.85em',
+		fontWeight: selected ? 600 : 400,
+		padding: '5px 12px',
 		cursor: 'pointer',
 		whiteSpace: 'nowrap',
 	}
@@ -571,7 +603,7 @@ export function ReadyReport({
 					    the two that did render drew the whole report inside a size-0 muted caption.
 					    It compiled, it type-checked, and no test mounted this component. */}
 					{envelope.comparison && COMPARED_TABS.includes(tabId) && (
-						<Text size={0} muted>
+						<Text size={0} style={{ color: COMPARISON }}>
 							Changes are against {envelope.comparison.range.start} to {envelope.comparison.range.end},
 							{/* Named, not implied. Once the baseline can be chosen, a sentence that says
 							    only "the equivalent window" leaves the reader to work out which one is in
@@ -639,13 +671,15 @@ function BasisSelector({
 	onChange: (value: 'previous-period' | 'same-period-last-year') => void
 }): React.ReactElement {
 	return (
-		<div style={controlRow}>
-			<Text size={0} muted>Compared with</Text>
+		<div style={controlRow} role="radiogroup" aria-label="Comparison basis">
+			{/* Not muted: this label is the head of the comparison identity, and every delta on the
+			    panel is drawn in the same colour. */}
+			<Text size={0} style={{ color: COMPARISON }}>Compared with</Text>
 			{/* Plain buttons for the same reason the range selector uses them: the compat shim's DOM
 			    fallback does not forward `text`, so the UI kit's Button renders as a blank box. */}
 			<button
 				type="button"
-				style={rangeButton(value === 'previous-period')}
+				style={basisButton(value === 'previous-period')}
 				aria-pressed={value === 'previous-period'}
 				title="The equivalent window immediately before this one"
 				onClick={() => onChange('previous-period')}
@@ -654,7 +688,7 @@ function BasisSelector({
 			</button>
 			<button
 				type="button"
-				style={rangeButton(value === 'same-period-last-year')}
+				style={basisButton(value === 'same-period-last-year')}
 				aria-pressed={value === 'same-period-last-year'}
 				title="The same window a year earlier, shifted by 364 days so the weekdays line up"
 				onClick={() => onChange('same-period-last-year')}

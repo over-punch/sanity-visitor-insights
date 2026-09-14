@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { GROUNDS, MARKS, REGION_ALPHA, SERIES, composite, contrast, luminance, mark, seriesFill, type SeriesKey } from './palette'
+import { GROUNDS, MARKS, REGION_ALPHA, SERIES, composite, contrast, luminance, mark, seriesFill, type SeriesKey , baseHex } from './palette'
 
 /** Simulate how a colour appears to a dichromat, via the standard LMS projection. */
 function simulate(hex: string, kind: 'deuteranopia' | 'protanopia'): [number, number, number] {
@@ -134,7 +134,7 @@ describe('every mark clears contrast AS DRAWN, not as declared', () => {
 
 	for (const [name, m] of entries.filter(([, m]) => m.role === 'data')) {
 		it(`${name} clears 3:1 on both grounds when composited`, () => {
-			const hex = m.key === 'neutral' ? '#7f7f7f' : SERIES[m.key]
+			const hex = baseHex(m.key)
 			for (const ground of [GROUNDS.light, GROUNDS.dark]) {
 				expect(contrast(composite(hex, m.alpha, ground), ground)).toBeGreaterThanOrEqual(3)
 			}
@@ -152,6 +152,29 @@ describe('every mark clears contrast AS DRAWN, not as declared', () => {
 			expect(edge?.role).toBe('data')
 		})
 	}
+
+	it('holds the furniture list closed, because furniture is the one role nothing checks', () => {
+		// `furniture` is exempt from the contrast loop above — correctly, because a grid rule that
+		// cleared 3:1 would compete with the data drawn on it. That exemption is also the only way
+		// to remove a mark from this suite without deleting a test, and re-roling a data mark to
+		// furniture leaves the suite GREEN with one fewer case. A mutation did exactly that and
+		// survived: the ghost line went back to 1.96:1 and nothing failed.
+		//
+		// So the list is enumerated. Adding furniture is allowed and takes one line here; turning
+		// something that carries a quantity INTO furniture now has to be done in the open.
+		const furniture = Object.entries(MARKS)
+			.filter(([, m]) => m.role === 'furniture')
+			.map(([name]) => name)
+			.sort()
+		expect(furniture).toEqual([
+			// Rails, rules and grids. None of them is a value — each is the ground a value is read
+			// against, which is why each is allowed to sit under 3:1.
+			'bar.track',
+			'chart.grid',
+			'estimate.rule',
+			'survival.grid',
+		])
+	})
 
 	it('refuses a fill that claims to carry its own contrast', () => {
 		// The failure mode this registry exists to prevent: quietly relabelling a region as data so

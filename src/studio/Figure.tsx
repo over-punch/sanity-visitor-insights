@@ -11,7 +11,7 @@
 
 import React, { useRef, useState } from 'react'
 import { Badge, Box, Card, Flex, Heading, Stack, Text, Tooltip } from '@liiift-studio/sanity-ui-compat'
-import { SERIES, mark } from './palette'
+import { COMPARISON, SERIES, mark } from './palette'
 import type { MetricValue, UnavailableReason } from '../types'
 import { valueOrNull } from '../types'
 
@@ -135,14 +135,20 @@ export function Delta({ current, previous, riseIsGood = true, unit = 'count' }: 
 		? Math.abs(absolute) < 0.05
 		: before !== 0 && Math.abs(absolute / Math.abs(before)) < 0.005
 	if (absolute === 0 || roundsToNothing) {
-		return <span style={deltaStyle('flat')}>no change</span>
+		// Every other branch ends in "from X". This one used to stop at two words, so the single
+		// case where a reader most wants to verify the claim was the one case with no number — and
+		// with no arrow either, it read as an ABSENT comparison rather than a measured flat one.
+		return (
+			<span style={deltaStyle()}>
+				no change<span style={baselineStyle}> from {unit === 'percent' ? `${before.toFixed(1)}%` : formatCount(before)}</span>
+			</span>
+		)
 	}
 
 	// A change from zero has no defined percentage in either direction. "+∞%" is what a naive
 	// division produces, and asserting `change` non-null let a fall to zero print "↓ 0%".
 	const change = before === 0 ? null : absolute / Math.abs(before)
 	const rising = absolute > 0
-	const tone = rising === riseIsGood ? 'good' : 'bad'
 	const arrow = rising ? '\u2191' : '\u2193'
 
 	// The baseline is formatted in the figure's own unit. Reading "Previous period: 43" under a
@@ -170,11 +176,13 @@ export function Delta({ current, previous, riseIsGood = true, unit = 'count' }: 
 		// The baseline is printed, not hidden in a `title`. At seven orders a quarter an 18% move
 		// might be one order, so "from 6" is the fact and the percentage is the decoration — and a
 		// title attribute is invisible on touch, in a screenshot, and to anyone who does not hover.
-		<span style={deltaStyle(tone)}>
+		<span style={deltaStyle()}>
 			<span aria-hidden="true">{arrow}</span>
-			{' '}
-			{magnitude}
+			{magnitude ? ` ${magnitude}` : ''}
 			<span style={baselineStyle}> from {baseline}</span>
+			{/* Said, rather than left as a gap after the arrow. `magnitude` is empty exactly when the
+			    baseline is too small to carry a percentage, and "↑  from 4" read as a bug. */}
+			{tooFewToRate && <span style={baselineStyle}> · too few to rate</span>}
 		</span>
 	)
 }
@@ -183,29 +191,142 @@ export function Delta({ current, previous, riseIsGood = true, unit = 'count' }: 
  * Delta styling. Direction is carried by the arrow and the words as well as the colour, so the
  * meaning survives a monochrome or colour-blind reading.
  */
-function deltaStyle(tone: 'good' | 'bad' | 'flat'): React.CSSProperties {
-	// A bad move is set in a heavier weight and full opacity; a good one recedes. `riseIsGood` used
-	// to compute this tone and then map both values to the same colour and opacity, so a rising
-	// Unattributed figure looked identical to a rising Sessions figure — the one distinction the
-	// prop exists to draw. Weight and opacity rather than hue, so it survives a monochrome reading
-	// and does not collide with the Studio's own semantic colours.
-	// Both directions read at the same strength. A good move used to be set at 70% opacity while a
-	// bad one was full weight with a rule under it — so a foundry's best month visually receded,
-	// which is backwards for the question the figure exists to answer. Direction is carried by the
-	// arrow and the words; the rule now marks a bad move without demoting a good one.
+function deltaStyle(): React.CSSProperties {
+	// ONE colour for everything that refers to the other window — see COMPARISON in palette.ts.
+	//
+	// This used to vary by tone: opacity 0.9 or 0.55, plus a rule under a bad move and none under a
+	// good one. Three cards side by side therefore showed three different treatments, and a reader
+	// reported it as an inconsistency rather than reading it as meaning. It was meaning — but
+	// meaning already carried twice over, by the arrow and by the sign on the magnitude, so the
+	// third channel bought nothing and cost the identity.
+	//
+	// The underline had a second problem once the text was coloured: a coloured, underlined inline
+	// span is the browser's hyperlink signature, and these sit on the same screens as real links.
+	//
+	// Full alpha is not a preference. COMPARISON clears 3:1 only at alpha 1; the opacity ladder
+	// this replaces put it at 2.1.
 	return {
 		fontFamily: 'inherit',
 		fontSize: '0.8em',
 		fontWeight: 500,
-		opacity: tone === 'flat' ? 0.55 : 0.9,
-		color: 'currentColor',
+		color: COMPARISON,
 		whiteSpace: 'nowrap',
-		borderBottom: tone === 'bad' ? '1px solid currentColor' : 'none',
 	}
 }
 
-/** The previous-period figure, quieter than the change but present. */
-const baselineStyle: React.CSSProperties = { opacity: 0.7, fontWeight: 400 }
+/**
+ * The baseline inside a delta.
+ *
+ * Same colour, one step down in weight. Weight alone separates "the move" from "what it moved from"
+ * without breaking the identity or dropping below the contrast floor.
+ */
+const baselineStyle: React.CSSProperties = { color: COMPARISON, fontWeight: 400 }
+
+/** Gap between the crosshair and the card, on whichever side it lands. */
+const HOVER_GUTTER = 14
+
+/** The card's widest possible layout — `hoverCard.maxWidth`, which the flip has to respect. */
+const HOVER_CARD_MAX = 260
+
+export function HoverCard({
+	x,
+	paneWidth,
+	date,
+	rows,
+	events,
+}: {
+	/** Plot-space x of the crosshair, in CSS pixels. */
+	x: number
+	/** The measured pane width, for the flip decision. */
+	paneWidth: number
+	/** The day, already formatted. */
+	date: string
+	/** One entry per series, in the stack's own order. */
+	rows: Array<{ key: string; label: string; color: string; value: string; seen: string | null }>
+	/** Campaign sends or other markers on this day. */
+	events: string[]
+}): React.ReactElement {
+	// Flip rather than clamp. A clamped card stops tracking the crosshair and then sits ON the
+	// thing it describes for the whole right-hand edge.
+	//
+	// The threshold is the card's own width, not a fraction of the pane. A fixed 0.66 was right on
+	// a wide pane and wrong on a narrow one: at 400px a crosshair at 60% left 146px of room for a
+	// card that wants up to 260, and `frameStyle`'s overflow:hidden took the rest off.
+	const flip = x + HOVER_GUTTER + HOVER_CARD_MAX > paneWidth
+	return (
+		<div
+			style={{
+				...hoverCard,
+				left: flip ? undefined : x + HOVER_GUTTER,
+				right: flip ? paneWidth - x + HOVER_GUTTER : undefined,
+			}}
+		>
+			<div style={hoverDate}>{date}</div>
+			{rows.map((row) => (
+				<div key={row.key} style={hoverRow}>
+					{/* The same block that labels the row in the plot, so the two are one legend. */}
+					<span style={{ ...hoverSwatch, background: row.color }} />
+					<span style={hoverLabel}>{row.label}</span>
+					<span style={hoverValue}>
+						{row.value}
+						{row.seen && <span style={hoverSeen}> · {row.seen}</span>}
+					</span>
+				</div>
+			))}
+			{events.map((event) => (
+				<div key={event} style={hoverEvent}>{event}</div>
+			))}
+		</div>
+	)
+}
+
+/**
+ * The floating card.
+ *
+ * Its ground is the Studio's own card colour so it reads as a surface rather than a tooltip drawn
+ * by the chart, and it carries a border because at low contrast a shadow alone disappears on the
+ * dark theme.
+ */
+const hoverCard: React.CSSProperties = {
+	position: 'absolute',
+	top: 8,
+	// Never the element under the pointer: the card follows the crosshair, and taking a pointer
+	// event would end the hover that positions it.
+	pointerEvents: 'none',
+	zIndex: 2,
+	minWidth: 168,
+	maxWidth: HOVER_CARD_MAX,
+	padding: '8px 10px',
+	borderRadius: 4,
+	background: 'var(--card-bg-color, #ffffff)',
+	border: '1px solid var(--card-border-color, rgba(128,128,128,0.35))',
+	boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
+	display: 'flex',
+	flexDirection: 'column',
+	gap: 4,
+}
+
+/** The day, which is the card's heading. */
+const hoverDate: React.CSSProperties = { fontSize: 11, fontWeight: 600, opacity: 0.9, marginBottom: 2 }
+
+/** One series line: swatch, name, value. */
+const hoverRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, lineHeight: 1.4 }
+
+/** The colour block, matching the one beside the row's name in the plot. */
+const hoverSwatch: React.CSSProperties = { width: 8, height: 8, borderRadius: 2, flex: '0 0 auto' }
+
+/** The series name, which yields its space to the figure. */
+const hoverLabel: React.CSSProperties = { opacity: 0.75, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
+
+/** The figure, pushed right and tabular so a column of them lines up. */
+const hoverValue: React.CSSProperties = { marginLeft: 'auto', fontVariantNumeric: 'tabular-nums', fontWeight: 500, whiteSpace: 'nowrap' }
+
+/** What the lossier source saw of the same thing, quieter than the answer it qualifies. */
+const hoverSeen: React.CSSProperties = { opacity: 0.6, fontWeight: 400 }
+
+/** A campaign send or other dated marker on the hovered day. */
+const hoverEvent: React.CSSProperties = { fontSize: 11, opacity: 0.8, borderTop: '1px solid var(--card-border-color, rgba(128,128,128,0.25))', paddingTop: 4, marginTop: 2 }
+
 
 export interface MetricFigureProps {
 	metric: MetricValue
@@ -439,6 +560,19 @@ export interface FunnelStage {
 	value: number
 	/** Share of the previous shown step, or null when it could not be computed. */
 	conversionFromPrevious: number | null
+	/**
+	 * Set when this step was only instrumented part-way through the window.
+	 *
+	 * The count is real but it covers fewer days than the rungs around it, so any ratio drawn
+	 * across the two is arithmetic over mismatched windows. `JourneyPanel` used to drop the
+	 * metric's `partial` status on the way in, so a `view_item` that began firing on 1 September
+	 * was drawn identically to a full-month `page_view` and captioned "33.9% of landed" — a
+	 * thirteen-day numerator over a thirty-one-day denominator, stated to a decimal place.
+	 *
+	 * Everywhere else a partial metric carries a badge and a note; this was the one render site
+	 * that stripped it, and it is the most quoted number on the tab.
+	 */
+	partial?: { from: string }
 }
 
 /** Props for FunnelChart. */
@@ -462,6 +596,62 @@ export interface FunnelChartProps {
  * needs a population.
  */
 export const MIN_RATE_DENOMINATOR = 30
+
+/**
+ * An ISO date as a reader would say it: `1 Sep`.
+ *
+ * The cutover note states the raw `2026-09-01`, which is right in a machine-written caveat and
+ * wrong in a sentence under a chart.
+ *
+ * @param iso - a `YYYY-MM-DD` date
+ */
+export function formatDay(iso: string): string {
+	const date = new Date(`${iso}T00:00:00Z`)
+	if (Number.isNaN(date.getTime())) return iso
+	return `${date.getUTCDate()} ${date.toLocaleString('en-GB', { month: 'short', timeZone: 'UTC' })}`
+}
+
+/**
+ * The line under one funnel rung.
+ *
+ * ONE clause, where there used to be two. The step-to-step rate was a second sentence on the same
+ * line, each half with its own withhold-fallback — so on a six-rung funnel at a foundry's volumes
+ * the panel printed "too few to give a rate" six times, twice per rung on three consecutive rungs.
+ * It was the most repeated string in the tool, and the two clauses were the same picture twice:
+ * the bars are anchored to entry, so share-of-entry is already drawn.
+ *
+ * Silence is the honest default when a rate is withheld — the count is still in the bar header, and
+ * `shortListNote` elsewhere in this package already follows that rule. The one thing worth saying
+ * out loud is a partial window, because that is a fact about the number rather than an absence of
+ * one.
+ *
+ * @param stage - the rung
+ * @param index - its position, so the entry rung can name the scale
+ * @param entry - the first rung's count, which is the denominator and the rail's full width
+ * @param share - stage over entry, unclamped
+ * @param entryLabel - the first rung's name, for the sentence
+ */
+function rateLine(
+	stage: FunnelStage,
+	index: number,
+	entry: number,
+	share: number,
+	entryLabel: string,
+): React.ReactElement | null {
+	// Turns the rail into a scale. "entry step" restated that the first bar was the first bar; this
+	// says what a full-width bar means, which is the one thing the chart never stated.
+	if (index === 0) return <Text size={0} muted>100% — everyone who arrived</Text>
+
+	// A count measured over fewer days than its denominator cannot carry a rate against it.
+	if (stage.partial) {
+		return <Text size={0} muted>only counted from {stage.partial.from}, so no share is shown</Text>
+	}
+
+	const canRate = entry >= MIN_RATE_DENOMINATOR && stage.value >= MIN_RATE_DENOMINATOR
+	if (!canRate) return null
+
+	return <Text size={0} muted>{formatPercent(share, 1)} of {entryLabel.toLowerCase()}</Text>
+}
 
 /**
  * A funnel.
@@ -493,7 +683,15 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
 		refs.current[next]?.focus()
 	}
 
+	// Whether ANY rung had to withhold a rate. One sentence under the chart is the honest scope for
+	// this: the rule is a property of the funnel, not of each rung, and stating it per rung made it
+	// the most repeated string in the tool.
+	const withheldAny = stages.some((stage, index) =>
+		index > 0 && !stage.partial && !(entry >= MIN_RATE_DENOMINATOR && stage.value >= MIN_RATE_DENOMINATOR),
+	)
+
 	return (
+		<>
 		<ol style={funnelList}>
 			{stages.map((stage, index) => {
 				const previous = index > 0 ? stages[index - 1] : null
@@ -507,8 +705,8 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
 
 				return (
 					<li key={stage.key} style={funnelItem}>
-						{previous && (
-							<div style={funnelGap}>
+						{previous && gapLabel(delta, measurement, entry) !== '' && (
+							<div style={funnelGapStyle(measurement === 'sequence')}>
 								{/* Drawn on the SAME RAIL as the stage bars, and that is the whole point.
 								
 								    This previously had a rail of its own at `width: 38%` with the fill a
@@ -560,7 +758,23 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
 							</div>
 
 							<div aria-hidden="true" style={{ ...barTrack, height: 10 }}>
-								<div style={{ ...barFill, width: `${width}%` }} />
+								{/* A partial rung is hatched, so the drawing carries the same qualification as
+								    the sentence under it. A solid bar beside other solid bars asserts that all
+								    of them cover the same days. */}
+								<div
+									style={{
+										...barFill,
+										width: `${width}%`,
+										...(stage.partial
+											? {
+												backgroundImage: `repeating-linear-gradient(135deg, ${mark('bar.fill')} 0 4px, transparent 4px 8px)`,
+												backgroundColor: 'transparent',
+												outline: `1px solid ${mark('bar.fill')}`,
+												outlineOffset: -1,
+											}
+											: {}),
+									}}
+								/>
 							</div>
 
 							{/* Both ratios where they differ — the panel used to print only the
@@ -588,22 +802,20 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
 								    whole funnel had under thirty entries, never when the rung itself was
 								    thin. And a withheld step-to-step rate fell silently to an empty string,
 								    leaving exactly the unexplained gap the share half avoids. */}
-								{index === 0
-									? 'entry step'
-									: entry >= MIN_RATE_DENOMINATOR && stage.value >= MIN_RATE_DENOMINATOR
-										? `${formatPercent(share, 1)} of ${stages[0]?.label.toLowerCase()}`
-										: 'too few to give a rate'}
-								{index > 1 && stage.conversionFromPrevious !== null && previous
-									? (previous.value ?? 0) >= MIN_RATE_DENOMINATOR && stage.value >= MIN_RATE_DENOMINATOR
-										? ` · ${formatPercent(stage.conversionFromPrevious, 1)} of ${previous.label.toLowerCase()}`
-										: ` · too few from ${previous.label.toLowerCase()} to give a rate`
-									: ''}
+								{rateLine(stage, index, entry, share, stages[0]?.label ?? '')}
 							</Text>
 						</div>
 					</li>
 				)
 			})}
 		</ol>
+		{withheldAny && (
+			<Text size={0} muted>
+				Shares are shown only for steps at least {MIN_RATE_DENOMINATOR} people reached. Below that a
+				percentage moves too far on one more visitor to mean anything; the counts above are exact.
+			</Text>
+		)}
+		</>
 	)
 }
 
@@ -618,17 +830,25 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
  * @param delta - previous step's value minus this one's; negative means this step is larger
  */
 function gapLabel(delta: number, measurement: 'sequence' | 'independent-totals', entry = 0): string {
-	if (delta === 0) return measurement === 'sequence' ? 'no drop-off' : 'no difference'
+	// On the fallback, only the ANOMALY is worth a line.
+	//
+	// The drop-off BAR is drawn for a tracked sequence only, so on independent totals every gap
+	// label rendered right-aligned against empty space. "N fewer" was also arithmetic the reader can
+	// do from the two counts either side of it, on every gap, under a caution card that specifically
+	// forbids reading these gaps as drop-off — so it was noise that contradicted the warning above
+	// it. A rung LARGER than the one above cannot be inferred that way and is the fallback's
+	// characteristic surprise, so that one stays.
+	if (measurement !== 'sequence' && delta >= 0) return ''
+	if (delta === 0) return 'no drop-off'
 	if (delta > 0) {
-		if (measurement !== 'sequence') return `${formatCount(delta)} fewer`
 		// The share as well as the count, because the share is what the bar beside it encodes — and
 		// a screen-reader user, who gets no bar at all, would otherwise have no way to know how big
 		// the loss was relative to everyone who landed.
 		const share = entry > 0 ? ` — ${formatPercent(delta / entry, 0)} of everyone who landed` : ''
 		return `−${formatCount(delta)} did not continue${share}`
 	}
-	// A closed funnel cannot grow, so a negative here means the fallback is in use and the two
-	// counts are of different acts, not of the same people continuing.
+	// A closed funnel cannot grow. Reaching here means a tracked sequence reported a rung larger
+	// than the one above it, which is a fact about the data worth stating.
 	return `${formatCount(-delta)} more — not a subset of the step above`
 }
 
@@ -638,50 +858,23 @@ const funnelList: React.CSSProperties = { listStyle: 'none', margin: 0, padding:
 /** One rung and its preceding gap. */
 const funnelItem: React.CSSProperties = { display: 'grid', gap: 4 }
 
-/** The space between two rungs, where the drop-off is named. */
-const funnelGap: React.CSSProperties = {
-	display: 'flex',
-	alignItems: 'center',
-	justifyContent: 'flex-end',
-	gap: 8,
-	padding: '4px 2px',
+/**
+ * The space between two rungs, where the drop-off is named.
+ *
+ * Right-aligned only when there is a bar to align against. Under independent totals no bar is
+ * drawn, so `flex-end` pushed the text to the right of nothing.
+ */
+function funnelGapStyle(hasBar: boolean): React.CSSProperties {
+	return {
+		display: 'flex',
+		alignItems: 'center',
+		justifyContent: hasBar ? 'flex-end' : 'flex-start',
+		gap: 8,
+		padding: '4px 2px',
+	}
 }
 
-/**
- * The rail the abandonment bar sits in.
- *
- * Narrow, and right-aligned with the label, so it reads as a note between two rungs rather than as
- * a sixth stage. It is the same scale as the stage bars above and below it — a share of entry — so
- * the eye can compare a drop-off against the step it came from without converting anything.
- */
-const lostTrack: React.CSSProperties = {
-	width: '38%',
-	maxWidth: 200,
-	height: 6,
-	borderRadius: 2,
-	overflow: 'hidden',
-	background: 'currentColor',
-	opacity: 0.1,
-	// Right to left: the bar grows back toward the funnel it came out of, which reads as leaving
-	// rather than as another quantity accumulating alongside.
-	display: 'flex',
-	justifyContent: 'flex-end',
-}
 
-/**
- * The people who did not continue.
- *
- * The one warm mark in the funnel. It is not an error — a drop-off is normal and a foundry's is
- * enormous — so it is drawn at a weight that says "this is the quantity" rather than "this is
- * wrong", and it takes the same colour the timeline gives GA4's shortfall so that "what you lost"
- * looks the same everywhere in the tool.
- */
-const lostFill: React.CSSProperties = {
-	height: '100%',
-	borderRadius: 2,
-	background: SERIES.ga4Pageviews,
-	opacity: 0.75,
-}
 
 /** One rung. The active state is a background and a border, so it survives a forced-colours mode. */
 function funnelStage(active: boolean): React.CSSProperties {
@@ -730,18 +923,6 @@ const barTrack: React.CSSProperties = {
 }
 
 
-/** Hover readout, pinned top-right of the plot and out of the lines' way. */
-const readout: React.CSSProperties = {
-	position: 'absolute',
-	top: 0,
-	right: 0,
-	padding: '6px 10px',
-	borderRadius: 3,
-	background: 'var(--card-bg-color, rgba(0,0,0,0.55))',
-	border: '1px solid var(--card-border-color, rgba(128,128,128,0.35))',
-	pointerEvents: 'none',
-	maxWidth: '70%',
-}
 
 /** Bar header: label on the left, figure hard right, never overlapping on a narrow pane. */
 const barHeader: React.CSSProperties = {
@@ -1267,76 +1448,218 @@ export function SurvivalLines({
 	stepLabels: readonly string[]
 	minDenominator?: number
 }): React.ReactElement | null {
+	// Hover state is the step index, not a coordinate — the same shape the timeline settled on, and
+	// the reason positioning needs no measurement: step i is always i/(n-1) of the width.
+	const [active, setActive] = React.useState<number | null>(null)
+
 	if (segments.length < 2 || stepLabels.length < 2) return null
 
-	const width = 100
-	const height = 46
+	// The plot stretches to fill its box, and the x-axis labels below it are laid out across the
+	// same width — so a step's tick always sits under that step's vertices. Letting the drawing
+	// keep its own aspect instead letterboxes it: the lines occupy the middle third while the
+	// labels span the full width, which is a legend that does not match its graph.
+	//
+	// The old objection to stretching was that it distorted `strokeDasharray`, which was the ONLY
+	// channel separating one segment from another. Segments carry their own colour now, so the
+	// distortion costs nothing: both lines stretch identically, and the comparison a reader makes
+	// here is between lines in one drawing, never between two pane widths.
+	const width = 320
+	const height = 132
 	const x = (i: number) => (i / (stepLabels.length - 1)) * width
+
+	// Each segment's surviving share, stopped where its denominator runs out.
+	const drawn = segments.map((segment, index) => {
+		const entry = segment.values[0]
+		if (entry === null || entry === undefined || entry <= 0) return null
+
+		const points: Array<[number, number]> = []
+		const shares: Array<number | null> = []
+		for (let i = 0; i < segment.values.length && i < stepLabels.length; i++) {
+			const value = segment.values[i]
+			const previous = i === 0 ? entry : segment.values[i - 1]
+			if (value === null || value === undefined) break
+			if (i > 0 && (previous === null || previous === undefined || previous < minDenominator)) break
+			const share = Math.min(1, value / entry)
+			points.push([x(i), height - share * height])
+			shares.push(share)
+		}
+		if (points.length < 2) return null
+		return { segment, index, points, shares, colour: segmentColour(index) }
+	})
+
+	// Only segments that produced a line. The legend used to map over every segment, so one that
+	// dropped out immediately got a key entry for a line that was not on the chart.
+	const lines = drawn.filter((d): d is NonNullable<typeof d> => d !== null)
+	if (lines.length === 0) return null
 
 	return (
 		<Stack space={3}>
-			<svg
-				viewBox={`0 0 ${width} ${height}`}
-				preserveAspectRatio="none"
-				style={{ width: '100%', height: 150, overflow: 'visible' }}
-				role="img"
-				aria-label={`Share of each segment surviving to each step, ${stepLabels.join(', then ')}`}
-			>
-				{/* Two references: everybody, and half of everybody. More rules than that on a chart
-				    this short is texture rather than information. */}
-				{[0, 0.5].map((level) => (
-					<line
-						key={level}
-						x1={0}
-						x2={width}
-						y1={height * level}
-						y2={height * level}
-						stroke={mark('survival.grid')}
-						strokeWidth={0.4}
-					/>
+			<div style={survivalFrame}>
+				{/* The y axis, as HTML rather than <text>. These rules were already drawn and named
+				    100% and 50% only in a code comment, so a reader saw two grey lines and no scale —
+				    but a <text> inside a stretched viewBox is stretched with it. */}
+				{[1, 0.5, 0].map((level) => (
+					<span key={level} style={survivalYLabel(level)}>
+						{level === 1 ? '100%' : level === 0.5 ? '50%' : '0%'}
+					</span>
 				))}
-				{segments.map((segment, index) => {
-					const entry = segment.values[0]
-					if (entry === null || entry === undefined || entry <= 0) return null
-
-					// Stop where the denominator runs out. A line drawn past that point asserts a
-					// collapse the sample cannot distinguish from silence.
-					const points: Array<[number, number]> = []
-					for (let i = 0; i < segment.values.length && i < stepLabels.length; i++) {
-						const value = segment.values[i]
-						const previous = i === 0 ? entry : segment.values[i - 1]
-						if (value === null || value === undefined) break
-						if (i > 0 && (previous === null || previous === undefined || previous < minDenominator)) break
-						points.push([x(i), height - (Math.min(1, value / entry) * height)])
-					}
-					if (points.length < 2) return null
-
-					return (
+				<svg
+					viewBox={`0 0 ${width} ${height}`}
+					preserveAspectRatio="none"
+					style={{ width: '100%', height: 150, overflow: 'visible' }}
+					role="img"
+					aria-label={survivalSummary(lines, stepLabels)}
+				>
+					{[1, 0.5, 0].map((level) => (
+						<line
+							key={level}
+							x1={0}
+							x2={width}
+							y1={height * (1 - level)}
+							y2={height * (1 - level)}
+							stroke={mark('survival.grid')}
+							strokeWidth={0.6}
+							vectorEffect="non-scaling-stroke"
+						/>
+					))}
+					{/* A band per step, so the whole column is the pointer target rather than the line
+					    itself — the same reason the timeline hit-tests by day index. */}
+					{stepLabels.map((label, i) => (
+						<rect
+							key={label}
+							x={i === 0 ? 0 : x(i) - width / (stepLabels.length - 1) / 2}
+							y={0}
+							width={width / (stepLabels.length - 1) / (i === 0 || i === stepLabels.length - 1 ? 2 : 1)}
+							height={height}
+							fill="transparent"
+							onMouseEnter={() => setActive(i)}
+							onMouseLeave={() => setActive(null)}
+						/>
+					))}
+					{active !== null && (
+						<line
+							x1={x(active)}
+							x2={x(active)}
+							y1={0}
+							y2={height}
+							stroke={mark('survival.grid')}
+							strokeWidth={1}
+						/>
+					)}
+					{lines.map(({ segment, points, colour }) => (
 						<polyline
 							key={segment.key}
 							points={points.map(([px, py]) => `${px},${py}`).join(' ')}
 							fill="none"
-							stroke={mark('survival.line')}
-							strokeWidth={0.8}
+							stroke={colour}
+							strokeWidth={1.6}
 							vectorEffect="non-scaling-stroke"
-							// Segments are distinguished by dash as well as position, because the
-							// palette has one colour for "people who were here" and this chart draws
-							// several populations of exactly that.
-							strokeDasharray={index === 0 ? undefined : index === 1 ? '4 3' : '1 2'}
-							opacity={index === 0 ? 1 : 0.75}
+							strokeLinejoin="round"
 						/>
+					))}
+					{/* The point under the cursor on every line that reaches this step. */}
+					{active !== null && lines.map(({ segment, points, colour }) => {
+						const point = points[active]
+						if (!point) return null
+						// Drawn as a stroked dot rather than a <circle>, whose radius would be stretched
+						// into an ellipse by the non-uniform scale.
+						return (
+							<line
+								key={segment.key}
+								x1={point[0]}
+								x2={point[0]}
+								y1={point[1]}
+								y2={point[1]}
+								stroke={colour}
+								strokeWidth={6}
+								strokeLinecap="round"
+								vectorEffect="non-scaling-stroke"
+							/>
+						)
+					})}
+				</svg>
+			</div>
+			{/* The x axis. These labels were passed in as a prop and used ONLY inside the chart's
+			    aria-label — a sighted reader saw unlabelled lines over unlabelled positions. They are
+			    also the keyboard route to the readout, which is why they are buttons. */}
+			<div style={survivalAxis}>
+				{stepLabels.map((label, i) => (
+					<button
+						key={label}
+						type="button"
+						style={survivalTick(i === active)}
+						aria-pressed={i === active}
+						onMouseEnter={() => setActive(i)}
+						onMouseLeave={() => setActive(null)}
+						onFocus={() => setActive(i)}
+						onBlur={() => setActive(null)}
+						onClick={() => setActive(i === active ? null : i)}
+					>
+						{label}
+					</button>
+				))}
+			</div>
+			{/* The legend carries the value when a step is active, rather than a second row appearing
+			    beneath it saying the same segment names again. */}
+			<div style={survivalLegend} aria-live="polite">
+				{lines.map(({ segment, shares, colour }) => {
+					const share = active === null ? null : shares[active]
+					return (
+						<Text key={segment.key} size={0}>
+							<span style={{ ...hoverSwatch, background: colour, display: 'inline-block', marginRight: 6 }} />
+							{segment.label}
+							{active !== null && (
+								<strong style={survivalReadoutValue}>
+									{'\u00a0'}
+									{share === null || share === undefined ? 'not measured here' : formatPercent(share, 0)}
+								</strong>
+							)}
+						</Text>
 					)
 				})}
-			</svg>
-			<div style={survivalLegend}>
-				{segments.map((segment, index) => (
-					<Text key={segment.key} size={0} muted>
-						{index === 0 ? '——' : index === 1 ? '– –' : '· ·'} {segment.label}
-					</Text>
-				))}
 			</div>
 		</Stack>
 	)
+}
+
+/**
+ * The colour for one segment's line.
+ *
+ * Colour, not dash pattern. Dash was the only channel separating these lines, it was the channel
+ * the old anamorphic scaling distorted, and it ran out at three segments — index 2 and beyond all
+ * got the same pattern and the same legend glyph, so two device categories could draw identically
+ * under a key claiming they differed.
+ *
+ * @param index - the segment's position in the stack
+ */
+function segmentColour(index: number): string {
+	const names = ['survival.line', 'survival.line.2', 'survival.line.3', 'survival.line.4']
+	return mark(names[index % names.length] as string)
+}
+
+/**
+ * What the chart says to a screen reader.
+ *
+ * The old `aria-label` named the chart and carried no data at all — "Share of each segment surviving
+ * to each step" plus the step names. This states where each segment actually ended up, which is the
+ * finding.
+ *
+ * @param lines - the segments that produced a line
+ * @param stepLabels - the rungs, in order
+ */
+function survivalSummary(
+	lines: ReadonlyArray<{ segment: { label: string }; shares: ReadonlyArray<number | null> }>,
+	stepLabels: readonly string[],
+): string {
+	const parts = lines.map(({ segment, shares }) => {
+		const last = shares.length - 1
+		const share = shares[last]
+		const reached = stepLabels[last] ?? 'the last measured step'
+		return share === null || share === undefined
+			? `${segment.label} could not be followed past ${reached}`
+			: `${segment.label} ${formatPercent(share, 0)} by ${reached}`
+	})
+	return `Share of each segment still present at each step, starting from ${stepLabels[0]}. ${parts.join('. ')}.`
 }
 
 /**
@@ -1883,6 +2206,69 @@ const shiftNow: React.CSSProperties = {
 
 /** The key beneath the survival chart. Dash patterns, because position alone does not name a line. */
 const survivalLegend: React.CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap' }
+
+/** Room to the left of the plot for the y labels, which sit outside the viewBox. */
+const survivalFrame: React.CSSProperties = { paddingLeft: 34, position: 'relative' }
+
+/** The x axis: one tick per step, spread across the same width the plot uses. */
+const survivalAxis: React.CSSProperties = {
+	display: 'flex',
+	justifyContent: 'space-between',
+	gap: 4,
+	paddingLeft: 34,
+}
+
+/**
+ * One x-axis tick.
+ *
+ * A button, not a label, because it is simultaneously the axis text, the hover target and the
+ * keyboard route into the readout — and at that size it clears the 24px target minimum, which the
+ * line itself never could.
+ */
+function survivalTick(activeTick: boolean): React.CSSProperties {
+	return {
+		appearance: 'none',
+		background: 'transparent',
+		border: 'none',
+		borderTop: `2px solid ${activeTick ? 'currentColor' : 'transparent'}`,
+		color: 'inherit',
+		opacity: activeTick ? 1 : 0.7,
+		font: 'inherit',
+		fontSize: '0.72em',
+		fontWeight: activeTick ? 600 : 400,
+		padding: '6px 2px',
+		minHeight: 24,
+		cursor: 'pointer',
+		textAlign: 'center',
+		flex: '1 1 0',
+	}
+}
+
+/**
+ * One y-axis label, pinned to its grid rule.
+ *
+ * The plot is stretched to fill its box, so anything inside the viBox is stretched too. These sit
+ * outside it as ordinary HTML for that reason.
+ *
+ * @param level - 1, 0.5 or 0, matching the rule it labels
+ */
+function survivalYLabel(level: number): React.CSSProperties {
+	return {
+		position: 'absolute',
+		left: 0,
+		// 150 is the plot's rendered height; the label is nudged up by half its own line so it sits
+		// on the rule rather than under it.
+		top: 150 * (1 - level) - 6,
+		width: 28,
+		textAlign: 'right',
+		fontSize: 10,
+		opacity: 0.7,
+		fontVariantNumeric: 'tabular-nums',
+	}
+}
+
+/** The share itself, tabular so a row of them lines up. */
+const survivalReadoutValue: React.CSSProperties = { fontVariantNumeric: 'tabular-nums' }
 
 /** A ratio and its toggle, sharing a baseline. */
 const ratioRow: React.CSSProperties = {

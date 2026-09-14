@@ -65,12 +65,41 @@ export const REGION_ALPHA = 0.18
  * @param alpha - 0 to 1
  */
 export function seriesFill(key: SeriesKey, alpha: number = REGION_ALPHA): string {
-	const hex = SERIES[key]
+	return withAlpha(SERIES[key], alpha)
+}
+
+/**
+ * Any hex at a given alpha, as an `rgba()` string.
+ *
+ * @param hex - the colour
+ * @param alpha - 0 to 1
+ */
+export function withAlpha(hex: string, alpha: number): string {
 	const r = parseInt(hex.slice(1, 3), 16)
 	const g = parseInt(hex.slice(3, 5), 16)
 	const b = parseInt(hex.slice(5, 7), 16)
 	return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
+
+/**
+ * The comparison identity: every figure, mark and control that refers to the OTHER window.
+ *
+ * Deliberately outside `SERIES`, because it names a RELATIONSHIP rather than a source. A delta, the
+ * ghost line behind a series, and the basis toggle that chooses between "previous period" and "last
+ * year" are one idea, and before this they were three greys at three opacities plus an underline on
+ * one tone — so nothing on screen said they were related, which is exactly what a reader asked for.
+ *
+ * Hue 255 sits in the widest gap in the series ring (vercel 210 to revenue 322). Its nearest
+ * neighbour under deuteranopia is vercel at dE 12.2 — wider than the ga4Pageviews/ga4Sessions pair
+ * this palette already ships on purpose, and 57 from the neutral grey it replaces, which is what
+ * lets it read as an identity rather than as more muting.
+ *
+ * 4.29:1 on white and 4.28:1 on Sanity's dark card. For this pair of grounds 4.285 is the ceiling
+ * any single colour can reach on both sides at once, so this is the balance point, not a
+ * compromise. It only holds at FULL ALPHA: at 0.9 it is 3.6, at 0.7 it is 2.6, at 0.55 it is 2.1.
+ * That is why the opacity ladder that used to carry emphasis had to go rather than be tinted.
+ */
+export const COMPARISON = '#8368D4'
 
 /** The grounds a colour has to work on: Sanity's light card and its dark one. */
 export const GROUNDS = { light: '#ffffff', dark: '#13141b' } as const
@@ -110,7 +139,7 @@ export type MarkRole = 'data' | 'fill' | 'furniture'
 
 /** One drawn mark: the colour, the alpha it is ACTUALLY drawn at, and what it is for. */
 export interface Mark {
-	key: SeriesKey | 'neutral'
+	key: SeriesKey | 'neutral' | 'comparison'
 	/** The opacity the renderer applies. This is the number the contrast test composites with. */
 	alpha: number
 	role: MarkRole
@@ -143,19 +172,31 @@ export const MARKS: Record<string, Mark> = {
 		key: 'ga4Pageviews', alpha: 0.22, role: 'fill', boundary: 'chart.regionEdge',
 		note: 'What the lossier source missed. Light on purpose — the line it covers must stay readable',
 	},
-	'chart.ghost': { key: 'neutral', alpha: 0.55, role: 'furniture', note: 'The same window last period, behind everything' },
+	'chart.ghost': { key: 'comparison', alpha: 1, role: 'data', note: 'The same window last period, behind everything' },
 	'chart.grid': { key: 'neutral', alpha: 0.18, role: 'furniture', note: 'Grid rules' },
 	'bar.fill': { key: 'vercel', alpha: 1, role: 'data', note: 'Every proportion, comparison and funnel bar' },
 	'bar.track': { key: 'neutral', alpha: 0.12, role: 'furniture', note: 'The rail a bar sits in' },
-	'bar.lost': { key: 'revenue', alpha: 1, role: 'data', note: 'People who did not continue past a funnel rung' },
+	// Neither a source nor money. It was drawn in the REVENUE hue, so a magenta bar between funnel
+	// rungs read as takings; GA4's hue was rejected for the opposite reason, since that hue means
+	// "this instrument measured it" everywhere else. People who did not continue are an absence, so
+	// they take the neutral — which clears 4.00:1 light and 4.59:1 dark at full alpha.
+	'bar.lost': { key: 'neutral', alpha: 1, role: 'data', note: 'People who did not continue past a funnel rung' },
 	'bar.seen': { key: 'ga4Pageviews', alpha: 1, role: 'data', note: 'The share of a complete count that the lossy source saw' },
 	'estimate.dot': { key: 'ga4Pageviews', alpha: 1, role: 'data', note: 'One independent estimate of how much GA4 sees' },
 	'estimate.interval': { key: 'ga4Pageviews', alpha: 0.35, role: 'fill', boundary: 'estimate.dot', note: 'How wide the sample leaves that estimate — the dot is its own boundary' },
 	'estimate.rule': { key: 'neutral', alpha: 0.45, role: 'furniture', note: 'The 100% reference a capture rate is read against' },
 	'shift.now': { key: 'vercel', alpha: 1, role: 'data', note: 'A channel this period' },
-	'shift.before': { key: 'neutral', alpha: 0.55, role: 'furniture', note: 'The same channel last period — context, not a second answer' },
-	'shift.link': { key: 'neutral', alpha: 0.35, role: 'furniture', note: 'The distance between the two, which is the finding' },
-	'survival.line': { key: 'vercel', alpha: 1, role: 'data', note: 'One audience segment falling through a funnel' },
+	'shift.before': { key: 'comparison', alpha: 1, role: 'data', note: 'The same channel last period — context, not a second answer' },
+	'shift.link': { key: 'comparison', alpha: 0.55, role: 'fill', boundary: 'shift.before', note: 'The distance between the two, which is the finding' },
+	// A segment per colour rather than a dash pattern per segment. Dash was the ONLY channel
+	// separating these lines, and it is the one channel `preserveAspectRatio="none"` distorted —
+	// so two segments could be drawn identically on a wide pane. The keys are reused from the
+	// series palette because they already clear 3:1 on both grounds; they carry no source meaning
+	// here, and the legend states which is which.
+	'survival.line': { key: 'vercel', alpha: 1, role: 'data', note: 'The first audience segment falling through a funnel' },
+	'survival.line.2': { key: 'ga4Pageviews', alpha: 1, role: 'data', note: 'The second audience segment' },
+	'survival.line.3': { key: 'orders', alpha: 1, role: 'data', note: 'The third audience segment' },
+	'survival.line.4': { key: 'revenue', alpha: 1, role: 'data', note: 'The fourth audience segment' },
 	'survival.grid': { key: 'neutral', alpha: 0.18, role: 'furniture', note: 'The 50% and 100% references a survival line is read against' },
 }
 
@@ -167,9 +208,25 @@ export const MARKS: Record<string, Mark> = {
 export function mark(name: string): string {
 	const m = MARKS[name]
 	if (!m) throw new Error(`Unknown mark: ${name}`)
-	if (m.key === 'neutral') return `rgba(127, 127, 127, ${m.alpha})`
-	return seriesFill(m.key, m.alpha)
+	return withAlpha(baseHex(m.key), m.alpha)
 }
+
+/**
+ * The hex a mark key resolves to, before its alpha is applied.
+ *
+ * Exported so the contrast test composites the SAME colour the renderer draws. It had its own copy
+ * of this mapping; the moment a third kind of key existed, that copy returned undefined.
+ *
+ * @param key - a series, the neutral, or the comparison identity
+ */
+export function baseHex(key: SeriesKey | 'neutral' | 'comparison'): string {
+	if (key === 'neutral') return NEUTRAL
+	if (key === 'comparison') return COMPARISON
+	return SERIES[key]
+}
+
+/** The grey used for furniture that belongs to no series. */
+export const NEUTRAL = '#7f7f7f'
 
 /**
  * Composite a colour at an alpha over a ground, so contrast can be measured as DRAWN.

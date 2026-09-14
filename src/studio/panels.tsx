@@ -15,7 +15,7 @@
 
 import React from 'react'
 import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ChartData, ContainmentBar, Delta, EstimateDotPlot, RatioFigure, ShiftRows, SurvivalLines, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, visuallyHidden, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
+import { ChartData, ContainmentBar, Delta, formatDay, EstimateDotPlot, RatioFigure, ShiftRows, SurvivalLines, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, visuallyHidden, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import { SEND_WINDOW_DAYS } from '../core/ranges'
 import { describeRank, weeklyRank } from '../core/rank'
@@ -265,7 +265,9 @@ export function OverviewPanel({ data, previous, onBrush }: {
 							<MetricFigure metric={metricOr(data.vercelPageviews, OLDER_ROUTE)} label="Pageviews" />
 							<Delta current={metricSortValue(data.vercelPageviews)} previous={metricSortValue(previous?.vercelPageviews)} />
 						</div>
-						<Text size={0} muted>Pageviews, from Vercel’s own counter.</Text>
+						{data.vercelPageviews?.status === 'ok' && (
+							<Text size={0} muted>Pageviews, from Vercel’s own counter.</Text>
+						)}
 					</Stack>
 				</Card>
 				<Card padding={3} radius={2} tone="transparent" border>
@@ -315,10 +317,12 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								)
 							})()}
 						</div>
-						<Text size={0} muted>
-							Everyone subscribed today, not just this period. Mailchimp&rsquo;s own count, so it is
-							not consent-gated or blockable.
-						</Text>
+						{data.audience?.status === 'ok' && (
+							<Text size={0} muted>
+								Everyone subscribed today, not just this period. Mailchimp&rsquo;s own count, so it is
+								not consent-gated or blockable.
+							</Text>
+						)}
 					</Stack>
 				</Card>
 			</div>
@@ -346,11 +350,13 @@ export function OverviewPanel({ data, previous, onBrush }: {
 						{averageOrderValue(data).status === 'partial' && (averageOrderValue(data) as { note?: string }).note && (
 							<Text size={0} muted>{(averageOrderValue(data) as { note?: string }).note}</Text>
 						)}
-						<Text size={0} muted>
-							{/* The denominator moved into the figure above, where it belongs. This caption
-							    used to carry it in prose as well. */}
-							From your orders, so exact.
-						</Text>
+						{averageOrderValue(data).status !== 'unavailable' && (
+							<Text size={0} muted>
+								{/* The denominator moved into the figure above, where it belongs. This caption
+								    used to carry it in prose as well. */}
+								From your orders, so exact.
+							</Text>
+						)}
 					</Stack>
 				</Card>
 
@@ -374,9 +380,11 @@ export function OverviewPanel({ data, previous, onBrush }: {
 							]}
 							unavailable={<MetricFigure metric={visitorsPerOrder(data)} label="Visitors per order" />}
 						/>
-						<Text size={0} muted>
-							Vercel&rsquo;s visitor count. A ceiling — some are bots or the same person twice.
-						</Text>
+						{data.vercelVisitors?.status === 'ok' && (
+							<Text size={0} muted>
+								Vercel&rsquo;s visitor count. A ceiling — some are bots or the same person twice.
+							</Text>
+						)}
 					</Stack>
 				</Card>
 			</div>
@@ -388,7 +396,7 @@ export function OverviewPanel({ data, previous, onBrush }: {
 					    alternative had escaped from a code comment into the UI. What the reader needs
 					    is how to read the chart, not why it was drawn this way. */}
 					<Text size={1} muted>
-						Each row has its own scale. Hover a day, or use the control below, to see what each
+						Each row has its own scale. Hover a day to see what each
 						source saw of it.
 					</Text>
 					<CrossSourceTimeline
@@ -408,7 +416,9 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								unit: 'count',
 								points: (data.crossSource ?? []).map((d) => ({ date: d.date, value: d.vercelPageviews })),
 								// The same row last period, so the reader can see whether this shape is normal.
-								comparison: (previous?.crossSource ?? []).map((d) => ({ date: d.date, value: d.vercelPageviews })),
+								comparison: previous?.crossSource?.length
+									? previous.crossSource.map((d) => ({ date: d.date, value: d.vercelPageviews }))
+									: undefined,
 								shortfall: {
 									label: 'Seen by GA4',
 									source: 'GA4',
@@ -466,12 +476,14 @@ export function OverviewPanel({ data, previous, onBrush }: {
 									})),
 									// The most valuable ghost in the chart: a collapse reads as a step away
 									// from last period's flat line, whether or not the detector fired.
-									comparison: (previous?.crossSource ?? []).map((d) => ({
-										date: d.date,
-										value: d.vercelPageviews !== null && d.ga4Pageviews !== null && d.vercelPageviews > 0
-											? d.ga4Pageviews / d.vercelPageviews
-											: null,
-									})),
+									comparison: previous?.crossSource?.length
+										? previous.crossSource.map((d) => ({
+											date: d.date,
+											value: d.vercelPageviews !== null && d.ga4Pageviews !== null && d.vercelPageviews > 0
+												? d.ga4Pageviews / d.vercelPageviews
+												: null,
+										}))
+										: undefined,
 								}]
 								: []),
 							// ORDERS ALWAYS, revenue only when it covers every order.
@@ -1162,7 +1174,7 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 
 			<Stack space={3}>
 				<SectionTitle title="Traffic sources" />
-				<Text size={1} muted>Sort, filter, or exclude a row to see what the rest looks like.</Text>
+				<Text size={1} muted>Sort or filter to find a source. Excluding a row hides it from this table.</Text>
 				<SortableTable<SourceRow>
 					caption="Traffic sources by sessions"
 					initialSort="sessions"
@@ -1297,6 +1309,23 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 					]}
 				/>
 
+				{/* The column is deliberately allowed to be a column of dashes — a null is not a zero,
+				    and this package would rather look uncomfortable than round an absence down. But
+				    the paragraph that explains the column was gated on the SUCCESS case, so in exactly
+				    the state where every cell is a dash there was no explanation anywhere on screen:
+				    the reason went to `notices` at the foot of the panel, where it can also be folded
+				    behind "N more caveats". A column that is meant to be uncomfortable is only honest
+				    if it says why where it sits. */}
+				{!(data.splitIsSound === true && finiteOrNull(data.actualRevenue) !== null) && (
+					<Text size={0} muted>
+						Revenue is not split across sources here.{' '}
+						{finiteOrNull(data.actualRevenue) === null
+							? 'Your orders carry no amount for this period, so there is no total to divide.'
+							: 'Google Analytics attributed too few of these sales to a source for the division to mean anything.'}
+						{' '}The sessions and engagement columns are unaffected.
+					</Text>
+				)}
+
 				{data.splitIsSound === true && finiteOrNull(data.actualRevenue) !== null && (
 					// Says exactly what was combined and what was estimated. The money in that column
 					// is Sanity's real total spread across GA4's split — right in scale, and derived,
@@ -1430,91 +1459,6 @@ export function rankLine(series: CrossSourceDay[] | undefined, pick: (d: CrossSo
 	return ranked ? describeRank(ranked) : null
 }
 
-/**
- * The funnel, split by device, all segments visible at once.
- *
- * This replaced a radiogroup that swapped which funnel was drawn. The single most actionable fact
- * in a foundry's data — at Darden, mobile reaching the second step at a ninth of desktop's rate —
- * was therefore serialised through an interaction: seeing both meant clicking, remembering, and
- * clicking back. A comparison you have to hold in your head is not a comparison the tool made.
- *
- * Each cell carries its DENOMINATOR. The buttons this replaces printed a bare rate to two decimal
- * places with no denominator and no floor, which is the same claim `spread()` refuses below 200
- * users, arriving through the back door with more implied precision than the honest version.
- *
- * A rate is withheld below MIN_RATE_DENOMINATOR, exactly as the funnel itself withholds one. The
- * COUNT is always shown: how many people reached a step is a fact at any sample size, and only the
- * ratio needs protecting.
- */
-function SegmentTable({ segments, dimension }: { segments: JourneySegment[]; dimension: string }): React.ReactElement | null {
-	if (segments.length < 2) return null
-
-	// Step order comes from the widest segment, so a segment GA4 stopped reporting partway down
-	// leaves a gap rather than shortening the table for everyone.
-	const spine = [...segments].sort((a, b) => b.steps.length - a.steps.length)[0]?.steps ?? []
-	if (spine.length === 0) return null
-
-	return (
-		<Stack space={3}>
-			<Text size={1} muted>
-				Every {dimension} at once. A rate needs {MIN_RATE_DENOMINATOR} people at the step before
-				it; below that only the count is shown.
-			</Text>
-			<Card radius={2} tone="transparent" border style={{ overflowX: 'auto', width: '100%' }}>
-				<table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 360 }}>
-					<caption style={visuallyHidden}>Funnel steps by {dimension}</caption>
-					<thead>
-						<tr>
-							<th scope="col" style={segmentHeadCell}>Step</th>
-							{segments.map((segment) => (
-								<th key={segment.key} scope="col" style={{ ...segmentHeadCell, textAlign: 'right' }}>
-									{segment.label}
-								</th>
-							))}
-						</tr>
-					</thead>
-					<tbody>
-						{spine.map((step, index) => (
-							<tr key={step.key}>
-								<th scope="row" style={segmentRowCell}>
-									<Text size={1}>{step.label}</Text>
-								</th>
-								{segments.map((segment) => {
-									const cell = segment.steps.find((s) => s.key === step.key)
-									const count = cell ? metricSortValue(cell.count) : null
-									const before = index > 0
-										? metricSortValue(segment.steps.find((s) => s.key === spine[index - 1]!.key)?.count)
-										: null
-									const rate = cell?.conversionFromPrevious ?? null
-									// The denominator is the step BEFORE this one, which is what the rate
-									// is a share of — and what decides whether it may be stated at all.
-									const showRate = index > 0 && rate !== null && before !== null && before >= MIN_RATE_DENOMINATOR
-
-									return (
-										<td key={segment.key} style={{ ...segmentRowCell, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-											{count === null
-												? <Text size={1} muted>—</Text>
-												: (
-													<Stack space={1}>
-														<Text size={1}>{formatCount(count)}</Text>
-														{showRate && (
-															<Text size={0} muted>
-																{formatPercent(rate, 1)} of {formatCount(before)}
-															</Text>
-														)}
-													</Stack>
-												)}
-										</td>
-									)
-								})}
-							</tr>
-						))}
-					</tbody>
-				</table>
-			</Card>
-		</Stack>
-	)
-}
 
 /**
  * Whether every counted order carries an amount, so a daily revenue series is safe to draw.
@@ -1621,7 +1565,7 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 	// leaves a gap rather than shortening the chart for everyone.
 	const spine = [...segments].sort((a, b) => b.steps.length - a.steps.length)[0]?.steps ?? []
 
-	// The funnel draws EVERYONE. Per-segment shapes moved into SegmentTable above it, where they
+	// The funnel draws EVERYONE. Per-segment shapes are in the survival chart above it, where they
 	// can be compared side by side; a funnel that silently became one device's funnel, with only a
 	// pressed button to say so, was the thing that made the comparison invisible.
 	const allSteps = data.steps ?? []
@@ -1635,10 +1579,22 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 
 	// The chart takes plain numbers; the unavailable steps have already been removed above, so the
 	// narrowing here cannot drop a measured value.
+	// `partial` travels with the count. It used to stop here: the metric's status, its coveredFrom
+	// and its note were all dropped at this line, so a step instrumented half-way through the window
+	// reached the chart indistinguishable from one measured throughout — and the chart then printed
+	// a share of it against a full-window denominator.
 	const stages = shown.flatMap((step) =>
 		step.count.status === 'unavailable'
 			? []
-			: [{ key: step.key, label: step.label, value: step.count.value, conversionFromPrevious: step.conversionFromPrevious }],
+			: [{
+				key: step.key,
+				label: step.label,
+				value: step.count.value,
+				conversionFromPrevious: step.conversionFromPrevious,
+				...(step.count.status === 'partial' && step.count.coveredFrom
+					? { partial: { from: formatDay(step.count.coveredFrom) } }
+					: {}),
+			}],
 	)
 
 	const tracked = data.measurement === 'sequence'
@@ -1687,6 +1643,7 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 				stepLabels={spine.map((step) => step.label)}
 			/>
 
+			{segments.length >= 2 && (
 			<ChartData
 				label="Show the figures behind this"
 				rows={segments}
@@ -1724,6 +1681,7 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 					})),
 				]}
 			/>
+			)}
 
 			{spread(segments) && <Text size={1}>{spread(segments)}</Text>}
 

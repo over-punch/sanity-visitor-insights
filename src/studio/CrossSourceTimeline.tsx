@@ -26,7 +26,10 @@ import { Card, Stack, Text } from '@liiift-studio/sanity-ui-compat'
 import { scaleUtc, scaleLinear } from 'd3-scale'
 import { line as d3Line, area as d3Area, curveLinear } from 'd3-shape'
 import { max as d3Max } from 'd3-array'
-import { formatCount, formatMoney, formatPercent } from './Figure'
+import { HoverCard, formatCount, formatMoney, formatPercent } from './Figure'
+// Lives in Figure.tsx, which is where the shared drawing components belong, and is re-exported
+// here because this is where it was born and where its tests still import it from.
+export { HoverCard } from './Figure'
 import { MARKS, SERIES, mark, seriesFill, type SeriesKey } from './palette'
 
 /** One point on one series. `value` null where the source reported nothing for that day. */
@@ -83,54 +86,6 @@ export function colorFor(source: Series['source'], unit: SeriesUnit, explicit?: 
  * It flips to the left of the crosshair in the right-hand third, so the last week of a range — the
  * part a reader looks at most — does not push the card off the pane.
  */
-export function HoverCard({
-	x,
-	paneWidth,
-	date,
-	rows,
-	events,
-}: {
-	/** Plot-space x of the crosshair, in CSS pixels. */
-	x: number
-	/** The measured pane width, for the flip decision. */
-	paneWidth: number
-	/** The day, already formatted. */
-	date: string
-	/** One entry per series, in the stack's own order. */
-	rows: Array<{ key: string; label: string; color: string; value: string; seen: string | null }>
-	/** Campaign sends or other markers on this day. */
-	events: string[]
-}): React.ReactElement {
-	// Flip rather than clamp. A clamped card stops tracking the crosshair and then sits ON the
-	// thing it describes for the whole right-hand edge.
-	const flip = x > paneWidth * 0.66
-	return (
-		<div
-			style={{
-				...hoverCard,
-				left: flip ? undefined : x + 14,
-				right: flip ? paneWidth - x + 14 : undefined,
-			}}
-		>
-			<div style={hoverDate}>{date}</div>
-			{rows.map((row) => (
-				<div key={row.key} style={hoverRow}>
-					{/* The same block that labels the row in the plot, so the two are one legend. */}
-					<span style={{ ...hoverSwatch, background: row.color }} />
-					<span style={hoverLabel}>{row.label}</span>
-					<span style={hoverValue}>
-						{row.value}
-						{row.seen && <span style={hoverSeen}> · {row.seen}</span>}
-					</span>
-				</div>
-			))}
-			{events.map((event) => (
-				<div key={event} style={hoverEvent}>{event}</div>
-			))}
-		</div>
-	)
-}
-
 export interface Series {
 	key: string
 	label: string
@@ -468,7 +423,6 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 	// Whether to draw the constituent sources. Hover reveals them; so does keyboard focus and the
 	// explicit toggle, because a chart whose detail exists only under a pointer is unreachable on a
 	// phone and to anyone navigating by keyboard.
-	const [pinned, setPinned] = useState(false)
 	/** Index the drag began at, or null when not dragging. */
 	const [brushAnchor, setBrushAnchor] = useState<number | null>(null)
 	/**
@@ -671,7 +625,6 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 
 	const hoveredDate = hoverIndex !== null ? dates[hoverIndex] : null
 
-	const revealed = pinned || hoverIndex !== null
 
 	// What the drawing says, in words. Serves a screen reader, anyone who cannot resolve the axis
 	// type, and anyone reading a screenshot — the shaded region's whole argument was previously
@@ -943,15 +896,24 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						const plotTop = top + LABEL_STRIP
 
 						const values = row.points.map((p) => p.value).filter((v): v is number => v !== null)
+						// The comparison counts toward the scale. It is drawn through the same generator
+						// and inside the same clip, so a previous period that peaked HIGHER than this one
+						// was cut off at the plot top rather than squashed — and a reader saw a ghost that
+						// ran along the ceiling and flattened, which reads as "last period was flat" when
+						// it was in fact bigger. The ghost is the only reference level on the chart; it has
+						// to be inside the domain to be one.
+						const comparisonValues = (row.comparison ?? [])
+							.map((p) => p.value)
+							.filter((v): v is number => v !== null)
 						// Each row scales to ITSELF. That is the whole point of small multiples: no
 						// shared scale means no invented correlation between rows.
-						const peak = d3Max(values) ?? 0
+						const peak = d3Max([...values, ...comparisonValues]) ?? 0
 						// The floor drops below zero when the data does. Clipping each row to its band was
 						// right, but the domain still started at 0, so a refund was positioned below the
 						// baseline and therefore outside the clip — it went from bleeding into the next
 						// row to not being drawn at all, while `shapeOf` still counted it in the row's
 						// spoken total. The clip moved that bug rather than fixing it.
-						const lowest = Math.min(0, ...values)
+						const lowest = Math.min(0, ...values, ...comparisonValues)
 						const y = row.domain
 							? scaleLinear().domain(row.domain).range([bottom, plotTop])
 							: scaleLinear().domain([lowest, peak || 1]).nice().range([bottom, plotTop])
@@ -1026,7 +988,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 							? row.points.filter((p) => p.value === 0)
 							: []
 						const gap = row.shortfall ? gapGen(row.points) ?? '' : ''
-						// The lossier source's own line, revealed only while reading a day.
+						// The lossier source's own line, drawn always — it is named in the legend below.
 						// The SAME generator, nulls left in, so `.defined()` breaks the line where GA4
 						// reported nothing. Filtering them out first joined the surviving points into a
 						// continuous stroke — so a GA4 outage, the single event this chart was built to
@@ -1102,8 +1064,12 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 								</text>
 								{/* Formatted, like the top of the same axis. A literal "0" sat under "$800.00"
 						    or "43.0%" — the two ends of one axis written in different units. */}
+						{/* The DOMAIN's floor, not a literal zero. The fix that was applied to the top of
+						    this axis was never applied to its bottom, so a row containing a refund — where
+						    `lowest` is negative — printed "US$0" at the band floor, and everything above
+						    that rule read as positive. */}
 						<text x={GUTTER - 6} y={bottom + 4} textAnchor="end" fontSize={AXIS_TYPE} fill="currentColor" opacity={0.7}>
-							{formatValue(0, row.unit, currency)}
+							{formatValue(y.domain()[0] as number, row.unit, currency)}
 						</text>
 
 								{/* One alpha, measured, not tied to hover.
@@ -1346,7 +1312,12 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						? `${tickLabel(new Date(`${dates[brushed[0]]}T00:00:00Z`))} – ${tickLabel(new Date(`${dates[brushed[1]]}T00:00:00Z`))} · ${brushed[1] - brushed[0] + 1} days`
 						: hoveredDate
 							? tickLabel(new Date(`${hoveredDate}T00:00:00Z`))
-							: 'Hover the chart to read a day'}
+							// Nothing, rather than an instruction. This is the readout slot: it exists to
+							// hold the hovered day, and filling it with "Hover the chart to read a day"
+							// meant the place where data appears permanently showed a sentence instead —
+							// one that is also false on a touch screen. The row keeps its reserved height,
+							// so the page still does not move when a day is picked up.
+							: ''}
 				</Text>
 				{/* The same figures the floating card shows, kept here for the keyboard path and for
 				    assistive technology: the card is positioned from a pointer coordinate, and a
@@ -1371,31 +1342,46 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 				))}
 			</div>
 
+			{/* ONE legend, and every entry drawn in the colour and shape of the mark it names.
+			
+			    There used to be three. Each row inside the plot carried a coloured swatch beside its
+			    name; the hover card carried a second set, also coloured; and this row underneath drew
+			    ─── ╌╌╌ ▮▮▮ as TEXT GLYPHS inside a muted <Text>, so every swatch here came out grey
+			    while the chart drew those same series blue, amber and green. A reader reported it as
+			    "the legends don't match the graphs", which is exactly what it was.
+			
+			    The per-series rows are gone rather than recoloured: the in-plot legend already names
+			    every row, at full size, in colour, beside the line it belongs to. What is left here is
+			    only the marks that legend CANNOT carry — the ones drawn across rows or behind them,
+			    which had no legend entry anywhere. */}
 			<div style={legendRow}>
 				{series.some((row) => row.shortfall) && (
-					// Hover is not available on touch and not reachable by keyboard, so the reveal
-					// has an explicit control too. Without it the detail would exist only for people
-					// using a mouse.
-					<button
-						type="button"
-						style={revealButton}
-						aria-pressed={pinned}
-						onClick={() => setPinned((current) => !current)}
-					>
-						{pinned ? 'Hide what each source saw' : 'Show what each source saw'}
-					</button>
+					<>
+						{/* The label existed on the Series type all along and was rendered nowhere, so
+						    the dashed orange line along the top of the shaded area was an unexplained
+						    mark that read as a second, disagreeing traffic measurement. */}
+						<LegendKey
+							swatch={<span style={legendDash(shortfallColour(series))} />}
+							label={`${shortfallLabel(series)} — the dashed line`}
+						/>
+						<LegendKey
+							swatch={<span style={legendBlock(seriesFill(shortfallKey(series), MARKS['chart.region']!.alpha), shortfallColour(series))} />}
+							label="Shaded: what your analytics did not see"
+						/>
+					</>
 				)}
-					{series.map((row) => (
-					<Text key={row.key} size={0} muted>
-						{/* The glyph has to match the mark. A row drawn as stems was legended with a
-						    solid rule, which is the legend describing a chart that is not there. */}
-						<span aria-hidden="true">{row.mark === 'events' ? '▮▮▮' : row.complete ? '───' : '╌╌╌'}</span> {row.label} ({row.source})
-					</Text>
-				))}
-				{series.some((row) => row.shortfall) && (
-					<Text size={0} muted>Shaded: what your analytics did not see.</Text>
+				{series.some((row) => row.comparison) && (
+					<LegendKey
+						swatch={<span style={legendDash(mark('chart.ghost'))} />}
+						label="The same days in the window you are comparing against"
+					/>
 				)}
-				{markers.length > 0 && <Text size={0} muted>Vertical rules mark campaign sends.</Text>}
+				{markers.length > 0 && (
+					<LegendKey
+						swatch={<span style={legendRule(mark('chart.grid'))} />}
+						label="Dashed rules with a dot mark campaign sends"
+					/>
+				)}
 				{onBrush && (
 					// The refusal replaces the instruction rather than sitting beside it, and it is a
 					// live region: the reader has just dragged and is looking at the chart, not at the
@@ -1411,54 +1397,101 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 	)
 }
 
-/** Chart frame. */
 /**
- * The floating card.
+ * One legend entry: the mark as it is actually drawn, then what it means.
  *
- * Its ground is the Studio's own card colour so it reads as a surface rather than a tooltip drawn
- * by the chart, and it carries a border because at low contrast a shadow alone disappears on the
- * dark theme.
+ * The swatch is a real styled element rather than a text glyph, which is the whole point — a glyph
+ * inside a muted <Text> inherits the muted colour, so the old legend was grey while the chart was
+ * not.
  */
-const hoverCard: React.CSSProperties = {
-	position: 'absolute',
-	top: 8,
-	// Never the element under the pointer: the card follows the crosshair, and taking a pointer
-	// event would end the hover that positions it.
-	pointerEvents: 'none',
-	zIndex: 2,
-	minWidth: 168,
-	maxWidth: 260,
-	padding: '8px 10px',
-	borderRadius: 4,
-	background: 'var(--card-bg-color, #ffffff)',
-	border: '1px solid var(--card-border-color, rgba(128,128,128,0.35))',
-	boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
-	display: 'flex',
-	flexDirection: 'column',
-	gap: 4,
+function LegendKey({ swatch, label }: { swatch: React.ReactElement; label: string }): React.ReactElement {
+	return (
+		<span style={legendKey}>
+			<span aria-hidden="true">{swatch}</span>
+			<Text size={0} muted>{label}</Text>
+		</span>
+	)
 }
 
-/** The day, which is the card's heading. */
-const hoverDate: React.CSSProperties = { fontSize: 11, fontWeight: 600, opacity: 0.9, marginBottom: 2 }
+/** Swatch and label, on one baseline. */
+const legendKey: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6 }
 
-/** One series line: swatch, name, value. */
-const hoverRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, lineHeight: 1.4 }
+/**
+ * A dashed line swatch, in the colour the line is drawn in.
+ *
+ * @param colour - the stroke
+ */
+function legendDash(colour: string): React.CSSProperties {
+	return {
+		display: 'inline-block',
+		width: 18,
+		height: 0,
+		borderTop: `2px dashed ${colour}`,
+	}
+}
 
-/** The colour block, matching the one beside the row's name in the plot. */
-const hoverSwatch: React.CSSProperties = { width: 8, height: 8, borderRadius: 2, flex: '0 0 auto' }
+/**
+ * A filled-region swatch: the fill, with the boundary that makes its extent visible.
+ *
+ * @param fill - the region colour, at the alpha it is drawn at
+ * @param edge - the boundary stroke
+ */
+function legendBlock(fill: string, edge: string): React.CSSProperties {
+	return {
+		display: 'inline-block',
+		width: 18,
+		height: 10,
+		background: fill,
+		borderTop: `1.5px dashed ${edge}`,
+	}
+}
 
-/** The series name, which yields its space to the figure. */
-const hoverLabel: React.CSSProperties = { opacity: 0.75, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
+/**
+ * A vertical rule swatch, for the campaign markers.
+ *
+ * @param colour - the stroke
+ */
+function legendRule(colour: string): React.CSSProperties {
+	return {
+		display: 'inline-block',
+		width: 0,
+		height: 12,
+		borderLeft: `1px dashed ${colour}`,
+	}
+}
 
-/** The figure, pushed right and tabular so a column of them lines up. */
-const hoverValue: React.CSSProperties = { marginLeft: 'auto', fontVariantNumeric: 'tabular-nums', fontWeight: 500, whiteSpace: 'nowrap' }
+/**
+ * Which series key the shortfall is drawn in, so the legend and the plot cannot disagree.
+ *
+ * @param series - the stack
+ */
+function shortfallKey(series: readonly Series[]): SeriesKey {
+	const row = series.find((r) => r.shortfall)
+	return colorFor(row?.shortfall?.source ?? 'GA4', row?.unit ?? 'count', row?.shortfall?.color)
+}
 
-/** What the lossier source saw of the same thing, quieter than the answer it qualifies. */
-const hoverSeen: React.CSSProperties = { opacity: 0.6, fontWeight: 400 }
+/**
+ * The shortfall line's colour.
+ *
+ * @param series - the stack
+ */
+function shortfallColour(series: readonly Series[]): string {
+	return SERIES[shortfallKey(series)]
+}
 
-/** A campaign send or other dated marker on the hovered day. */
-const hoverEvent: React.CSSProperties = { fontSize: 11, opacity: 0.8, borderTop: '1px solid var(--card-border-color, rgba(128,128,128,0.25))', paddingTop: 4, marginTop: 2 }
+/**
+ * What the shortfall line is called.
+ *
+ * `Series['shortfall']['label']` is set by the panel and, until now, rendered nowhere in the
+ * package — so the mark it names had no legend entry on any surface.
+ *
+ * @param series - the stack
+ */
+function shortfallLabel(series: readonly Series[]): string {
+	return series.find((r) => r.shortfall)?.shortfall?.label ?? 'Seen by your analytics'
+}
 
+/** Chart frame. */
 const frameStyle: React.CSSProperties = { width: '100%', overflow: 'hidden', position: 'relative' }
 
 /**

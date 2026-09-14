@@ -24,7 +24,7 @@ import { decodeView, encodeView, mergeIntoHash } from './urlState'
 import { captureModel, fromOrders, fromPageviews, grossUp } from '../core/capture'
 import { forgetShortfalls, knownShortfall, rememberShortfall } from './useReport'
 import { CrossSourceTimeline, HoverCard, colorFor, dayIndexAt, findCoverageIncident } from './CrossSourceTimeline'
-import { MARKS, SERIES, mark } from './palette'
+import { COMPARISON, MARKS, SERIES, mark, seriesFill } from './palette'
 import React from 'react'
 import {
 	AcquisitionPanel,
@@ -223,9 +223,12 @@ describe('JourneyPanel', () => {
 		expect(html).toContain('not tracked journeys')
 		// Cautionary tone, because independent totals invite a drop-off reading they cannot support.
 		expect(html).toContain('caution')
-		// And the gaps between rungs are differences, not people who left.
-		expect(html).toContain('fewer')
+		// And the gaps between rungs are never described as people who left.
 		expect(html).not.toContain('did not continue')
+		// Nor as an arithmetic difference. "N fewer" was drawn on every gap, right-aligned against
+		// the empty space where a tracked funnel would have put a bar — arithmetic the reader can do
+		// from the two counts either side, restated under a card that forbids reading it as drop-off.
+		expect(html).not.toContain('fewer')
 	})
 
 	it('presents a tracked funnel as a sequence rather than as a caveat', () => {
@@ -935,16 +938,30 @@ describe('CrossSourceTimeline', () => {
 	it('offers a non-pointer route to the per-source detail', () => {
 		// Hover is unavailable on touch and unreachable by keyboard, so detail that exists only
 		// under a pointer exists only for some people.
+		//
+		// This used to assert a "Show what each source saw" button. That button was inert: the state
+		// it set fed one variable that nothing read, because the shortfall line it once gated is
+		// drawn unconditionally now. It changed its own label and moved nothing else on screen. The
+		// real non-pointer route is the focusable plot and its live readout, so that is what is
+		// asserted here instead of a control that did nothing.
 		const html = render(<OverviewPanel data={base as never} />)
-		expect(html).toContain('Show what each source saw')
-		expect(html).toContain('aria-pressed="false"')
+		expect(html).toContain('tabindex="0"')
+		expect(html).toContain('aria-live')
+	})
+
+	it('does not ship a control that changes nothing', () => {
+		const html = render(<OverviewPanel data={base as never} />)
+		expect(html).not.toContain('Show what each source saw')
 	})
 
 	it('rules a campaign send through the chart', () => {
 		// Three sources and a fourth as a marker — the only view that can answer whether the send
 		// moved traffic and money.
 		const html = render(<OverviewPanel data={base as never} />)
-		expect(html).toContain('Vertical rules mark campaign sends')
+		// Named by the mark that actually distinguishes them. Grid rules are vertical too, and there
+		// are more of them than there are campaigns, so "vertical rules" described most of the
+		// wrong things on screen.
+		expect(html).toContain('Dashed rules with a dot mark campaign sends')
 	})
 
 	it('renders nothing rather than an empty frame below three days', () => {
@@ -2431,10 +2448,17 @@ describe('a funnel rate needs a denominator that can carry one', () => {
 	}))
 
 	it('prints a rate where the population supports it', () => {
-		// Every rung clears the floor on both ends, so both rates print.
 		const html = render(<FunnelChart stages={stages([2000, 900, 400, 200, 120, 60])} measurement="sequence" />)
 		expect(html).toContain('of landed')
-		expect(html).toContain('of began checkout')
+	})
+
+	it('gives every rung one share, against the entry step, rather than two against two things', () => {
+		// There used to be a second clause per rung — the step-to-step rate — each half with its own
+		// withhold-fallback. The bars are anchored to entry, so share-of-entry is already drawn; the
+		// second clause was the same picture twice and doubled the apologies when it could not print.
+		const html = render(<FunnelChart stages={stages([2000, 900, 400, 200, 120, 60])} measurement="sequence" />)
+		expect(html).not.toContain('of began checkout')
+		expect(html.match(/of landed/g)).toHaveLength(5)
 	})
 
 	it('withholds a step-to-step rate computed on single digits', () => {
@@ -2452,9 +2476,20 @@ describe('a funnel rate needs a denominator that can carry one', () => {
 		expect(html).toContain('3')
 	})
 
-	it('says why a rate is missing rather than leaving a gap', () => {
+	it('says why rates are missing once, under the chart, not once per rung', () => {
+		// The rule is a property of the funnel. Stated per rung it produced six lines of apology on
+		// a six-step chart — twice on each of three consecutive rungs — and became the most repeated
+		// string in the tool.
 		const html = render(<FunnelChart stages={stages([8, 5, 3])} measurement="sequence" />)
-		expect(html).toContain('too few to give a rate')
+		expect(html).toContain('at least 30 people reached')
+		expect(html.match(/at least 30 people reached/g)).toHaveLength(1)
+		expect(html).not.toContain('too few to give a rate')
+	})
+
+	it('says nothing about denominators when every rung could carry a rate', () => {
+		// An instruction that is always on screen regardless of whether it applies is furniture.
+		const html = render(<FunnelChart stages={stages([2000, 900, 400, 200, 120, 60])} measurement="sequence" />)
+		expect(html).not.toContain('at least 30 people reached')
 	})
 })
 
@@ -2521,14 +2556,21 @@ describe('the funnel gate looks at the rung, not just the funnel', () => {
 		// it was withheld only when the whole funnel had under thirty entries, never when the rung
 		// itself was a handful. "0.1% of landed" off four purchases read as a measurement.
 		const html = render(<FunnelChart stages={stages([4000, 1800, 900, 300, 90, 4])} measurement="sequence" />)
-		expect(html).toContain('too few to give a rate')
+		// The invariant, not the wording: 4 of 4,000 must not be drawn as a percentage anywhere.
+		expect(html).not.toContain('0.1%')
+		// The count is still a fact, and the rule is stated once beneath.
+		expect(html).toContain('>4<')
+		expect(html).toContain('at least 30 people reached')
 	})
 
-	it('explains a withheld step-to-step rate rather than leaving a gap', () => {
-		// The withheld half fell to an empty string, which is the unexplained gap the share half was
-		// changed to avoid.
+	it('leaves no unexplained gap when a rung withholds its share', () => {
+		// The concern this replaces was right: a withheld rate used to fall to an empty string, and
+		// an empty line under a bar reads as something that failed to load. The answer is not a
+		// per-rung apology — it is that the rule is stated once, under the chart, where it applies
+		// to every rung at once.
 		const html = render(<FunnelChart stages={stages([4000, 1800, 900, 300, 20, 8])} measurement="sequence" />)
-		expect(html).toContain('too few from')
+		expect(html).toContain('at least 30 people reached')
+		expect(html.match(/at least 30 people reached/g)).toHaveLength(1)
 	})
 })
 
@@ -3005,8 +3047,17 @@ describe('the funnel draws what was lost', () => {
 		// And there must be no nested rail rescaling it. Any fractional-width track reintroduces the
 		// bug whatever the fill inside it says.
 		expect(html).not.toMatch(/width:\s*38%/)
-		// Drawn in the loss colour, which is its own key — not GA4's, which means a source.
-		expect(html).toContain('rgba(191, 93, 155, 1)')
+		// Drawn in the loss colour, and that colour must not belong to any series. It was the
+		// REVENUE hue, so a bar between two funnel rungs read as money; GA4's hue is wrong for the
+		// mirror-image reason, since it means "this instrument measured it". People who left are an
+		// absence, so the mark is the neutral.
+		expect(html).toContain(mark('bar.lost'))
+		// Compared in the same space. `mark()` returns rgba and SERIES holds hex, so a
+		// `not.toContain(hex)` here would pass no matter what the loss colour was.
+		const lost = mark('bar.lost')
+		for (const key of Object.keys(SERIES) as Array<keyof typeof SERIES>) {
+			expect(lost).not.toBe(seriesFill(key, 1))
+		}
 	})
 
 	it('states the drop-off as a share for readers who get no bar at all', () => {
@@ -3020,8 +3071,11 @@ describe('the funnel draws what was lost', () => {
 		// The counts are of different acts by possibly different people. A bar would invent exactly
 		// the reading the fallback's caveat exists to forbid.
 		const html = render(<JourneyPanel data={{ steps, measurement: 'independent-totals', approximate: true, approximationNote: 'Each step counted on its own.', outcomes: [], topLandingPages: [] } as never} />)
-		expect(html).not.toContain(SERIES.ga4Pageviews)
-		expect(html).toContain('fewer')
+		// The loss mark itself, not a colour that happens not to be used — the old assertion named
+		// GA4's hue, which stopped being the loss colour and left the check passing for free.
+		expect(html).not.toContain(mark('bar.lost'))
+		// And with no bar, no label floating where the bar would have been.
+		expect(html).not.toContain('fewer')
 	})
 
 	it('draws nothing where nobody was lost', () => {
@@ -3831,20 +3885,91 @@ describe('SurvivalLines', () => {
 		expect(polylines[1]).toBe(2)
 	})
 
-	it('distinguishes segments by dash as well as position', () => {
-		// The palette has one colour for "people who were here" and this draws several populations
-		// of exactly that, so colour cannot be the separator.
+	it('gives every segment its own colour', () => {
+		// Dash pattern used to be the ONLY separator. It was also the channel the old
+		// preserveAspectRatio="none" stretched, and it ran out at three segments — index 2 and
+		// beyond all drew '1 2' and all got the same legend glyph, so two device categories could
+		// render identically under a key claiming they differed.
 		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
-		expect(html).toContain('stroke-dasharray')
+		const strokes = [...html.matchAll(/<polyline[^>]*stroke="([^"]+)"/g)].map((m) => m[1])
+		expect(strokes).toHaveLength(2)
+		expect(new Set(strokes).size).toBe(2)
+	})
+
+	it('draws the plot across the same width its axis labels are laid out across', () => {
+		// The plot and the x-axis ticks are separate elements, so they have to be told to span the
+		// same box. Letting the drawing keep its own aspect letterboxes it — lines in the middle
+		// third, labels across the full width — which is a legend that does not match its graph.
+		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
+		expect(html).toContain('width:100%')
+		// A step's last vertex reaches the right edge of the viewBox, so the final tick sits under it.
+		const points = [...html.matchAll(/points="([^"]+)"/g)].map((m) => m[1] ?? '')
+		const lastX = Number((points[0] ?? '').split(' ').pop()?.split(',')[0])
+		expect(lastX).toBe(320)
+	})
+
+	it('draws the step names it is given, rather than only describing them', () => {
+		// stepLabels was a required prop whose only use was inside the aria-label, so a sighted
+		// reader saw unlabelled lines over unlabelled positions. This is the owner's complaint.
+		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
+		for (const label of steps) expect(html).toContain(`>${label}<`)
+	})
+
+	it('labels the scale the lines are read against', () => {
+		// Two grey rules were drawn at 100% and 50% and said so only in a code comment.
+		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
+		expect(html).toContain('100%')
+		expect(html).toContain('50%')
+	})
+
+	it('keeps its type out of the stretched coordinate space', () => {
+		// The plot fills its box by stretching, so a <text> inside the viewBox is stretched with it —
+		// which is how this shipped anamorphic letterforms, in a tool built for a type foundry.
+		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
+		const svg = html.slice(html.indexOf('<svg'), html.indexOf('</svg>'))
+		expect(svg).not.toContain('<text')
+	})
+
+	it('names each segment once, not twice', () => {
+		// A legend row and a readout row both listed the segments while hovering — a second legend
+		// disagreeing with the first is the fault that started this work.
+		// The screen-reader summary names them too, legitimately — this counts only what is drawn.
+		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
+		const visible = html.replace(/aria-label="[^"]*"/g, '')
+		expect(visible.match(/Desktop/g)).toHaveLength(1)
+	})
+
+	it('keys only the segments it actually drew', () => {
+		// The legend used to map over every segment unconditionally, so one that dropped out
+		// immediately got an entry for a line that is not on the chart.
+		const gone = [
+			{ key: 'desktop', label: 'Desktop', values: [1000, 400, 100] },
+			{ key: 'mobile', label: 'Mobile', values: [200, 8, 1] },
+			{ key: 'tv', label: 'Television', values: [0, 0, 0] },
+		]
+		const html = render(<SurvivalLines segments={gone} stepLabels={steps} />)
+		expect(html).toContain('Desktop')
+		expect(html).not.toContain('Television')
 	})
 
 	it('draws nothing with only one segment, which is not a comparison', () => {
-		expect(SurvivalLines({ segments: [segs[0]!], stepLabels: steps })).toBeNull()
+		// Rendered rather than called as a plain function: the component holds hover state now, and
+		// its hook sits above the early return where the rules of hooks require it. Calling a
+		// component directly only ever worked while it had none.
+		// Not via `render`, which asserts non-empty output — the point here is that there IS none.
+		expect(renderToStaticMarkup(<ThemeProvider theme={theme}><SurvivalLines segments={[segs[0]!]} stepLabels={steps} /></ThemeProvider>)).toBe('')
 	})
 
-	it('carries a text alternative naming the steps', () => {
+	it('carries a text alternative that states where each segment ended up', () => {
+		// The old label named the chart and carried no data — it listed the steps and stopped, so a
+		// screen-reader user got the axis and none of the finding.
 		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
-		expect(html).toContain('Landed, then Viewed, then Tested')
+		expect(html).toContain('Landed')
+		expect(html).toContain('Desktop 10%')
+		// Mobile's line stops at step two — 8 is below the denominator floor — so its last stated
+		// share is 4% of the 200 that landed, not a figure for a step it never reached.
+		expect(html).toContain('Mobile 4%')
+		expect(html).toContain('by Viewed')
 	})
 })
 
@@ -3912,5 +4037,321 @@ describe('the per-thousand column completes its own arithmetic', () => {
 				ordersAfter: 2, revenueAfter: 700, windowDays: 3, windowComplete: true }],
 		} as never} />)
 		expect(html).toContain('from US$700')
+	})
+})
+
+describe('the comparison identity', () => {
+	// A reader asked for everything that refers to the other window to look like one thing. That
+	// makes the colour a contract, not a style choice — and it makes the NON-colour direction
+	// channels load-bearing, because the tone-dependent underline that used to carry direction is
+	// gone. None of this had a single test before; deleting the underline passed silently.
+
+	it('draws the move and its baseline in the one comparison colour', () => {
+		const html = render(<Delta current={357} previous={298} />)
+		// Both halves, so "from 298" cannot drift back into a grey of its own.
+		expect(html.match(new RegExp(COMPARISON, 'gi'))?.length).toBeGreaterThanOrEqual(2)
+	})
+
+	it('draws a good move and a bad move in the same colour', () => {
+		// The whole point: hue says "this is a comparison", never "this is good news".
+		const good = render(<Delta current={357} previous={298} />)
+		const bad = render(<Delta current={298} previous={357} />)
+		expect(good).toContain(COMPARISON)
+		expect(bad).toContain(COMPARISON)
+	})
+
+	it('still separates a good move from a bad one without using colour', () => {
+		// Direction now rides entirely on the arrow and the sign. If both of these go, the figure
+		// says a number changed and refuses to say which way.
+		const good = render(<Delta current={357} previous={298} />)
+		const bad = render(<Delta current={298} previous={357} />)
+		expect(good).toContain('\u2191')
+		expect(bad).toContain('\u2193')
+		expect(good).toContain('+')
+	})
+
+	it('reads the same for a figure where falling is the good outcome', () => {
+		// riseIsGood used to pick a tone that picked a style. It no longer touches the drawing, so
+		// an Unattributed share that falls must look exactly like one that rises.
+		// Percentage points, on the 0-100 scale the panels pass — 26.9% against 31.1%, as the
+		// No-source card shows it.
+		const falling = render(<Delta current={26.9} previous={31.1} unit="percent" riseIsGood={false} />)
+		expect(falling).toContain(COMPARISON)
+		expect(falling).toContain('\u2193')
+	})
+
+	it('never underlines, because a coloured underlined span is a link', () => {
+		// These sit on the same panels as real source links.
+		const bad = render(<Delta current={298} previous={357} />)
+		expect(bad).not.toContain('borderBottom')
+		expect(bad).not.toContain('border-bottom')
+	})
+
+	it('says what a flat move was flat against', () => {
+		const html = render(<Delta current={300} previous={300} />)
+		expect(html).toContain('no change')
+		expect(html).toContain('from 300')
+	})
+
+	it('does not leave an arrow attached to nothing when the percentage is withheld', () => {
+		// Below MIN_DELTA_BASE the percentage is refused, which is right — but the branch used to
+		// emit "arrow, space, empty, space, from 4".
+		const html = render(<Delta current={7} previous={4} />)
+		expect(html).toContain('too few to rate')
+		expect(html).toContain('from 4')
+	})
+})
+
+describe('a funnel rung measured over fewer days says so', () => {
+	// The only finding in this review that made the tool WRONG rather than confusing. Darden
+	// instrumented view_item on 1 September and tester_engaged on 9 September; on a month range
+	// both rungs counted a fraction of the window and were drawn beside a full-month page_view,
+	// captioned "33.9% of landed" — a 13-day numerator over a 31-day denominator, to one decimal.
+
+	const partialStages = [
+		{ key: 'landed', label: 'Landed', value: 475, conversionFromPrevious: null },
+		{ key: 'viewed', label: 'Viewed a typeface', value: 161, conversionFromPrevious: 0.339, partial: { from: '1 Sep' } },
+		{ key: 'bought', label: 'Purchased', value: 7, conversionFromPrevious: 0.043 },
+	]
+
+	it('refuses the share, because its numerator and denominator cover different windows', () => {
+		const html = render(<FunnelChart stages={partialStages} measurement="independent-totals" />)
+		expect(html).not.toContain('33.9%')
+	})
+
+	it('says which day the count starts from', () => {
+		const html = render(<FunnelChart stages={partialStages} measurement="independent-totals" />)
+		expect(html).toContain('only counted from 1 Sep')
+	})
+
+	it('still shows the count, which is real for the days it covers', () => {
+		const html = render(<FunnelChart stages={partialStages} measurement="independent-totals" />)
+		expect(html).toContain('161')
+	})
+
+	it('draws the bar differently, so the picture carries the caveat too', () => {
+		// A solid bar beside other solid bars asserts they all cover the same days. The sentence
+		// alone leaves the drawing making a claim the text has just withdrawn.
+		const html = render(<FunnelChart stages={partialStages} measurement="independent-totals" />)
+		expect(html).toContain('repeating-linear-gradient')
+	})
+
+	it('leaves a fully measured rung solid', () => {
+		const html = render(<FunnelChart stages={[
+			{ key: 'landed', label: 'Landed', value: 475, conversionFromPrevious: null },
+			{ key: 'viewed', label: 'Viewed a typeface', value: 161, conversionFromPrevious: 0.339 },
+		]} measurement="independent-totals" />)
+		expect(html).not.toContain('repeating-linear-gradient')
+		expect(html).toContain('33.9%')
+	})
+})
+
+describe('the funnel states what a full-width bar means', () => {
+	it('labels the entry rung with the scale rather than restating its position', () => {
+		// "entry step" said the first bar was the first bar. Every bar is a share of this one, and
+		// nothing on the chart said so — which is what turns the rail into a scale.
+		const html = render(<FunnelChart stages={[
+			{ key: 'a', label: 'Landed', value: 2000, conversionFromPrevious: null },
+			{ key: 'b', label: 'Viewed', value: 900, conversionFromPrevious: 0.45 },
+		]} measurement="sequence" />)
+		expect(html).toContain('100%')
+		expect(html).not.toContain('entry step')
+	})
+})
+
+describe('the panel carries a step\'s coverage into the chart', () => {
+	// A mutation that deleted this wiring left the whole suite green: the FunnelChart tests pass a
+	// `partial` prop directly, so nothing checked that JourneyPanel ever sets it. That is the
+	// original defect exactly — the panel discarding the metric's status on the way in — so it gets
+	// a test at the seam rather than on either side of it.
+
+	const withPartial = {
+		approximate: true as const,
+		approximationNote: 'Independent per-step totals, not tracked journeys.',
+		steps: [
+			{ key: 'landed', label: 'Landed', event: 'page_view', count: ok(475), conversionFromPrevious: null },
+			{
+				key: 'viewed',
+				label: 'Viewed a typeface',
+				event: 'view_item',
+				count: partial(161, '2026-09-01', 'Only counted from 2026-09-01, when this event was added'),
+				conversionFromPrevious: 0.339,
+			},
+		],
+		topLandingPages: [],
+		outcomes: [],
+		measurement: 'independent-totals' as const,
+	}
+
+	it('marks the rung rather than drawing it as a full-window count', () => {
+		const html = render(<JourneyPanel data={withPartial as never} />)
+		expect(html).toContain('only counted from 1 Sep')
+	})
+
+	it('does not print a share across two different windows', () => {
+		// 161 over 13 days against 475 over 31. This is the number the panel used to publish.
+		const html = render(<JourneyPanel data={withPartial as never} />)
+		expect(html).not.toContain('33.9%')
+	})
+
+	it('says the date the way a reader would, not as the raw cutover string', () => {
+		const html = render(<JourneyPanel data={withPartial as never} />)
+		expect(html).not.toContain('only counted from 2026-09-01,')
+	})
+})
+
+describe('the legend is drawn in the same ink as the chart', () => {
+	// The reported fault: "the graph legends don't seem to match the graphs". There were three
+	// legends — a coloured swatch per row inside the plot, a second coloured set in the hover card,
+	// and a key underneath drawing ─── ╌╌╌ ▮▮▮ as TEXT GLYPHS inside a muted <Text>. The glyphs
+	// inherited the muted grey, so the key was monochrome while the chart was blue, amber and green.
+
+	const days = ['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-05']
+	const withShortfall = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.8,
+		ga4Sessions: ok(357), orders: ok(2), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), ordersWithTotal: null, vercelDailyUnavailable: false,
+		revenue: ok(0), currency: 'USD', orderStatuses: {},
+		audience: ok(1), audienceGrowth: ok(0), campaigns: [],
+		interpretation: 'x', timelineEvents: [],
+		crossSource: days.map((date, i) => ({
+			date, vercelPageviews: 100 + i * 10, ga4Pageviews: 20 + i * 2, ga4Sessions: 15, orders: 0, revenue: 0,
+		})),
+	}
+
+	it('draws no legend swatch as a text glyph', () => {
+		// The mechanism of the bug. A glyph takes the colour of the text around it; a styled element
+		// takes the colour of the mark.
+		const html = render(<OverviewPanel data={withShortfall as never} />)
+		for (const glyph of ['\u2500\u2500\u2500', '\u254c\u254c\u254c', '\u25ae\u25ae\u25ae']) {
+			expect(html).not.toContain(glyph)
+		}
+	})
+
+	it('keys the dashed line that runs along the top of the shaded area', () => {
+		// It had no entry on any surface. The label was set by the panel and rendered nowhere in the
+		// package, so a reader saw an unexplained dashed line and the only dashed thing the old key
+		// described was "a lossy source" — the available inference was the wrong one.
+		const html = render(<OverviewPanel data={withShortfall as never} />)
+		// The legend's own phrasing. Bare "Seen by GA4" is also a column header in the table below
+		// the chart, so asserting that alone passed even with the legend entry deleted.
+		expect(html).toContain('Seen by GA4 \u2014 the dashed line')
+	})
+
+	it('draws that key in the colour the line is drawn in', () => {
+		const html = render(<OverviewPanel data={withShortfall as never} />)
+		expect(html).toContain(SERIES.ga4Pageviews)
+	})
+
+	it('does not key a comparison that was never drawn', () => {
+		// `previous?.crossSource ?? []` is an empty array, which is truthy — so with no comparison
+		// loaded the chart reported it had one and the key named a mark nothing had drawn. That is
+		// the same class of fault as the monochrome key, pointing the other way.
+		const html = render(<OverviewPanel data={withShortfall as never} />)
+		expect(html).not.toContain('window you are comparing against')
+	})
+
+	it('keys the comparison when there is one', () => {
+		const previous = { ...withShortfall, crossSource: withShortfall.crossSource.map((d) => ({ ...d, vercelPageviews: 90 })) }
+		const html = render(<OverviewPanel data={withShortfall as never} previous={previous as never} />)
+		expect(html).toContain('window you are comparing against')
+		// In the comparison identity, not a fourth grey.
+		expect(html).toContain(COMPARISON)
+	})
+
+	it('leaves the readout slot empty until there is something to read', () => {
+		// It held "Hover the chart to read a day" permanently — an instruction occupying the line
+		// where the data goes, and untrue on touch.
+		const html = render(<OverviewPanel data={withShortfall as never} />)
+		expect(html).not.toContain('Hover the chart to read a day')
+	})
+
+	it('does not tell the reader to use a control that is gone', () => {
+		const html = render(<OverviewPanel data={withShortfall as never} />)
+		expect(html).not.toContain('use the control below')
+	})
+})
+
+describe('a column of dashes says why where it sits', () => {
+	const rows = [
+		{ source: 'google', channel: 'Organic Search', medium: 'organic', campaign: null, sessions: 151, engagedSessions: 96, engagementRate: 0.636, designIndustry: false, unattributed: false },
+	]
+
+	it('explains the empty revenue column when the split could not be made', () => {
+		// The explanation was gated on the SUCCESS case, so in exactly the state where every cell is
+		// a dash there was no explanation on screen — the reason went to `notices` at the foot of the
+		// panel, where it can also be folded behind "N more caveats".
+		const html = render(<AcquisitionPanel data={{
+			totalSessions: 151, designIndustryShare: null, unattributedShare: null,
+			rowsWithheld: false, rowsTruncated: false, rows,
+			splitIsSound: false, actualRevenue: 910, actualOrders: 7, trackedPurchases: 1, shownPurchases: 1,
+			currency: 'USD',
+		} as never} />)
+		expect(html).toContain('Revenue is not split across sources here')
+	})
+
+	it('names the reason, so the two failures are not one message', () => {
+		// No total to divide is a different problem from a total nobody could attribute, and they
+		// call for different things from the reader.
+		const noTotal = render(<AcquisitionPanel data={{
+			totalSessions: 151, designIndustryShare: null, unattributedShare: null,
+			rowsWithheld: false, rowsTruncated: false, rows,
+			splitIsSound: false, actualRevenue: null, actualOrders: null, trackedPurchases: 0, shownPurchases: 0,
+			currency: 'USD',
+		} as never} />)
+		expect(noTotal).toContain('no amount for this period')
+	})
+
+	it('says nothing when the split worked', () => {
+		const html = render(<AcquisitionPanel data={{
+			totalSessions: 151, designIndustryShare: null, unattributedShare: null,
+			rowsWithheld: false, rowsTruncated: false,
+			rows: rows.map((r) => ({ ...r, revenueShare: 1, apportionedRevenue: 910 })),
+			splitIsSound: true, actualRevenue: 910, actualOrders: 7, trackedPurchases: 7, shownPurchases: 7,
+			currency: 'USD',
+		} as never} />)
+		expect(html).not.toContain('Revenue is not split across sources here')
+	})
+})
+
+describe('a caption does not explain a number that is not there', () => {
+	// A sentence about the provenance of a figure, rendered underneath an em-dash, is the clearest
+	// "half-built" signal on the default tab — and these were unconditional.
+
+	const missing = {
+		ga4Pageviews: unavailable('source_error'), vercelPageviews: unavailable('source_error'),
+		shortfallRatio: null, ga4Sessions: unavailable('source_error'),
+		orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: unavailable('source_error'), ordersWithTotal: 0, vercelDailyUnavailable: true,
+		revenue: unavailable('not_applicable'), currency: 'USD', orderStatuses: {},
+		interpretation: '', audience: unavailable('not_applicable'), audienceGrowth: unavailable('not_applicable'),
+		crossSource: [], timelineEvents: [], campaigns: [],
+	}
+
+	it('drops the Vercel caption when Vercel did not answer', () => {
+		const html = render(<OverviewPanel data={missing as never} />)
+		expect(html).not.toContain('from Vercel’s own counter')
+	})
+
+	it('drops the mailing-list caption on a site with no Mailchimp', () => {
+		const html = render(<OverviewPanel data={missing as never} />)
+		expect(html).not.toContain('Everyone subscribed today')
+	})
+
+	it('drops the visitor caption when there is no visitor count', () => {
+		const html = render(<OverviewPanel data={missing as never} />)
+		expect(html).not.toContain('some are bots or the same person twice')
+	})
+
+	it('keeps each caption when its own figure is there', () => {
+		const present = {
+			...missing,
+			vercelPageviews: ok(2356), vercelVisitors: ok(1580),
+			audience: ok(4210), audienceGrowth: ok(108),
+		}
+		const html = render(<OverviewPanel data={present as never} />)
+		expect(html).toContain('from Vercel’s own counter')
+		expect(html).toContain('Everyone subscribed today')
+		expect(html).toContain('some are bots or the same person twice')
 	})
 })
