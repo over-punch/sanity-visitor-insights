@@ -15,7 +15,7 @@
 
 import React from 'react'
 import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ChartData, ContainmentBar, Delta, EstimateDotPlot, ShiftRows, SurvivalLines, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, visuallyHidden, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
+import { ChartData, ContainmentBar, Delta, EstimateDotPlot, RatioFigure, ShiftRows, SurvivalLines, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, visuallyHidden, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import { SEND_WINDOW_DAYS } from '../core/ranges'
 import { describeRank, weeklyRank } from '../core/rank'
@@ -332,30 +332,20 @@ export function OverviewPanel({ data, previous, onBrush }: {
 				<Card padding={3} radius={2} tone="transparent" border>
 					<Stack space={3}>
 						<Label size={1} muted>Average order</Label>
-						{(() => {
-							const average = averageOrderValue(data)
-							const value = metricSortValue(average)
-							if (value === null) return <MetricFigure metric={average} label="Average order value" />
-							return (
-								<Stack space={2}>
-									<div style={figureRow}>
-										<Text size={4}>{formatMoney(value, data.currency ?? null)}</Text>
-									</div>
-									{/* The denominator, not the bare word `partial`.
-									
-									    averageOrderValue already builds "Averaged over the 2 of 7 orders
-									    that carry an amount" — and this card threw it away, printing one
-									    lowercase word instead, because it bypasses MetricFigure to format
-									    currency. A reader could not tell whether $455 was their average
-									    order or the average of two of them. Those are different
-									    businesses, and the tool refuses to rank a typeface on 28 views
-									    while it was happy to state this one unqualified. */}
-									{average.status === 'partial' && average.note && (
-										<Text size={0} muted>{average.note}</Text>
-									)}
-								</Stack>
-							)
-						})()}
+						{/* The same treatment as visitors per order: the denominator is the whole
+						    story here, since at Darden only 2 of 7 orders carry an amount. */}
+						<RatioFigure
+							value={metricSortValue(averageOrderValue(data))}
+							format={(v) => formatMoney(v, data.currency ?? null)}
+							parts={[
+								{ label: 'taken', value: metricSortValue(data.revenue), format: (v) => formatMoney(v, data.currency ?? null) },
+								{ label: 'orders with an amount', value: finiteOrNull(data.ordersWithTotal) },
+							]}
+							unavailable={<MetricFigure metric={averageOrderValue(data)} label="Average order value" />}
+						/>
+						{averageOrderValue(data).status === 'partial' && (averageOrderValue(data) as { note?: string }).note && (
+							<Text size={0} muted>{(averageOrderValue(data) as { note?: string }).note}</Text>
+						)}
 						<Text size={0} muted>
 							{/* The denominator moved into the figure above, where it belongs. This caption
 							    used to carry it in prose as well. */}
@@ -367,11 +357,25 @@ export function OverviewPanel({ data, previous, onBrush }: {
 				<Card padding={3} radius={2} tone="transparent" border>
 					<Stack space={3}>
 						<Label size={1} muted>Visitors per order</Label>
-						<MetricFigure metric={visitorsPerOrder(data)} label="Visitors per order" />
+						{/* Turn it over to see what it is made of.
+						
+						    At seven orders a quarter this is the least trustworthy figure on the tab
+						    and among the most quotable — one more sale moves 337 to 295. The package
+						    withholds a rate below its floor everywhere else, which is right for a rate
+						    nobody asked for and wrong for one they did, because it leaves them nothing.
+						    Showing the counts on the other face lets a reader learn how thin the
+						    arithmetic is for themselves, which lands harder than a caveat they skim. */}
+						<RatioFigure
+							value={metricSortValue(visitorsPerOrder(data))}
+							format={(v) => formatCount(v)}
+							parts={[
+								{ label: 'visitors', value: metricSortValue(data.vercelVisitors) },
+								{ label: 'orders', value: metricSortValue(data.orders) },
+							]}
+							unavailable={<MetricFigure metric={visitorsPerOrder(data)} label="Visitors per order" />}
+						/>
 						<Text size={0} muted>
-							Against Vercel&rsquo;s visitor count, not Google Analytics&rsquo; — dividing by GA4
-							would flatter this by whatever share it is missing. Read it as a ceiling: some of
-							those visitors are crawlers or repeat devices.
+							Vercel&rsquo;s visitor count. A ceiling — some are bots or the same person twice.
 						</Text>
 					</Stack>
 				</Card>
@@ -681,10 +685,23 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								exportValue: (c) => revenuePerThousandSent(c),
 								render: (c) => {
 									const value = revenuePerThousandSent(c)
+									if (value === null) return <Text size={1}>—</Text>
+									// The rate AND its numerator, because the denominator is already a column.
+									//
+									// A card gets a toggle to turn a ratio over and show what it is made of;
+									// a table cannot, without twenty buttons. But a table does not need one:
+									// `Sent` is a column already, so printing the money underneath completes
+									// the arithmetic in place. The reader can see that US$350 per thousand is
+									// US$700 over 2,000 addresses, and judge it.
 									return (
-										<Text size={1}>
-											{value === null ? '—' : formatMoney(value, data.currency ?? null)}
-										</Text>
+										<Stack space={1}>
+											<Text size={1}>{formatMoney(value, data.currency ?? null)}</Text>
+											{c.revenueAfter !== null && c.revenueAfter !== undefined && (
+												<Text size={0} muted>
+													from {formatMoney(c.revenueAfter, data.currency ?? null)}
+												</Text>
+											)}
+										</Stack>
 									)
 								},
 							},

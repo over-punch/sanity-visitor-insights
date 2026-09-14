@@ -57,7 +57,7 @@ vi.mock('sanity', () => ({
 	definePlugin: (definition: unknown) => definition,
 }))
 import visitorInsights from '../index'
-import { ContainmentBar, Delta, EstimateDotPlot, FunnelChart, ShiftRows, SurvivalLines, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, isContainment, splitGrid } from './Figure'
+import { ContainmentBar, Delta, EstimateDotPlot, FunnelChart, RatioFigure, ShiftRows, SurvivalLines, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, isContainment, splitGrid } from './Figure'
 import { holdsPreviousAnswer } from './useReport'
 import { ok, partial, unavailable } from '../types'
 import { UI } from '@liiift-studio/sanity-ui-compat'
@@ -3845,5 +3845,72 @@ describe('SurvivalLines', () => {
 	it('carries a text alternative naming the steps', () => {
 		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
 		expect(html).toContain('Landed, then Viewed, then Tested')
+	})
+})
+
+describe('turning a ratio over', () => {
+	const parts = [
+		{ label: 'visitors', value: 2356 },
+		{ label: 'orders', value: 7 },
+	]
+
+	it('shows the rate by default, with a control to see its counts', () => {
+		const html = render(<RatioFigure value={337} format={(v) => formatCount(v)} parts={parts} />)
+		expect(html).toContain('337')
+		expect(html).toContain('counts')
+		// The parts are not on screen until asked for — the ratio is the headline.
+		expect(html).not.toContain('2,356')
+	})
+
+	it('names what the control will reveal, rather than saying "toggle"', () => {
+		// A reader should know what they will get before pressing; the label is the only thing
+		// telling them.
+		const html = render(<RatioFigure value={337} format={(v) => formatCount(v)} parts={parts} />)
+		expect(html).toContain('Show the counts behind this rate')
+	})
+
+	it('offers no control when the ratio could not be computed', () => {
+		// There is nothing to turn over: the parts are already all there is.
+		const html = render(
+			<RatioFigure value={null} format={(v) => formatCount(v)} parts={parts} unavailable={<span>no orders yet</span>} />,
+		)
+		expect(html).toContain('no orders yet')
+		expect(html).not.toContain('aria-pressed')
+	})
+
+	it('offers no control when a part is missing, so the counts face would lie', () => {
+		const html = render(
+			<RatioFigure value={337} format={(v) => formatCount(v)} parts={[{ label: 'visitors', value: null }, { label: 'orders', value: 7 }]} />,
+		)
+		expect(html).not.toContain('aria-pressed')
+	})
+
+	it('lets each part carry its own format, so money is not counted like people', () => {
+		const html = render(
+			<RatioFigure
+				value={455}
+				format={(v) => `US$${v}`}
+				parts={[{ label: 'taken', value: 910, format: (v) => `US$${v}` }, { label: 'orders', value: 2 }]}
+			/>,
+		)
+		expect(html).toContain('US$455')
+	})
+})
+
+describe('the per-thousand column completes its own arithmetic', () => {
+	it('prints the money the rate came from, since the denominator is already a column', () => {
+		// A card gets a toggle; a table cannot without twenty buttons — but Sent is a column, so
+		// printing the numerator underneath finishes the sum in place.
+		const html = render(<OverviewPanel data={{
+			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+			vercelVisitors: ok(1400), ordersWithTotal: 7, vercelDailyUnavailable: false,
+			revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '',
+			audience: ok(4210), audienceGrowth: ok(12), crossSource: [], timelineEvents: [],
+			campaigns: [{ title: 'Freight release', subject: 'x', sentAt: '2026-08-20T19:00:00+00:00',
+				sent: 2000, opens: 900, clicks: 120, unsubscribed: 3,
+				ordersAfter: 2, revenueAfter: 700, windowDays: 3, windowComplete: true }],
+		} as never} />)
+		expect(html).toContain('from US$700')
 	})
 })

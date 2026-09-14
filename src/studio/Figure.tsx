@@ -1339,6 +1339,80 @@ export function SurvivalLines({
 	)
 }
 
+/**
+ * A ratio you can turn over to see what it is made of.
+ *
+ * At a foundry's volumes a derived rate is the least trustworthy thing on the page and often the
+ * most quotable: "337 visitors per order" reads like a fact, and one more sale moves it to 295. The
+ * package's answer everywhere else is to withhold — a rate below its denominator floor is simply
+ * not printed. That is right for a rate the reader did not ask for and wrong for one they did,
+ * because withholding leaves them with nothing.
+ *
+ * So: show it, and make its basis one click away. The counts face is not a footnote — it is the
+ * same figure told honestly, and a reader who flips it once learns for themselves how thin the
+ * arithmetic is. That is a better lesson than a caveat they skim.
+ *
+ * The toggle is per-card state and deliberately not persisted. It answers "what is this made of"
+ * in the moment; remembering the answer across sessions would leave a reader staring at raw counts
+ * with no memory of asking for them.
+ */
+export function RatioFigure({
+	value,
+	format,
+	parts,
+	size = 4,
+	unavailable,
+}: {
+	/** The ratio itself. Null when it could not be computed. */
+	value: number | null
+	/** How to render the ratio. */
+	format: (value: number) => string
+	/** What it is made of, in reading order: numerator then denominator. */
+	parts: ReadonlyArray<{ label: string; value: number | null; format?: (value: number) => string }>
+	size?: 0 | 1 | 2 | 3 | 4
+	/** Shown in place of the figure when the ratio is null. */
+	unavailable?: React.ReactNode
+}): React.ReactElement {
+	const [showParts, setShowParts] = React.useState(false)
+
+	// Nothing to turn over: if the ratio could not be computed, the parts are what there is.
+	const canToggle = value !== null && parts.every((p) => p.value !== null)
+
+	return (
+		<Stack space={2}>
+			<div style={ratioRow}>
+				{showParts && canToggle
+					? (
+						<Stack space={1}>
+							{parts.map((part) => (
+								<Text key={part.label} size={size > 1 ? 2 : size}>
+									{(part.format ?? formatCount)(part.value as number)}{' '}
+									<Text as="span" size={0} muted>{part.label}</Text>
+								</Text>
+							))}
+						</Stack>
+					)
+					: value === null
+						? unavailable
+						: <Text size={size}>{format(value)}</Text>}
+				{canToggle && (
+					<button
+						type="button"
+						style={ratioToggle}
+						aria-pressed={showParts}
+						// Named for what it reveals, not "toggle": a reader should know what they will
+						// get before pressing, and the label is the only thing telling them.
+						aria-label={showParts ? 'Show the rate' : 'Show the counts behind this rate'}
+						onClick={() => setShowParts((was) => !was)}
+					>
+						{showParts ? 'rate' : 'counts'}
+					</button>
+				)}
+			</div>
+		</Stack>
+	)
+}
+
 /** Props for SortableTable. */
 export interface SortableTableProps<Row> {
 	caption: string
@@ -1809,6 +1883,28 @@ const shiftNow: React.CSSProperties = {
 
 /** The key beneath the survival chart. Dash patterns, because position alone does not name a line. */
 const survivalLegend: React.CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap' }
+
+/** A ratio and its toggle, sharing a baseline. */
+const ratioRow: React.CSSProperties = {
+	display: 'flex',
+	alignItems: 'baseline',
+	gap: 10,
+	flexWrap: 'wrap',
+}
+
+/** The control that turns a ratio over. Quiet: it is an affordance, not a finding. */
+const ratioToggle: React.CSSProperties = {
+	appearance: 'none',
+	background: 'transparent',
+	border: '1px solid var(--card-border-color, rgba(128,128,128,0.3))',
+	borderRadius: 3,
+	color: 'inherit',
+	font: 'inherit',
+	fontSize: '0.72em',
+	padding: '1px 7px',
+	cursor: 'pointer',
+	opacity: 0.75,
+}
 
 /** The filter box. */
 const filterInput: React.CSSProperties = {
