@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { GROUNDS, MARKS, REGION_ALPHA, SERIES, composite, contrast, luminance, mark, seriesFill, type SeriesKey , baseHex } from './palette'
+import { COMPARISON, COMPARISON_ON_DARK, COMPARISON_ON_LIGHT, GROUNDS, MARKS, REGION_ALPHA, SERIES, composite, contrast, luminance, mark, seriesFill, type SeriesKey , baseHex } from './palette'
 
 /** Simulate how a colour appears to a dichromat, via the standard LMS projection. */
 function simulate(hex: string, kind: 'deuteranopia' | 'protanopia'): [number, number, number] {
@@ -195,5 +195,40 @@ describe('every mark clears contrast AS DRAWN, not as declared', () => {
 		expect(composite('#000000', 1, '#ffffff')).toBe('#000000')
 		expect(composite('#000000', 0, '#ffffff')).toBe('#ffffff')
 		expect(composite('#ffffff', 0.5, '#000000')).toBe('#808080')
+	})
+})
+
+describe('the comparison identity is legible as text, not only as a mark', () => {
+	// The registry's floor is 3:1, which is the rule for a graphical object. The same colour is worn
+	// by the deltas, their baselines, the toggle label and the sentence naming the window — all
+	// small text, which WCAG 1.4.3 holds to 4.5:1. The first version of this work reasoned about it
+	// as a mark throughout and shipped 4.29:1 on text.
+
+	it('cannot reach the text floor on both grounds with one colour, which is why there is a pair', () => {
+		// Not an opinion: for this pair of grounds the best a single colour can do on both at once is
+		// 4.285:1, reached when the two contrasts are equal. This pins the reason the pair exists so
+		// nobody collapses it back to one.
+		const best = Math.min(contrast(COMPARISON, GROUNDS.light), contrast(COMPARISON, GROUNDS.dark))
+		expect(best).toBeLessThan(4.5)
+		expect(best).toBeGreaterThanOrEqual(3)
+	})
+
+	it('clears 4.5:1 on the ground each half of the pair is chosen for', () => {
+		expect(contrast(COMPARISON_ON_LIGHT, GROUNDS.light)).toBeGreaterThanOrEqual(4.5)
+		expect(contrast(COMPARISON_ON_DARK, GROUNDS.dark)).toBeGreaterThanOrEqual(4.5)
+	})
+
+	it('keeps the pair in one hue family, so the identity survives a theme switch', () => {
+		// A reader who flips the Studio's theme must still recognise these as the same thing.
+		const hue = (hex: string) => {
+			const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255) as [number, number, number]
+			const max = Math.max(r, g, b), min = Math.min(r, g, b)
+			if (max === min) return 0
+			const d = max - min
+			const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4
+			return ((h * 60) + 360) % 360
+		}
+		expect(Math.abs(hue(COMPARISON_ON_LIGHT) - hue(COMPARISON_ON_DARK))).toBeLessThan(15)
+		expect(Math.abs(hue(COMPARISON) - hue(COMPARISON_ON_LIGHT))).toBeLessThan(15)
 	})
 })

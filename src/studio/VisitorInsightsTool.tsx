@@ -14,7 +14,7 @@ import { decodeView, mergeIntoHash, type ViewState } from './urlState'
 import type { ReportEnvelope } from '../types'
 import { daysBetween, shiftDays } from '../core/ranges'
 import { NoticeList } from './Figure'
-import { COMPARISON, withAlpha } from './palette'
+import { COMPARISON, COMPARISON_STYLE, COMPARISON_TEXT, withAlpha } from './palette'
 import { Badge } from '@liiift-studio/sanity-ui-compat'
 import { AcquisitionPanel, DataHealthPanel, JourneyPanel, OverviewPanel, TypefaceInterestPanel } from './panels'
 
@@ -129,12 +129,15 @@ function basisButton(selected: boolean): React.CSSProperties {
 		background: selected ? withAlpha(COMPARISON, 0.12) : 'transparent',
 		border: `1px ${selected ? 'solid' : 'dashed'} ${selected ? COMPARISON : 'var(--card-border-color, rgba(128,128,128,0.3))'}`,
 		borderRadius: 999,
-		color: selected ? COMPARISON : 'inherit',
+		color: selected ? COMPARISON_TEXT : 'inherit',
 		opacity: selected ? 1 : 0.7,
 		font: 'inherit',
 		fontSize: '0.85em',
 		fontWeight: selected ? 600 : 400,
 		padding: '5px 12px',
+		// Pinned rather than left to emerge from padding and root font size, which is how a target
+		// silently drops under the 24px minimum when someone adjusts either.
+		minHeight: 24,
 		cursor: 'pointer',
 		whiteSpace: 'nowrap',
 	}
@@ -603,7 +606,7 @@ export function ReadyReport({
 					    the two that did render drew the whole report inside a size-0 muted caption.
 					    It compiled, it type-checked, and no test mounted this component. */}
 					{envelope.comparison && COMPARED_TABS.includes(tabId) && (
-						<Text size={0} style={{ color: COMPARISON }}>
+						<Text size={0} style={{ color: COMPARISON_TEXT }}>
 							Changes are against {envelope.comparison.range.start} to {envelope.comparison.range.end},
 							{/* Named, not implied. Once the baseline can be chosen, a sentence that says
 							    only "the equivalent window" leaves the reader to work out which one is in
@@ -670,11 +673,14 @@ function BasisSelector({
 	value: 'previous-period' | 'same-period-last-year'
 	onChange: (value: 'previous-period' | 'same-period-last-year') => void
 }): React.ReactElement {
+	// `group`, not `radiogroup`. A radiogroup has to own role="radio" children with aria-checked and
+	// roving arrow-key focus; these are toggle buttons with a text label beside them, and claiming
+	// the stronger role told a screen reader to expect navigation that does not exist.
 	return (
-		<div style={controlRow} role="radiogroup" aria-label="Comparison basis">
+		<div style={controlRow} role="group" aria-label="Comparison basis">
 			{/* Not muted: this label is the head of the comparison identity, and every delta on the
 			    panel is drawn in the same colour. */}
-			<Text size={0} style={{ color: COMPARISON }}>Compared with</Text>
+			<Text size={0} style={{ color: COMPARISON_TEXT }}>Compared with</Text>
 			{/* Plain buttons for the same reason the range selector uses them: the compat shim's DOM
 			    fallback does not forward `text`, so the UI kit's Button renders as a blank box. */}
 			<button
@@ -973,6 +979,10 @@ export function VisitorInsightsTool(props: VisitorInsightsToolComponentProps): R
 		// several tabs open hears which site's figures these are, without the heading repeating
 		// what the Studio navigation already says.
 		<Container width={4} padding={4} as="section" aria-label={siteLabel ? `Visitor insights for ${siteLabel}` : 'Visitor insights'}>
+			{/* Defines --vi-comparison once for the whole tool. It carries a per-theme pair where the
+			    browser supports light-dark(), and every use site carries the balanced colour as a
+			    var() fallback, so this element failing to render degrades rather than breaks. */}
+			<style>{COMPARISON_STYLE}</style>
 			<Stack space={5}>
 				<Flex align="flex-start" justify="space-between" gap={4} wrap="wrap">
 					{/* No site name. The tool is mounted inside that site's own Studio, which already

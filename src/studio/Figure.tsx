@@ -11,7 +11,7 @@
 
 import React, { useRef, useState } from 'react'
 import { Badge, Box, Card, Flex, Heading, Stack, Text, Tooltip } from '@liiift-studio/sanity-ui-compat'
-import { COMPARISON, SERIES, mark } from './palette'
+import { COMPARISON_TEXT, SERIES, mark } from './palette'
 import type { MetricValue, UnavailableReason } from '../types'
 import { valueOrNull } from '../types'
 
@@ -209,7 +209,7 @@ function deltaStyle(): React.CSSProperties {
 		fontFamily: 'inherit',
 		fontSize: '0.8em',
 		fontWeight: 500,
-		color: COMPARISON,
+		color: COMPARISON_TEXT,
 		whiteSpace: 'nowrap',
 	}
 }
@@ -220,7 +220,7 @@ function deltaStyle(): React.CSSProperties {
  * Same colour, one step down in weight. Weight alone separates "the move" from "what it moved from"
  * without breaking the identity or dropping below the contrast floor.
  */
-const baselineStyle: React.CSSProperties = { color: COMPARISON, fontWeight: 400 }
+const baselineStyle: React.CSSProperties = { color: COMPARISON_TEXT, fontWeight: 400 }
 
 /** Gap between the crosshair and the card, on whichever side it lands. */
 const HOVER_GUTTER = 14
@@ -706,7 +706,7 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
 				return (
 					<li key={stage.key} style={funnelItem}>
 						{previous && gapLabel(delta, measurement, entry) !== '' && (
-							<div style={funnelGapStyle(measurement === 'sequence')}>
+							<div style={funnelGapStyle(measurement === 'sequence' && delta > 0 && entry > 0)}>
 								{/* Drawn on the SAME RAIL as the stage bars, and that is the whole point.
 								
 								    This previously had a rail of its own at `width: 38%` with the fill a
@@ -847,8 +847,10 @@ function gapLabel(delta: number, measurement: 'sequence' | 'independent-totals',
 		const share = entry > 0 ? ` — ${formatPercent(delta / entry, 0)} of everyone who landed` : ''
 		return `−${formatCount(delta)} did not continue${share}`
 	}
-	// A closed funnel cannot grow. Reaching here means a tracked sequence reported a rung larger
-	// than the one above it, which is a fact about the data worth stating.
+	// A rung larger than the one above it. Under independent totals that is the fallback's
+	// characteristic surprise — add_to_cart can exceed page_view — and the guard above routes it
+	// here deliberately. Under a tracked sequence it should be impossible, which makes it worth
+	// stating either way.
 	return `${formatCount(-delta)} more — not a subset of the step above`
 }
 
@@ -1451,6 +1453,8 @@ export function SurvivalLines({
 	// Hover state is the step index, not a coordinate — the same shape the timeline settled on, and
 	// the reason positioning needs no measurement: step i is always i/(n-1) of the width.
 	const [active, setActive] = React.useState<number | null>(null)
+	// Whether the current reading was reached by keyboard, which decides if the legend announces.
+	const [steppedByKey, setSteppedByKey] = React.useState(false)
 
 	if (segments.length < 2 || stepLabels.length < 2) return null
 
@@ -1587,13 +1591,15 @@ export function SurvivalLines({
 					<button
 						key={label}
 						type="button"
-						style={survivalTick(i === active)}
+						style={survivalTick(i === active, i, stepLabels.length)}
 						aria-pressed={i === active}
-						onMouseEnter={() => setActive(i)}
+						onMouseEnter={() => { setSteppedByKey(false); setActive(i) }}
 						onMouseLeave={() => setActive(null)}
-						onFocus={() => setActive(i)}
+						onFocus={() => { setSteppedByKey(true); setActive(i) }}
 						onBlur={() => setActive(null)}
-						onClick={() => setActive(i === active ? null : i)}
+						// No onClick. `onFocus` already fires on mousedown and on tap, so a click handler
+						// that toggled saw the step it had just selected and cleared it — the pointer and
+						// touch paths turned the readout on and immediately off again.
 					>
 						{label}
 					</button>
@@ -1601,7 +1607,10 @@ export function SurvivalLines({
 			</div>
 			{/* The legend carries the value when a step is active, rather than a second row appearing
 			    beneath it saying the same segment names again. */}
-			<div style={survivalLegend} aria-live="polite">
+			{/* Live only while the reader is stepping with the keyboard. Left permanently polite, the
+			    region holds the segment NAMES as well as their figures, so every pointer move
+			    re-announced the whole key — the same trap CrossSourceTimeline documents. */}
+			<div style={survivalLegend} aria-live={steppedByKey ? 'polite' : 'off'}>
 				{lines.map(({ segment, shares, colour }) => {
 					const share = active === null ? null : shares[active]
 					return (
@@ -2204,7 +2213,7 @@ const shiftNow: React.CSSProperties = {
 	background: mark('shift.now'),
 }
 
-/** The key beneath the survival chart. Dash patterns, because position alone does not name a line. */
+/** The key beneath the survival chart: a colour swatch per segment, carrying the read step's share. */
 const survivalLegend: React.CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap' }
 
 /** Room to the left of the plot for the y labels, which sit outside the viewBox. */
@@ -2212,10 +2221,10 @@ const survivalFrame: React.CSSProperties = { paddingLeft: 34, position: 'relativ
 
 /** The x axis: one tick per step, spread across the same width the plot uses. */
 const survivalAxis: React.CSSProperties = {
-	display: 'flex',
-	justifyContent: 'space-between',
-	gap: 4,
-	paddingLeft: 34,
+	position: 'relative',
+	// Reserves the row's height, since the ticks inside it are positioned.
+	height: 30,
+	marginLeft: 34,
 }
 
 /**
@@ -2224,9 +2233,24 @@ const survivalAxis: React.CSSProperties = {
  * A button, not a label, because it is simultaneously the axis text, the hover target and the
  * keyboard route into the readout — and at that size it clears the 24px target minimum, which the
  * line itself never could.
+ *
+ * Positioned, not flexed. Equal-width flex items centre tick i at `(i + 0.5) / n`, while the plot
+ * puts vertex i at `i / (n - 1)` — an 8.3% offset at both ends of a six-step funnel, with the first
+ * label sitting to the right of the vertex it names. That is the same legend-does-not-match-the-
+ * graph fault this work set out to remove, so the ticks are anchored to the vertex positions
+ * instead and the end two are pulled inside the box rather than hanging off it.
+ *
+ * @param activeTick - whether this step is the one being read
+ * @param index - the step's position
+ * @param count - how many steps there are
  */
-function survivalTick(activeTick: boolean): React.CSSProperties {
+function survivalTick(activeTick: boolean, index: number, count: number): React.CSSProperties {
+	const at = count > 1 ? (index / (count - 1)) * 100 : 50
 	return {
+		position: 'absolute',
+		left: `${at}%`,
+		// The ends align to the plot edge; everything between is centred on its vertex.
+		transform: index === 0 ? 'none' : index === count - 1 ? 'translateX(-100%)' : 'translateX(-50%)',
 		appearance: 'none',
 		background: 'transparent',
 		border: 'none',
@@ -2236,11 +2260,10 @@ function survivalTick(activeTick: boolean): React.CSSProperties {
 		font: 'inherit',
 		fontSize: '0.72em',
 		fontWeight: activeTick ? 600 : 400,
-		padding: '6px 2px',
+		padding: '6px 4px',
 		minHeight: 24,
 		cursor: 'pointer',
-		textAlign: 'center',
-		flex: '1 1 0',
+		whiteSpace: 'nowrap',
 	}
 }
 

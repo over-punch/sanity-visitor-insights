@@ -3918,8 +3918,22 @@ describe('SurvivalLines', () => {
 	it('labels the scale the lines are read against', () => {
 		// Two grey rules were drawn at 100% and 50% and said so only in a code comment.
 		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
-		expect(html).toContain('100%')
-		expect(html).toContain('50%')
+		// Scoped past the svg, whose own style attribute contains "width:100%" — asserting the bare
+		// string passed with the labels deleted.
+		const afterPlot = html.slice(html.indexOf('</svg>'))
+		expect(html.slice(0, html.indexOf('<svg'))).toContain('>100%<')
+		expect(html).toContain('>50%<')
+		expect(afterPlot.length).toBeGreaterThan(0)
+	})
+
+	it('puts each step label under the vertex it names', () => {
+		// Equal-width flex items centre tick i at (i + 0.5) / n while the plot puts vertex i at
+		// i / (n - 1) — an 8.3% offset at both ends of a six-step funnel, with the first label to
+		// the right of the point it names. That is the fault this whole pass exists to remove.
+		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
+		expect(html).toContain('left:0%')
+		expect(html).toContain('left:50%')
+		expect(html).toContain('left:100%')
 	})
 
 	it('keeps its type out of the stretched coordinate space', () => {
@@ -4255,8 +4269,9 @@ describe('the legend is drawn in the same ink as the chart', () => {
 		const previous = { ...withShortfall, crossSource: withShortfall.crossSource.map((d) => ({ ...d, vercelPageviews: 90 })) }
 		const html = render(<OverviewPanel data={withShortfall as never} previous={previous as never} />)
 		expect(html).toContain('window you are comparing against')
-		// In the comparison identity, not a fourth grey.
-		expect(html).toContain(COMPARISON)
+		// The SWATCH, in the identity. Asserting the bare hex passed regardless of what the swatch
+		// was painted, because Delta emits the same hex elsewhere in this render.
+		expect(html).toContain(mark('chart.ghost'))
 	})
 
 	it('leaves the readout slot empty until there is something to read', () => {

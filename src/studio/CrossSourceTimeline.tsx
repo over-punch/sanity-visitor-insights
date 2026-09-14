@@ -1370,7 +1370,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						/>
 					</>
 				)}
-				{series.some((row) => row.comparison) && (
+				{series.some((row) => (row.comparison?.length ?? 0) > 1) && (
 					<LegendKey
 						swatch={<span style={legendDash(mark('chart.ghost'))} />}
 						label="The same days in the window you are comparing against"
@@ -1378,7 +1378,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 				)}
 				{markers.length > 0 && (
 					<LegendKey
-						swatch={<span style={legendRule(mark('chart.grid'))} />}
+						swatch={<span style={legendMarker} />}
 						label="Dashed rules with a dot mark campaign sends"
 					/>
 				)}
@@ -1447,17 +1447,21 @@ function legendBlock(fill: string, edge: string): React.CSSProperties {
 }
 
 /**
- * A vertical rule swatch, for the campaign markers.
+ * The campaign-marker swatch: a dashed rule with the dot that sits on top of it.
  *
- * @param colour - the stroke
+ * Drawn in `currentColor` at the marker's own opacity, because that is what the marker is drawn in
+ * (CrossSourceTimeline's marker path, `stroke="currentColor" opacity={0.5}` with a filled dot at
+ * 0.7). It previously borrowed `chart.grid` — a different colour at 0.18 alpha, around 1.17:1 on a
+ * white card, and with no dot at all under a label that promises one.
  */
-function legendRule(colour: string): React.CSSProperties {
-	return {
-		display: 'inline-block',
-		width: 0,
-		height: 12,
-		borderLeft: `1px dashed ${colour}`,
-	}
+const legendMarker: React.CSSProperties = {
+	display: 'inline-block',
+	position: 'relative',
+	width: 0,
+	height: 12,
+	borderLeft: '1px dashed currentColor',
+	opacity: 0.7,
+	boxShadow: '-2px -6px 0 0 currentColor, -1px -6px 0 0 currentColor',
 }
 
 /**

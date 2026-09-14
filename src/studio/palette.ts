@@ -101,6 +101,42 @@ export function withAlpha(hex: string, alpha: number): string {
  */
 export const COMPARISON = '#8368D4'
 
+/**
+ * The comparison colour as TEXT, which needs a higher floor than a mark does.
+ *
+ * `COMPARISON` is balanced to sit as well as possible on both grounds at once, and 4.285:1 is the
+ * arithmetic ceiling for that: make it lighter and the white card fails, darker and the dark card
+ * does. That clears the 3:1 a graphical object needs, and it is what every comparison MARK uses.
+ *
+ * But the identity is also worn by the deltas, their baselines, the toggle's label and the sentence
+ * naming the window — all of them small text, which WCAG 1.4.3 holds to 4.5:1. No single colour can
+ * reach that on both grounds, so text gets a pair, one per ground, and the browser picks.
+ *
+ * `light-dark()` resolves against the used `color-scheme`, which Studio sets. Where it is not
+ * supported the custom property never gets its second definition and the `var()` fallback applies —
+ * so the worst case is exactly the balanced colour, which is where this started. Nothing regresses;
+ * the common case simply gets 5.95:1 on the light card and 7.00:1 on the dark one.
+ */
+export const COMPARISON_TEXT = `var(--vi-comparison, ${COMPARISON})`
+
+/** The text pair. Same hue family as COMPARISON, so the identity survives the theme switch. */
+export const COMPARISON_ON_LIGHT = '#6A4FC4'
+export const COMPARISON_ON_DARK = '#A594E8'
+
+/**
+ * The stylesheet that defines `--vi-comparison`, rendered once by the tool.
+ *
+ * A custom property rather than an inline style because an inline style cannot carry a fallback
+ * declaration: React sets one value per key, so an unsupported `light-dark()` would be dropped and
+ * the text would fall back to `currentColor` — losing the identity rather than degrading it.
+ */
+export const COMPARISON_STYLE = `
+:root { --vi-comparison: ${COMPARISON}; }
+@supports (color: light-dark(#000, #fff)) {
+	:root { --vi-comparison: light-dark(${COMPARISON_ON_LIGHT}, ${COMPARISON_ON_DARK}); }
+}
+`.trim()
+
 /** The grounds a colour has to work on: Sanity's light card and its dark one. */
 export const GROUNDS = { light: '#ffffff', dark: '#13141b' } as const
 

@@ -15,7 +15,7 @@
 
 import React from 'react'
 import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ChartData, ContainmentBar, Delta, formatDay, EstimateDotPlot, RatioFigure, ShiftRows, SurvivalLines, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, visuallyHidden, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
+import { ChartData, ContainmentBar, Delta, formatDay, EstimateDotPlot, RatioFigure, ShiftRows, SurvivalLines, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import { SEND_WINDOW_DAYS } from '../core/ranges'
 import { describeRank, weeklyRank } from '../core/rank'
@@ -119,27 +119,7 @@ const figureRow: React.CSSProperties = {
 /** The segment control: one row of options, wrapping on a narrow pane. */
 const segmentRow: React.CSSProperties = { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }
 
-/** Column head in the segment table. Quiet, because the step names are the content. */
-const segmentHeadCell: React.CSSProperties = {
-	textAlign: 'left',
-	fontSize: '0.78em',
-	letterSpacing: '0.06em',
-	textTransform: 'uppercase',
-	fontWeight: 500,
-	opacity: 0.7,
-	padding: '8px 12px',
-	borderBottom: '1px solid var(--card-border-color, rgba(128,128,128,0.3))',
-	whiteSpace: 'nowrap',
-}
 
-/** A cell in the segment table. */
-const segmentRowCell: React.CSSProperties = {
-	textAlign: 'left',
-	fontWeight: 400,
-	padding: '8px 12px',
-	borderBottom: '1px solid var(--card-border-color, rgba(128,128,128,0.18))',
-	verticalAlign: 'baseline',
-}
 
 const sourceLink: React.CSSProperties = {
 	color: 'inherit',
@@ -265,7 +245,7 @@ export function OverviewPanel({ data, previous, onBrush }: {
 							<MetricFigure metric={metricOr(data.vercelPageviews, OLDER_ROUTE)} label="Pageviews" />
 							<Delta current={metricSortValue(data.vercelPageviews)} previous={metricSortValue(previous?.vercelPageviews)} />
 						</div>
-						{data.vercelPageviews?.status === 'ok' && (
+						{data.vercelPageviews?.status !== 'unavailable' && (
 							<Text size={0} muted>Pageviews, from Vercel’s own counter.</Text>
 						)}
 					</Stack>
@@ -317,7 +297,7 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								)
 							})()}
 						</div>
-						{data.audience?.status === 'ok' && (
+						{data.audience?.status !== 'unavailable' && (
 							<Text size={0} muted>
 								Everyone subscribed today, not just this period. Mailchimp&rsquo;s own count, so it is
 								not consent-gated or blockable.
@@ -380,7 +360,7 @@ export function OverviewPanel({ data, previous, onBrush }: {
 							]}
 							unavailable={<MetricFigure metric={visitorsPerOrder(data)} label="Visitors per order" />}
 						/>
-						{data.vercelVisitors?.status === 'ok' && (
+						{data.vercelVisitors?.status !== 'unavailable' && (
 							<Text size={0} muted>
 								Vercel&rsquo;s visitor count. A ceiling — some are bots or the same person twice.
 							</Text>
@@ -396,8 +376,8 @@ export function OverviewPanel({ data, previous, onBrush }: {
 					    alternative had escaped from a code comment into the UI. What the reader needs
 					    is how to read the chart, not why it was drawn this way. */}
 					<Text size={1} muted>
-						Each row has its own scale. Hover a day to see what each
-						source saw of it.
+						Each row has its own scale, so the rows cannot be compared by height — only by
+						shape.
 					</Text>
 					<CrossSourceTimeline
 						onBrush={onBrush}
@@ -788,7 +768,6 @@ function Verdict({ data, previous }: { data: MeasurementHealthData; previous?: M
 	say('Orders', data.orders, previous?.orders, 'count')
 	say('Traffic', data.vercelPageviews, previous?.vercelPageviews, 'count')
 
-	const sends = data.campaigns?.length ?? 0
 	// Not a verdict clause. That you sent an email is not a finding — you sent it — and it was
 	// occupying a slot in the one line the reader is meant to act on. The campaigns table below
 	// says how many, and the timeline marks when.
@@ -1627,10 +1606,10 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 			    arriving through the back door with more implied precision. */}
 			{/* The shape first, the numbers behind a disclosure.
 			
-			    SegmentTable answers "how many" precisely and "where does it break" slowly — fifteen
-			    cells the reader has to hold in their head. The lines answer the second question at a
-			    glance and the table is still one click away, which is the right order for someone
-			    with five minutes. */}
+			    A table answers "how many" precisely and "where does it break" slowly — fifteen cells
+			    the reader has to hold in their head. The lines answer the second question at a glance
+			    and the figures are still one click away, which is the right order for someone with
+			    five minutes. */}
 			<SurvivalLines
 				segments={segments.map((segment) => ({
 					key: segment.key,
@@ -1665,7 +1644,7 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 							const cell = segment.steps.find((s) => s.key === step.key)
 							const count = metricSortValue(cell?.count)
 							if (count === null) return '—'
-							// The rate AND its denominator, as SegmentTable carried them. Dropping the
+							// The rate AND its denominator. Dropping the
 							// denominator here would reinstate the bare two-decimal rate the segment
 							// buttons used to print — the claim spread() refuses, through the back door.
 							const index = spine.findIndex((sp) => sp.key === step.key)
