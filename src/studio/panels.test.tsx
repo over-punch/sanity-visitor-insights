@@ -39,7 +39,6 @@ import {
 	coverageOf,
 	firstStepRate,
 	gapOf,
-	channelMix,
 	rankLine,
 	revenueCoversEveryOrder,
 	revenuePerThousandSent,
@@ -57,7 +56,7 @@ vi.mock('sanity', () => ({
 	definePlugin: (definition: unknown) => definition,
 }))
 import visitorInsights from '../index'
-import { ContainmentBar, Delta, EstimateDotPlot, FunnelChart, RatioFigure, ShiftRows, SurvivalLines, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, isContainment, splitGrid } from './Figure'
+import { ContainmentBar, Delta, EstimateDotPlot, FunnelChart, RatioFigure, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, isContainment, splitGrid } from './Figure'
 import { holdsPreviousAnswer } from './useReport'
 import { ok, partial, unavailable } from '../types'
 import { UI } from '@liiift-studio/sanity-ui-compat'
@@ -77,6 +76,21 @@ const theme = (require('@sanity/ui/theme') as { buildTheme: () => unknown }).bui
  * Render an element to markup inside a theme, failing loudly rather than producing nothing.
  * Static markup needs no DOM, so this runs anywhere the unit tests do.
  */
+/**
+ * One rung of the funnel, by label.
+ *
+ * Scoped to the `<ol>` the funnel draws into. Splitting the whole document on `<li` puts the entire
+ * panel above the chart into index 0 — including a segment table whose column headers repeat every
+ * rung's name, so a naive `.find()` matched the table and asserted nothing about the chart.
+ *
+ * @param html - the rendered panel
+ * @param label - the rung's label
+ */
+function funnelRung(html: string, label: string): string {
+	const list = html.slice(html.lastIndexOf('<ol '))
+	return list.split('<li').slice(1).find((rung) => rung.includes(label)) ?? ''
+}
+
 function render(element: React.ReactElement): string {
 	const html = renderToStaticMarkup(<ThemeProvider theme={theme}>{element}</ThemeProvider>)
 	expect(html.length).toBeGreaterThan(0)
@@ -3774,225 +3788,8 @@ describe('three estimates of one number, on one axis', () => {
 	})
 })
 
-describe('channelMix', () => {
-	const row = (channel: string, sessions: number) => ({
-		source: `${channel}.example`, channel, medium: null, campaign: null, sessions,
-		engagedSessions: null, engagementRate: null, designIndustry: false, unattributed: false,
-	})
 
-	it('aggregates sources up to channels', () => {
-		const mix = channelMix([row('Referral', 60), row('Referral', 40), row('Organic Search', 90)] as never, undefined)
-		expect(mix.find((c) => c.channel === 'Referral')?.now).toBe(100)
-		expect(mix.find((c) => c.channel === 'Organic Search')?.now).toBe(90)
-	})
 
-	it('pairs each channel with the same channel last period', () => {
-		const mix = channelMix([row('Referral', 100)] as never, [row('Referral', 60)] as never)
-		expect(mix[0]).toMatchObject({ channel: 'Referral', now: 100, before: 60 })
-	})
-
-	it('pools channels too small to read rather than drawing a line made of noise', () => {
-		const mix = channelMix([row('Referral', 100), row('Display', 4), row('Affiliate', 3)] as never, undefined)
-		expect(mix.map((c) => c.channel)).toEqual(['Referral', 'Everything else'])
-		expect(mix.find((c) => c.channel === 'Everything else')?.now).toBe(7)
-	})
-
-	it('keeps a channel that has collapsed, which is the case the chart exists for', () => {
-		// Floored on the CURRENT period alone, a channel that mattered last period and has gone to
-		// two sessions would be pooled away — deleting the finding.
-		const mix = channelMix([row('Referral', 2)] as never, [row('Referral', 200)] as never)
-		expect(mix.find((c) => c.channel === 'Referral')).toMatchObject({ now: 2, before: 200 })
-	})
-
-	it('shows a channel that has vanished entirely', () => {
-		const mix = channelMix([row('Referral', 100)] as never, [row('Referral', 80), row('Paid Search', 90)] as never)
-		expect(mix.find((c) => c.channel === 'Paid Search')).toMatchObject({ now: 0, before: 90 })
-	})
-
-	it('reports no baseline rather than zero when the previous period was not fetched', () => {
-		// A missing comparison is not a channel that had none. Zero would draw a full-width line.
-		expect(channelMix([row('Referral', 100)] as never, undefined)[0]?.before).toBeNull()
-	})
-
-	it('orders by this period, so the biggest thing is first', () => {
-		const mix = channelMix([row('Referral', 40), row('Organic Search', 120)] as never, undefined)
-		expect(mix[0]?.channel).toBe('Organic Search')
-	})
-})
-
-describe('ShiftRows', () => {
-	const rows = [
-		{ channel: 'Organic Search', now: 120, before: 60 },
-		{ channel: 'Referral', now: 40, before: 80 },
-	]
-
-	it('places the two periods at their own positions on a shared scale', () => {
-		const html = render(<ShiftRows rows={rows} nowLabel="this period" beforeLabel="before" />)
-		const filled = [...html.matchAll(/border-radius:50%;background:rgba\(76, 143, 208, 1\);left:([\d.]+)%/g)].map((m) => Number(m[1]))
-		// 120 is the peak, so it sits at 100%; 40 sits at a third of it.
-		expect(filled[0]).toBeCloseTo(100, 0)
-		expect(filled[1]).toBeCloseTo(33.3, 0)
-	})
-
-	it('draws the connector only where there is a previous period to connect to', () => {
-		const html = render(<ShiftRows rows={[{ channel: 'New', now: 50, before: null }]} nowLabel="a" beforeLabel="b" />)
-		expect(html).not.toContain(mark('shift.link'))
-	})
-
-	it('states both figures in words, since the dots are aria-hidden', () => {
-		const html = render(<ShiftRows rows={rows} nowLabel="this period" beforeLabel="before" />)
-		expect(html).toContain('120')
-		expect(html).toContain('was 60')
-	})
-
-	it('draws nothing when there is nothing to compare', () => {
-		expect(ShiftRows({ rows: [], nowLabel: 'a', beforeLabel: 'b' })).toBeNull()
-	})
-})
-
-describe('SurvivalLines', () => {
-	const steps = ['Landed', 'Viewed', 'Tested']
-	// DIFFERENT entry counts on purpose. With both at 1000, per-segment and shared-peak
-	// normalisation produce identical output, so the fixture could not tell them apart — and the
-	// mutation that switched to a shared peak passed.
-	const segs = [
-		{ key: 'desktop', label: 'Desktop', values: [1000, 400, 100] },
-		{ key: 'mobile', label: 'Mobile', values: [200, 8, 1] },
-	]
-
-	it('normalises each segment to its own entry, so different sizes are comparable', () => {
-		// Desktop and mobile both start at 100% of themselves. The question is what share of the
-		// people who arrived got this far, not how many there were.
-		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
-		const polylines = [...html.matchAll(/points="([^"]+)"/g)].map((m) => m[1])
-		expect(polylines).toHaveLength(2)
-		// Both begin at the top — 100% of their own entry — despite desktop starting at five times
-		// mobile's volume. Against a shared peak, mobile would begin a fifth of the way down.
-		expect(polylines[0]).toMatch(/^0,0 /)
-		expect(polylines[1]).toMatch(/^0,0 /)
-	})
-
-	it('drops a line lower for a segment that loses more of itself', () => {
-		// Mobile keeps 4% at step two against desktop's 40%, so its second point sits further down.
-		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
-		const ys = [...html.matchAll(/points="[^ ]+ [\d.]+,([\d.]+)/g)].map((m) => Number(m[1]))
-		expect(ys[1]).toBeGreaterThan(ys[0] as number)
-	})
-
-	it('stops a line where its denominator runs out rather than drawing a collapse', () => {
-		// Continuing past the floor would assert a fall the sample cannot distinguish from silence.
-		const thin = [
-			{ key: 'desktop', label: 'Desktop', values: [1000, 400, 100] },
-			{ key: 'tablet', label: 'Tablet', values: [40, 5, 1] },
-		]
-		const html = render(<SurvivalLines segments={thin} stepLabels={steps} minDenominator={30} />)
-		const polylines = [...html.matchAll(/points="([^"]+)"/g)].map((m) => (m[1] ?? '').split(' ').length)
-		// Desktop runs the full three steps; tablet stops after two, because 5 is below the floor.
-		expect(polylines[0]).toBe(3)
-		expect(polylines[1]).toBe(2)
-	})
-
-	it('gives every segment its own colour', () => {
-		// Dash pattern used to be the ONLY separator. It was also the channel the old
-		// preserveAspectRatio="none" stretched, and it ran out at three segments — index 2 and
-		// beyond all drew '1 2' and all got the same legend glyph, so two device categories could
-		// render identically under a key claiming they differed.
-		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
-		const strokes = [...html.matchAll(/<polyline[^>]*stroke="([^"]+)"/g)].map((m) => m[1])
-		expect(strokes).toHaveLength(2)
-		expect(new Set(strokes).size).toBe(2)
-	})
-
-	it('draws the plot across the same width its axis labels are laid out across', () => {
-		// The plot and the x-axis ticks are separate elements, so they have to be told to span the
-		// same box. Letting the drawing keep its own aspect letterboxes it — lines in the middle
-		// third, labels across the full width — which is a legend that does not match its graph.
-		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
-		expect(html).toContain('width:100%')
-		// A step's last vertex reaches the right edge of the viewBox, so the final tick sits under it.
-		const points = [...html.matchAll(/points="([^"]+)"/g)].map((m) => m[1] ?? '')
-		const lastX = Number((points[0] ?? '').split(' ').pop()?.split(',')[0])
-		expect(lastX).toBe(320)
-	})
-
-	it('draws the step names it is given, rather than only describing them', () => {
-		// stepLabels was a required prop whose only use was inside the aria-label, so a sighted
-		// reader saw unlabelled lines over unlabelled positions. This is the owner's complaint.
-		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
-		for (const label of steps) expect(html).toContain(`>${label}<`)
-	})
-
-	it('labels the scale the lines are read against', () => {
-		// Two grey rules were drawn at 100% and 50% and said so only in a code comment.
-		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
-		// Scoped past the svg, whose own style attribute contains "width:100%" — asserting the bare
-		// string passed with the labels deleted.
-		const afterPlot = html.slice(html.indexOf('</svg>'))
-		expect(html.slice(0, html.indexOf('<svg'))).toContain('>100%<')
-		expect(html).toContain('>50%<')
-		expect(afterPlot.length).toBeGreaterThan(0)
-	})
-
-	it('puts each step label under the vertex it names', () => {
-		// Equal-width flex items centre tick i at (i + 0.5) / n while the plot puts vertex i at
-		// i / (n - 1) — an 8.3% offset at both ends of a six-step funnel, with the first label to
-		// the right of the point it names. That is the fault this whole pass exists to remove.
-		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
-		expect(html).toContain('left:0%')
-		expect(html).toContain('left:50%')
-		expect(html).toContain('left:100%')
-	})
-
-	it('keeps its type out of the stretched coordinate space', () => {
-		// The plot fills its box by stretching, so a <text> inside the viewBox is stretched with it —
-		// which is how this shipped anamorphic letterforms, in a tool built for a type foundry.
-		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
-		const svg = html.slice(html.indexOf('<svg'), html.indexOf('</svg>'))
-		expect(svg).not.toContain('<text')
-	})
-
-	it('names each segment once, not twice', () => {
-		// A legend row and a readout row both listed the segments while hovering — a second legend
-		// disagreeing with the first is the fault that started this work.
-		// The screen-reader summary names them too, legitimately — this counts only what is drawn.
-		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
-		const visible = html.replace(/aria-label="[^"]*"/g, '')
-		expect(visible.match(/Desktop/g)).toHaveLength(1)
-	})
-
-	it('keys only the segments it actually drew', () => {
-		// The legend used to map over every segment unconditionally, so one that dropped out
-		// immediately got an entry for a line that is not on the chart.
-		const gone = [
-			{ key: 'desktop', label: 'Desktop', values: [1000, 400, 100] },
-			{ key: 'mobile', label: 'Mobile', values: [200, 8, 1] },
-			{ key: 'tv', label: 'Television', values: [0, 0, 0] },
-		]
-		const html = render(<SurvivalLines segments={gone} stepLabels={steps} />)
-		expect(html).toContain('Desktop')
-		expect(html).not.toContain('Television')
-	})
-
-	it('draws nothing with only one segment, which is not a comparison', () => {
-		// Rendered rather than called as a plain function: the component holds hover state now, and
-		// its hook sits above the early return where the rules of hooks require it. Calling a
-		// component directly only ever worked while it had none.
-		// Not via `render`, which asserts non-empty output — the point here is that there IS none.
-		expect(renderToStaticMarkup(<ThemeProvider theme={theme}><SurvivalLines segments={[segs[0]!]} stepLabels={steps} /></ThemeProvider>)).toBe('')
-	})
-
-	it('carries a text alternative that states where each segment ended up', () => {
-		// The old label named the chart and carried no data — it listed the steps and stopped, so a
-		// screen-reader user got the axis and none of the finding.
-		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
-		expect(html).toContain('Landed')
-		expect(html).toContain('Desktop 10%')
-		// Mobile's line stops at step two — 8 is below the denominator floor — so its last stated
-		// share is 4% of the 200 that landed, not a figure for a step it never reached.
-		expect(html).toContain('Mobile 4%')
-		expect(html).toContain('by Viewed')
-	})
-})
 
 describe('turning a ratio over', () => {
 	const parts = [
@@ -4156,7 +3953,7 @@ describe('a funnel rung measured over fewer days says so', () => {
 
 	it('draws no bar, so the picture makes no claim the text has withdrawn', () => {
 		const html = render(<FunnelChart stages={partialStages} measurement="independent-totals" />)
-		const partialRung = html.split('<li').find((r) => r.includes('Viewed a typeface')) ?? ''
+		const partialRung = funnelRung(html, 'Viewed a typeface')
 		expect(partialRung).not.toMatch(/width:\s*\d/)
 	})
 
@@ -4403,8 +4200,7 @@ describe('a part-window rung refuses the encoding, not just the number', () => {
 		// first attempt at refusing — handed the least-measured rung the longest mark on a chart
 		// where length is the value. An empty slot cannot be mis-measured either way.
 		const html = render(<FunnelChart stages={stages} measurement="independent-totals" />)
-		const rungs = html.split('<li')
-		const partialRung = rungs.find((r) => r.includes('Viewed a typeface')) ?? ''
+		const partialRung = funnelRung(html, 'Viewed a typeface')
 		expect(partialRung).not.toMatch(/width:\s*\d/)
 		expect(partialRung).not.toContain('repeating-linear-gradient')
 	})
@@ -4499,42 +4295,6 @@ describe('the comparison identity is delivered, not just declared', () => {
 	})
 })
 
-describe('the survival chart respects the same coverage the funnel does', () => {
-	// The funnel bug, un-fixed one component up the same tab: segment step counts carry `partial`
-	// exactly as the funnel's do, and this chart drew a thirteen-day count as a share of a
-	// thirty-one-day one — as a solid vertex, beside a full-window line — while the funnel forty
-	// lines below refused to print that share at all.
-	const steps = ['Landed', 'Viewed', 'Tested']
-	const segs = [
-		{ key: 'desktop', label: 'Desktop', values: [1000, 400, 100] },
-		{ key: 'mobile', label: 'Mobile', values: [800, 300, 90] },
-	]
-
-	it('draws nothing at all when the window changes at the first step after entry', () => {
-		// Every line would be a single vertex, and a chart of two dots is not a comparison. Drawing
-		// nothing is the honest outcome — the funnel below still lists the steps, and its hatch key
-		// explains why they are not comparable.
-		const html = renderToStaticMarkup(
-			<ThemeProvider theme={theme}>
-				<SurvivalLines segments={segs} stepLabels={steps} partialSteps={[1]} />
-			</ThemeProvider>,
-		)
-		expect(html).toBe('')
-	})
-
-	it('draws the whole line when every step covers the window', () => {
-		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
-		const points = [...html.matchAll(/points="([^"]+)"/g)].map((m) => (m[1] ?? '').split(' ').length)
-		expect(points).toEqual([3, 3])
-	})
-
-	it('draws up to the partial step and no further', () => {
-		const html = render(<SurvivalLines segments={segs} stepLabels={steps} partialSteps={[2]} />)
-		const points = [...html.matchAll(/points="([^"]+)"/g)].map((m) => (m[1] ?? '').split(' ').length)
-		expect(points).toEqual([2, 2])
-	})
-})
-
 describe('the headline revenue figure carries its currency', () => {
 	// The card took the money formatter only on `ok` and fell through to MetricFigure — and so to
 	// the COUNT formatter — for everything else. Revenue on this site is permanently partial,
@@ -4584,6 +4344,9 @@ describe('a withheld rate leaves no element behind', () => {
 	})
 })
 
+/** The colour the funnel gives segment `index`, read from the same registry the chart reads. */
+const segmentColourAt = (index: number) => mark(['survival.line', 'survival.line.2', 'survival.line.3', 'survival.line.4'][index] as string)
+
 describe('the device comparison survives a part-window step', () => {
 	// Cutting every line where the window changes is honest and useless: at Darden the first step
 	// after entry is part-window, so each line became a single vertex and the chart returned null —
@@ -4618,30 +4381,81 @@ describe('the device comparison survives a part-window step', () => {
 		measurement: 'independent-totals' as const,
 	}
 
-	it('still draws both segments', () => {
+	it('still shows both segments', () => {
+		// They subdivide the funnel's own bars now, rather than living in a second chart above it.
 		const html = render(<JourneyPanel data={partialMid as never} />)
-		const strokes = [...html.matchAll(/<polyline[^>]*stroke="([^"]+)"/g)].map((m) => m[1])
-		expect(strokes).toHaveLength(2)
+		expect(html).toContain('Desktop')
+		expect(html).toContain('Mobile')
 	})
 
-	it('leaves the part-window step out of the comparison entirely', () => {
-		// Present in the funnel below, absent from this chart's axis — it cannot join a comparison
-		// whose other points span a different number of days.
+	it('names the two colours it draws them in', () => {
 		const html = render(<JourneyPanel data={partialMid as never} />)
-		const axis = html.slice(0, html.indexOf('Landed</button>') + 40)
-		expect(axis).not.toContain('>Viewed a typeface</button>')
-		// And the funnel still lists it.
-		expect(html).toContain('tracking added 1 Sept')
+		expect(html).toContain(segmentColourAt(0))
+		expect(html).toContain(segmentColourAt(1))
 	})
 
-	it('compares across the steps that do cover the whole window', () => {
+	it('draws no split on a part-window rung, since it draws no bar there either', () => {
+		// The rung keeps its count and its reason; there is simply no bar for a split to subdivide.
 		const html = render(<JourneyPanel data={partialMid as never} />)
-		// Three whole steps are on the axis — Landed, Added to cart, Purchased — but each line stops
-		// after two: the cart counts (18 desktop, 5 mobile) are under the denominator floor, so a
-		// third vertex would be a share computed on single digits. Both refusals compose, and the
-		// comparison that matters — where the two segments separate — is still drawn.
-		const points = [...html.matchAll(/points="([^"]+)"/g)].map((m) => (m[1] ?? '').split(' ').length)
-		expect(points).toEqual([2, 2])
+		const partialRung = funnelRung(html, 'Viewed a typeface')
+		expect(partialRung).not.toContain(segmentColourAt(0))
+		expect(partialRung).toContain('tracking added 1 Sept')
+	})
+
+	it('splits the rungs that do have a bar', () => {
+		const html = render(<JourneyPanel data={partialMid as never} />)
+		const cartRung = funnelRung(html, 'Added to cart')
+		expect(cartRung).toContain(segmentColourAt(0))
+		expect(cartRung).toContain(segmentColourAt(1))
+	})
+})
+
+describe('the headline revenue figure carries its currency', () => {
+	// The card took the money formatter only on `ok` and fell through to MetricFigure — and so to
+	// the COUNT formatter — for everything else. Revenue on this site is permanently partial,
+	// because most orders predate the amount field, so the branch never fired and the tab's headline
+	// money rendered as a bare number beside an "Average order US$455" that did carry one.
+	const base = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), ordersWithTotal: 2, vercelDailyUnavailable: false,
+		currency: 'USD', orderStatuses: {}, interpretation: '',
+		audience: ok(4210), audienceGrowth: ok(108), crossSource: [], timelineEvents: [], campaigns: [],
+	}
+
+	it('writes a partial revenue as money, not as a count', () => {
+		const html = render(<OverviewPanel data={{ ...base, revenue: partial(12346, '', 'over 2 of 7') } as never} />)
+		expect(html).toContain('US$12,346')
+		expect(html).not.toMatch(/>12,346</)
+	})
+
+	it('writes an exact revenue as money too', () => {
+		const html = render(<OverviewPanel data={{ ...base, revenue: ok(910), ordersWithTotal: 7 } as never} />)
+		expect(html).toContain('US$910')
+	})
+})
+
+describe('a withheld rate leaves no element behind', () => {
+	// This was claimed as fixed in a commit message and was not in the diff — the edit silently
+	// matched nothing. `rateLine` returns its own <Text> or null, so the surviving wrapper produced
+	// a Text inside a Text when there was a rate, and an empty Text holding a line of leading under
+	// every rung when there was not.
+	const stages = (values: number[]) => values.map((value, i) => ({
+		key: `s${i}`,
+		label: ['Landed', 'Viewed', 'Tested', 'Added', 'Checkout', 'Bought'][i]!,
+		value,
+		conversionFromPrevious: i === 0 ? null : value / values[i - 1]!,
+	}))
+
+	it('renders no empty text element under a rung whose rate was withheld', () => {
+		const html = render(<FunnelChart stages={stages([1000, 5])} measurement="sequence" />)
+		expect(html).not.toMatch(/data-ui="Text"[^>]*><span><\/span>/)
+	})
+
+	it('does not nest one text element inside another when there is a rate', () => {
+		// A block inside an inline, and two stacked line boxes for one sentence.
+		const html = render(<FunnelChart stages={stages([2000, 900])} measurement="sequence" />)
+		expect(html).not.toMatch(/data-ui="Text"[^>]*><span><div[^>]*data-ui="Text"/)
 	})
 })
 
@@ -4905,5 +4719,77 @@ describe('each capture estimate says which way it is wrong', () => {
 		expect(html).not.toContain('Each is a separate way of asking the same question')
 		// The one fact a per-estimate note cannot carry.
 		expect(html).toContain('The rule marks 100%')
+	})
+})
+
+describe('the funnel names the colours it splits its bars into', () => {
+	// Two colours appeared on the bars when the device split moved into the funnel. Shipping those
+	// without a key would be the exact fault this whole body of work began with — a legend that does
+	// not match its graph, in the other direction.
+	const split = (value: number, d: number, m: number) => ({
+		key: `s${value}`, label: `Step ${value}`, value, conversionFromPrevious: null,
+		segments: [{ key: 'desktop', label: 'Desktop', value: d }, { key: 'mobile', label: 'Mobile', value: m }],
+	})
+
+	it('keys every segment it draws', () => {
+		const html = render(<FunnelChart stages={[split(475, 232, 219), split(23, 18, 5)]} measurement="independent-totals" />)
+		const key = html.slice(html.lastIndexOf('</ol>'))
+		expect(key).toContain('Desktop')
+		expect(key).toContain('Mobile')
+	})
+
+	it('keys no segment it never drew', () => {
+		// A segment GA4 stopped reporting is left out of the split; it must be left out of the key too.
+		const html = render(<FunnelChart stages={[
+			{ key: 'a', label: 'Landed', value: 475, conversionFromPrevious: null,
+			  segments: [{ key: 'desktop', label: 'Desktop', value: 232 }, { key: 'tablet', label: 'Tablet', value: 0 }] },
+		]} measurement="independent-totals" />)
+		const key = html.slice(html.lastIndexOf('</ol>'))
+		expect(key).toContain('Desktop')
+		expect(key).not.toContain('Tablet')
+	})
+
+	it('says nothing when there is no split', () => {
+		const html = render(<FunnelChart stages={[
+			{ key: 'a', label: 'Landed', value: 475, conversionFromPrevious: null },
+		]} measurement="independent-totals" />)
+		const key = html.slice(html.lastIndexOf('</ol>'))
+		expect(key).not.toContain('Desktop')
+	})
+})
+
+describe('a split bar shows what its segments do not account for', () => {
+	// Left as the ordinary fill, the parent bar's own colour showed through wherever the segments
+	// did not reach — so a rung whose two segments sum to 451 of 475 painted the missing 24 in the
+	// FIRST segment's colour, reading as a third segment of it.
+	const stage = {
+		key: 'landed', label: 'Landed', value: 475, conversionFromPrevious: null,
+		segments: [{ key: 'desktop', label: 'Desktop', value: 232 }, { key: 'mobile', label: 'Mobile', value: 219 }],
+	}
+
+	it('draws the leftover in the neutral, not in a segment colour', () => {
+		const html = render(<FunnelChart stages={[stage]} measurement="independent-totals" />)
+		const rung = funnelRung(html, 'Landed')
+		expect(rung).toContain(mark('bar.track'))
+	})
+
+	it('does not let the parent fill stand in for a segment', () => {
+		const html = render(<FunnelChart stages={[stage]} measurement="independent-totals" />)
+		const rung = funnelRung(html, 'Landed')
+		expect(rung).toContain('background:transparent')
+	})
+
+	it('draws no leftover when the segments account for the whole rung', () => {
+		const whole = { ...stage, segments: [{ key: 'desktop', label: 'Desktop', value: 256 }, { key: 'mobile', label: 'Mobile', value: 219 }] }
+		const html = render(<FunnelChart stages={[whole]} measurement="independent-totals" />)
+		const rung = funnelRung(html, 'Landed')
+		expect(rung).not.toContain(mark('bar.track') + ';height:100%')
+	})
+
+	it('leaves an unsplit rung filled as before', () => {
+		// Asserted on the FILL colour rather than the absence of `transparent`, which the rung's own
+		// container also sets.
+		const html = render(<FunnelChart stages={[{ key: 'a', label: 'Landed', value: 475, conversionFromPrevious: null }]} measurement="independent-totals" />)
+		expect(funnelRung(html, 'Landed')).toContain(mark('bar.fill'))
 	})
 })

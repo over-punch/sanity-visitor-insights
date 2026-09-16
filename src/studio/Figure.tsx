@@ -602,6 +602,19 @@ export interface FunnelStage {
 	 * that stripped it, and it is the most quoted number on the tab.
 	 */
 	partial?: { from: string }
+	/**
+	 * This rung split by audience segment, in a stable order across rungs.
+	 *
+	 * The bar's WIDTH is unchanged — still this rung's share of the entry step — and the split
+	 * subdivides that width. So a segment collapsing reads as its portion shrinking down the column,
+	 * against a total that stays honestly anchored to entry.
+	 *
+	 * This replaces a second chart. `SurvivalLines` drew the same segments as normalised shares on
+	 * its own axis, above a funnel drawing the pooled counts: two pictures of one fact, and the
+	 * share-only one could not print a count, which at rungs of 23 and 12 and 7 is the only fact
+	 * that survives. Its denominator floor also silenced it at exactly those rungs.
+	 */
+	segments?: ReadonlyArray<{ key: string; label: string; value: number }>
 }
 
 /** Props for FunnelChart. */
@@ -638,6 +651,55 @@ export function formatDay(iso: string): string {
 	const date = new Date(`${iso}T00:00:00Z`)
 	if (Number.isNaN(date.getTime())) return iso
 	return `${date.getUTCDate()} ${date.toLocaleString('en-GB', { month: 'short', timeZone: 'UTC' })}`
+}
+
+/**
+ * The colour for one audience segment.
+ *
+ * Colour, not pattern. The chart this came from separated its lines by dash alone, which ran out at
+ * three segments and was distorted by the stretched viewBox it was drawn in. The keys are borrowed
+ * from the series palette because they already clear 3:1 on both grounds; they carry no source
+ * meaning here, and the key beneath the funnel states which is which.
+ *
+ * @param index - the segment's position in the stack
+ */
+function segmentColour(index: number): string {
+	const names = ['survival.line', 'survival.line.2', 'survival.line.3', 'survival.line.4']
+	return mark(names[index % names.length] as string)
+}
+
+/**
+ * The segments present anywhere in the funnel, in first-seen order.
+ *
+ * Read off the stages rather than passed in, so the key cannot name a segment no rung draws — the
+ * failure this package keeps finding in its own legends.
+ *
+ * @param stages - the rungs
+ */
+function segmentKeys(stages: readonly FunnelStage[]): Array<{ key: string; label: string }> {
+	const seen = new Map<string, string>()
+	for (const stage of stages) {
+		for (const segment of stage.segments ?? []) {
+			if (segment.value > 0 && !seen.has(segment.key)) seen.set(segment.key, segment.label)
+		}
+	}
+	return [...seen].map(([key, label]) => ({ key, label }))
+}
+
+/**
+ * One segment's share of the rung it sits in.
+ *
+ * Clamped at the bottom only. A segment larger than the rung it belongs to is a real disagreement
+ * between two GA4 queries rather than a rendering problem, and letting the row overflow its track
+ * would hide it — so the shares are normalised by their own sum when they exceed the whole, which
+ * keeps the bar's length truthful and lets the imbalance show as a changed proportion.
+ *
+ * @param value - the segment's count
+ * @param whole - the rung's count
+ */
+function segmentShare(value: number, whole: number): number {
+	if (!(whole > 0) || !(value > 0)) return 0
+	return Math.min(1, value / whole)
 }
 
 /**
@@ -740,6 +802,11 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
 				const share = entry > 0 ? stage.value / entry : 0
 				const width = Math.max(1.5, Math.min(1, share) * 100)
 				const active = activeKey === stage.key
+				// Whether this rung is split, and how much of it the named segments leave over.
+				const hasSplit = (stage.segments?.length ?? 0) > 0
+				const remainder = hasSplit
+					? Math.max(0, 1 - (stage.segments ?? []).reduce((sum, s) => sum + segmentShare(s.value, stage.value), 0))
+					: 0
 				const delta = previous ? previous.value - stage.value : 0
 
 				return (
@@ -811,7 +878,39 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
 								? <div style={partialSlot} />
 								: (
 									<div aria-hidden="true" style={{ ...barTrack, height: 10 }}>
-										<div style={{ ...barFill, width: `${width}%` }} />
+										<div
+											style={{
+												...barFill,
+												width: `${width}%`,
+												display: 'flex',
+												overflow: 'hidden',
+												// Transparent when split. Left as the ordinary fill, the parent's own
+												// colour showed through wherever the segments did not reach — and on a
+												// rung where they sum to 451 of 475 that painted the missing 24 in the
+												// FIRST segment's colour, reading as a third segment of it.
+												...(hasSplit ? { background: 'transparent' } : {}),
+											}}
+										>
+											{/* The split subdivides the bar; it never changes its length. The rung's
+											    width stays its share of entry, so the funnel's scale is untouched and
+											    the segments read as portions of a total that is still anchored. */}
+											{(stage.segments ?? []).map((segment, segmentIndex) => (
+												<div
+													key={segment.key}
+													style={{
+														width: `${segmentShare(segment.value, stage.value) * 100}%`,
+														background: segmentColour(segmentIndex),
+														height: '100%',
+													}}
+												/>
+											))}
+											{/* Whatever the named segments do not account for — a device category GA4
+											    reported under neither, or a rounding gap between two queries. Drawn in
+											    the neutral so it cannot be mistaken for a segment, and keyed as such. */}
+											{hasSplit && remainder > 0 && (
+												<div style={{ width: `${remainder * 100}%`, background: mark('bar.track'), height: '100%' }} />
+											)}
+										</div>
 									</div>
 								)}
 
@@ -843,6 +942,16 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
 		{/* The hatch gets a key. It is a new mark, drawn on the loudest rungs in the chart, and it
 		    shipped with nothing anywhere saying what it meant — in the same work whose whole subject
 		    was legends that do not match their graphs. */}
+		{segmentKeys(stages).length > 0 && (
+			<div style={funnelSegmentKey}>
+				{segmentKeys(stages).map((segment, index) => (
+					<Text key={segment.key} size={0} muted>
+						<span aria-hidden="true" style={{ ...hoverSwatch, background: segmentColour(index), display: 'inline-block', marginRight: 6 }} />
+						{segment.label}
+					</Text>
+				))}
+			</div>
+		)}
 		{stages.some((stage) => stage.partial) && (
 			<Text size={0} muted>
 				{/* Explains the ABSENCE, now that there is no mark to key. A legend for a stripe that is
@@ -904,6 +1013,9 @@ function gapLabel(delta: number, measurement: 'sequence' | 'independent-totals',
  * mark reads as deliberate rather than as something that failed to render.
  */
 const partialSlot: React.CSSProperties = { height: 10 }
+
+/** The segment key, sat under the funnel with the other things said once per chart. */
+const funnelSegmentKey: React.CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap', paddingTop: 4 }
 
 /** The funnel's list wrapper. Numbering is suppressed — the rungs are already in order visually. */
 const funnelList: React.CSSProperties = { listStyle: 'none', margin: 0, padding: 0 }
@@ -1421,335 +1533,6 @@ export function EstimateDotPlot<E extends EstimateForPlot>({
 }
 
 /**
- * One row per category, two dots, and the distance between them.
- *
- * The Acquisition table is a single-period snapshot: it can say the design press sent 120 sessions
- * and cannot say whether that is a rise, a fall or a flat line. The previous period is already in
- * the envelope and was spent on three scalar deltas.
- *
- * A dumbbell rather than the obvious slope chart, for a reason that is about this codebase rather
- * than taste: a slope chart needs its end labels de-collided, de-collision needs text measurement,
- * and text measurement is a DOM read — which this package cannot do, because everything renders
- * through renderToStaticMarkup with no jsdom in the test environment. A row owns its own slot, so
- * two dots and a connector need no measurement at all and answer the same question.
- *
- * It states two POSITIONS and never a ratio, so its failure mode at low volume is "the line is
- * short", not a confident percentage on four sessions.
- */
-export function ShiftRows({
-	rows,
-	unit = 'count',
-	nowLabel,
-	beforeLabel,
-}: {
-	rows: ReadonlyArray<{ channel: string; now: number; before: number | null }>
-	unit?: 'count' | 'percent'
-	/** What the filled dot means, e.g. "this period". */
-	nowLabel: string
-	/** What the hollow dot means. */
-	beforeLabel: string
-}): React.ReactElement | null {
-	if (rows.length === 0) return null
-
-	const peak = Math.max(1, ...rows.flatMap((r) => [r.now, r.before ?? 0]))
-	const pct = (v: number) => `${(v / peak) * 100}%`
-	const format = (v: number) => unit === 'percent' ? formatPercent(v, 0) : formatCount(v)
-
-	return (
-		<Stack space={3}>
-			{rows.map((row) => {
-				const hasBefore = row.before !== null
-				const lo = hasBefore ? Math.min(row.now, row.before as number) : row.now
-				const hi = hasBefore ? Math.max(row.now, row.before as number) : row.now
-				return (
-					<Stack key={row.channel} space={2}>
-						<div style={barHeader}>
-							<Text size={1}>{row.channel}</Text>
-							<Text size={1} weight="medium">
-								{format(row.now)}
-								{hasBefore && <Text as="span" size={0} muted> was {format(row.before as number)}</Text>}
-							</Text>
-						</div>
-						<div aria-hidden="true" style={shiftTrack}>
-							{hasBefore && (
-								<div style={{ ...shiftLink, left: pct(lo), width: `calc(${pct(hi)} - ${pct(lo)})` }} />
-							)}
-							{hasBefore && <div style={{ ...shiftBefore, left: pct(row.before as number) }} />}
-							<div style={{ ...shiftNow, left: pct(row.now) }} />
-						</div>
-					</Stack>
-				)
-			})}
-			<Text size={0} muted>
-				Filled dot: {nowLabel}. Hollow: {beforeLabel}. The gap is the change.
-			</Text>
-		</Stack>
-	)
-}
-
-/**
- * Where each segment falls out, rather than only that it does.
- *
- * the figures table beneath is three columns by five rows of counts and rates. Reading "mobile falls off a
- * cliff between landing and viewing" out of fifteen cells is work the chart should be doing, and
- * the sentence that states the conclusion only fires at a threefold gap on 200+ users — so the
- * ordinary twofold case is invisible in both the table and the prose.
- *
- * Each line is normalised to its OWN segment's entry step, which is what makes segments of wildly
- * different size comparable: the question is what share of the people who arrived got this far, not
- * how many there were. That is the same anchoring the funnel itself uses.
- *
- * A line STOPS where its denominator runs out rather than continuing to zero. Extending it would
- * draw a confident collapse where the truth is that the sample ended — at a foundry's volumes
- * tablet usually drops out after the first step, and saying so is correct.
- */
-export function SurvivalLines({
-	segments,
-	stepLabels,
-	partialSteps = [],
-	minDenominator = MIN_RATE_DENOMINATOR,
-}: {
-	segments: ReadonlyArray<{ key: string; label: string; values: ReadonlyArray<number | null> }>
-	stepLabels: readonly string[]
-	/**
-	 * Which step indices were measured over only part of the window.
-	 *
-	 * The same coverage the funnel carries, and for the same reason. Without it this chart drew a
-	 * thirteen-day count as a share of a thirty-one-day one, as a solid line vertex, beside a
-	 * full-window line — while `FunnelChart`, fed the identical data forty lines further down the
-	 * same tab, refused to print that share at all. Two charts, one fact, opposite policies.
-	 */
-	partialSteps?: readonly number[]
-	minDenominator?: number
-}): React.ReactElement | null {
-	// Hover state is the step index, not a coordinate — the same shape the timeline settled on, and
-	// the reason positioning needs no measurement: step i is always i/(n-1) of the width.
-	const [active, setActive] = React.useState<number | null>(null)
-	// Whether the current reading was reached by keyboard, which decides if the legend announces.
-	const [steppedByKey, setSteppedByKey] = React.useState(false)
-
-	if (segments.length < 2 || stepLabels.length < 2) return null
-
-	// The plot stretches to fill its box, and the x-axis labels below it are laid out across the
-	// same width — so a step's tick always sits under that step's vertices. Letting the drawing
-	// keep its own aspect instead letterboxes it: the lines occupy the middle third while the
-	// labels span the full width, which is a legend that does not match its graph.
-	//
-	// The old objection to stretching was that it distorted `strokeDasharray`, which was the ONLY
-	// channel separating one segment from another. Segments carry their own colour now, so the
-	// distortion costs nothing: both lines stretch identically, and the comparison a reader makes
-	// here is between lines in one drawing, never between two pane widths.
-	const width = 320
-	const height = 132
-	const x = (i: number) => (i / (stepLabels.length - 1)) * width
-
-	// Each segment's surviving share, stopped where its denominator runs out.
-	const drawn = segments.map((segment, index) => {
-		const entry = segment.values[0]
-		if (entry === null || entry === undefined || entry <= 0) return null
-
-		const points: Array<[number, number]> = []
-		const shares: Array<number | null> = []
-		for (let i = 0; i < segment.values.length && i < stepLabels.length; i++) {
-			const value = segment.values[i]
-			const previous = i === 0 ? entry : segment.values[i - 1]
-			if (value === null || value === undefined) break
-			if (i > 0 && (previous === null || previous === undefined || previous < minDenominator)) break
-			// A step measured over fewer days than the entry step cannot be a share of it. The line
-			// stops here rather than drawing a vertex that looks like a fall and is a change of
-			// window — the same refusal the funnel makes, which this chart did not inherit.
-			if (partialSteps.includes(i)) break
-			const share = Math.min(1, value / entry)
-			points.push([x(i), height - share * height])
-			shares.push(share)
-		}
-		if (points.length < 2) return null
-		return { segment, index, points, shares, colour: segmentColour(index) }
-	})
-
-	// Only segments that produced a line. The legend used to map over every segment, so one that
-	// dropped out immediately got a key entry for a line that was not on the chart.
-	const lines = drawn.filter((d): d is NonNullable<typeof d> => d !== null)
-	if (lines.length === 0) return null
-
-	return (
-		<Stack space={3}>
-			<div style={survivalFrame}>
-				{/* The y axis, as HTML rather than <text>. These rules were already drawn and named
-				    100% and 50% only in a code comment, so a reader saw two grey lines and no scale —
-				    but a <text> inside a stretched viewBox is stretched with it. */}
-				{[1, 0.5, 0].map((level) => (
-					<span key={level} style={survivalYLabel(level)}>
-						{level === 1 ? '100%' : level === 0.5 ? '50%' : '0%'}
-					</span>
-				))}
-				<svg
-					viewBox={`0 0 ${width} ${height}`}
-					preserveAspectRatio="none"
-					style={{ width: '100%', height: 150, overflow: 'visible' }}
-					role="img"
-					aria-label={survivalSummary(lines, stepLabels)}
-				>
-					{[1, 0.5, 0].map((level) => (
-						<line
-							key={level}
-							x1={0}
-							x2={width}
-							y1={height * (1 - level)}
-							y2={height * (1 - level)}
-							stroke={mark('survival.grid')}
-							strokeWidth={0.6}
-							vectorEffect="non-scaling-stroke"
-						/>
-					))}
-					{/* A band per step, so the whole column is the pointer target rather than the line
-					    itself — the same reason the timeline hit-tests by day index. */}
-					{stepLabels.map((label, i) => (
-						<rect
-							key={label}
-							x={i === 0 ? 0 : x(i) - width / (stepLabels.length - 1) / 2}
-							y={0}
-							width={width / (stepLabels.length - 1) / (i === 0 || i === stepLabels.length - 1 ? 2 : 1)}
-							height={height}
-							fill="transparent"
-							onMouseEnter={() => { setSteppedByKey(false); setActive(i) }}
-							onMouseLeave={() => setActive(null)}
-						/>
-					))}
-					{active !== null && (
-						<line
-							x1={x(active)}
-							x2={x(active)}
-							y1={0}
-							y2={height}
-							stroke={mark('survival.grid')}
-							strokeWidth={1}
-						/>
-					)}
-					{lines.map(({ segment, points, colour }) => (
-						<polyline
-							key={segment.key}
-							points={points.map(([px, py]) => `${px},${py}`).join(' ')}
-							fill="none"
-							stroke={colour}
-							strokeWidth={1.6}
-							vectorEffect="non-scaling-stroke"
-							strokeLinejoin="round"
-						/>
-					))}
-					{/* The point under the cursor on every line that reaches this step. */}
-					{active !== null && lines.map(({ segment, points, colour }) => {
-						const point = points[active]
-						if (!point) return null
-						// Drawn as a stroked dot rather than a <circle>, whose radius would be stretched
-						// into an ellipse by the non-uniform scale.
-						return (
-							<line
-								key={segment.key}
-								x1={point[0]}
-								x2={point[0]}
-								y1={point[1]}
-								y2={point[1]}
-								stroke={colour}
-								strokeWidth={6}
-								strokeLinecap="round"
-								vectorEffect="non-scaling-stroke"
-							/>
-						)
-					})}
-				</svg>
-			</div>
-			{/* The x axis. These labels were passed in as a prop and used ONLY inside the chart's
-			    aria-label — a sighted reader saw unlabelled lines over unlabelled positions. They are
-			    also the keyboard route to the readout, which is why they are buttons. */}
-			<div style={survivalAxis}>
-				{stepLabels.map((label, i) => (
-					<button
-						key={label}
-						type="button"
-						style={survivalTick(i === active, i, stepLabels.length)}
-						// Not aria-pressed. This reads a step out; it does not latch one, and announcing a
-						// toggle that cannot be toggled is a promise nothing keeps.
-						aria-label={`Read ${label}`}
-						onMouseEnter={() => { setSteppedByKey(false); setActive(i) }}
-						onMouseLeave={() => setActive(null)}
-						onFocus={() => { setSteppedByKey(true); setActive(i) }}
-						onBlur={() => setActive(null)}
-						// No onClick. `onFocus` already fires on mousedown and on tap, so a click handler
-						// that toggled saw the step it had just selected and cleared it — the pointer and
-						// touch paths turned the readout on and immediately off again.
-					>
-						{label}
-					</button>
-				))}
-			</div>
-			{/* The legend carries the value when a step is active, rather than a second row appearing
-			    beneath it saying the same segment names again. */}
-			{/* Live only while the reader is stepping with the keyboard. Left permanently polite, the
-			    region holds the segment NAMES as well as their figures, so every pointer move
-			    re-announced the whole key — the same trap CrossSourceTimeline documents. */}
-			<div style={survivalLegend} aria-live={steppedByKey ? 'polite' : 'off'}>
-				{lines.map(({ segment, shares, colour }) => {
-					const share = active === null ? null : shares[active]
-					return (
-						<Text key={segment.key} size={0}>
-							<span style={{ ...hoverSwatch, background: colour, display: 'inline-block', marginRight: 6 }} />
-							{segment.label}
-							{active !== null && (
-								<strong style={survivalReadoutValue}>
-									{'\u00a0'}
-									{share === null || share === undefined ? 'not measured here' : formatPercent(share, 0)}
-								</strong>
-							)}
-						</Text>
-					)
-				})}
-			</div>
-		</Stack>
-	)
-}
-
-/**
- * The colour for one segment's line.
- *
- * Colour, not dash pattern. Dash was the only channel separating these lines, it was the channel
- * the old anamorphic scaling distorted, and it ran out at three segments — index 2 and beyond all
- * got the same pattern and the same legend glyph, so two device categories could draw identically
- * under a key claiming they differed.
- *
- * @param index - the segment's position in the stack
- */
-function segmentColour(index: number): string {
-	const names = ['survival.line', 'survival.line.2', 'survival.line.3', 'survival.line.4']
-	return mark(names[index % names.length] as string)
-}
-
-/**
- * What the chart says to a screen reader.
- *
- * The old `aria-label` named the chart and carried no data at all — "Share of each segment surviving
- * to each step" plus the step names. This states where each segment actually ended up, which is the
- * finding.
- *
- * @param lines - the segments that produced a line
- * @param stepLabels - the rungs, in order
- */
-function survivalSummary(
-	lines: ReadonlyArray<{ segment: { label: string }; shares: ReadonlyArray<number | null> }>,
-	stepLabels: readonly string[],
-): string {
-	const parts = lines.map(({ segment, shares }) => {
-		const last = shares.length - 1
-		const share = shares[last]
-		const reached = stepLabels[last] ?? 'the last measured step'
-		return share === null || share === undefined
-			? `${segment.label} could not be followed past ${reached}`
-			: `${segment.label} ${formatPercent(share, 0)} by ${reached}`
-	})
-	return `Share of each segment still present at each step, starting from ${stepLabels[0]}. ${parts.join('. ')}.`
-}
-
-/**
  * A ratio you can turn over to see what it is made of.
  *
  * At a foundry's volumes a derived rate is the least trustworthy thing on the page and often the
@@ -2255,124 +2038,14 @@ const estimateDot: React.CSSProperties = {
 	background: mark('estimate.dot'),
 }
 
-/** The rail a channel's two positions sit on. */
-const shiftTrack: React.CSSProperties = {
-	position: 'relative',
-	height: 16,
-	borderRadius: 2,
-	background: mark('bar.track'),
-}
 
-/** The distance between the two periods, which is the thing worth seeing. */
-const shiftLink: React.CSSProperties = {
-	position: 'absolute',
-	top: 7,
-	height: 2,
-	background: mark('shift.link'),
-}
 
-/** Last period. Hollow, because it is context rather than a second answer. */
-const shiftBefore: React.CSSProperties = {
-	position: 'absolute',
-	top: 3,
-	width: 10,
-	height: 10,
-	marginLeft: -5,
-	borderRadius: '50%',
-	border: `2px solid ${mark('shift.before')}`,
-	background: 'transparent',
-}
 
-/** This period. */
-const shiftNow: React.CSSProperties = {
-	position: 'absolute',
-	top: 3,
-	width: 10,
-	height: 10,
-	marginLeft: -5,
-	borderRadius: '50%',
-	background: mark('shift.now'),
-}
 
-/** The key beneath the survival chart: a colour swatch per segment, carrying the read step's share. */
-const survivalLegend: React.CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap' }
 
-/** Room to the left of the plot for the y labels, which sit outside the viewBox. */
-const survivalFrame: React.CSSProperties = { paddingLeft: 34, position: 'relative' }
 
-/** The x axis: one tick per step, spread across the same width the plot uses. */
-const survivalAxis: React.CSSProperties = {
-	position: 'relative',
-	// Reserves the row's height, since the ticks inside it are positioned.
-	height: 30,
-	marginLeft: 34,
-}
 
-/**
- * One x-axis tick.
- *
- * A button, not a label, because it is simultaneously the axis text, the hover target and the
- * keyboard route into the readout — and at that size it clears the 24px target minimum, which the
- * line itself never could.
- *
- * Positioned, not flexed. Equal-width flex items centre tick i at `(i + 0.5) / n`, while the plot
- * puts vertex i at `i / (n - 1)` — an 8.3% offset at both ends of a six-step funnel, with the first
- * label sitting to the right of the vertex it names. That is the same legend-does-not-match-the-
- * graph fault this work set out to remove, so the ticks are anchored to the vertex positions
- * instead and the end two are pulled inside the box rather than hanging off it.
- *
- * @param activeTick - whether this step is the one being read
- * @param index - the step's position
- * @param count - how many steps there are
- */
-function survivalTick(activeTick: boolean, index: number, count: number): React.CSSProperties {
-	const at = count > 1 ? (index / (count - 1)) * 100 : 50
-	return {
-		position: 'absolute',
-		left: `${at}%`,
-		// The ends align to the plot edge; everything between is centred on its vertex.
-		transform: index === 0 ? 'none' : index === count - 1 ? 'translateX(-100%)' : 'translateX(-50%)',
-		appearance: 'none',
-		background: 'transparent',
-		border: 'none',
-		borderTop: `2px solid ${activeTick ? 'currentColor' : 'transparent'}`,
-		color: 'inherit',
-		opacity: activeTick ? 1 : 0.7,
-		font: 'inherit',
-		fontSize: '0.72em',
-		fontWeight: activeTick ? 600 : 400,
-		padding: '6px 4px',
-		minHeight: 24,
-		cursor: 'pointer',
-		whiteSpace: 'nowrap',
-	}
-}
 
-/**
- * One y-axis label, pinned to its grid rule.
- *
- * The plot is stretched to fill its box, so anything inside the viBox is stretched too. These sit
- * outside it as ordinary HTML for that reason.
- *
- * @param level - 1, 0.5 or 0, matching the rule it labels
- */
-function survivalYLabel(level: number): React.CSSProperties {
-	return {
-		position: 'absolute',
-		left: 0,
-		// 150 is the plot's rendered height; the label is nudged up by half its own line so it sits
-		// on the rule rather than under it.
-		top: 150 * (1 - level) - 6,
-		width: 28,
-		textAlign: 'right',
-		fontSize: 10,
-		opacity: 0.7,
-		fontVariantNumeric: 'tabular-nums',
-	}
-}
-
-/** The share itself, tabular so a row of them lines up. */
-const survivalReadoutValue: React.CSSProperties = { fontVariantNumeric: 'tabular-nums' }
 
 /** A ratio and its toggle, sharing a baseline. */
 const ratioRow: React.CSSProperties = {

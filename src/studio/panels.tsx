@@ -15,7 +15,7 @@
 
 import React from 'react'
 import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ChartData, ContainmentBar, Delta, formatDay, EstimateDotPlot, RatioFigure, ShiftRows, SurvivalLines, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
+import { ChartData, ContainmentBar, Delta, formatDay, EstimateDotPlot, RatioFigure, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import { SEND_WINDOW_DAYS } from '../core/ranges'
 import { describeRank, weeklyRank } from '../core/rank'
@@ -1482,83 +1482,6 @@ export function revenueCoversEveryOrder(data: MeasurementHealthData): boolean {
 	return counted === withTotal
 }
 
-/** One channel, this period against last. */
-export interface ChannelShift {
-	channel: string
-	now: number
-	before: number | null
-}
-
-/**
- * Sessions by channel, this period against the previous one.
- *
- * `previous` is already fetched on every Acquisition request and spent on three scalar deltas; the
- * per-channel rows inside it are discarded. This is the one period-over-period cut in the dataset
- * whose denominators clear the package's own floors: at 357 sessions across twenty-odd SOURCE rows
- * the median row is single digits, but aggregated to CHANNEL a handful of groups carry most of it.
- *
- * Channels under the floor are pooled rather than drawn. A row for a channel with four sessions is
- * a line whose length is noise, and drawing it alongside a real one invites the comparison.
- *
- * Honest framing, which the caller must carry: sessions come from GA4 and are lossy. What survives
- * that loss is the SHAPE of the mix and its change — the same argument revenueShare and the buy-rate
- * index already rest on — not the levels, which are a fifth of reality.
- *
- * @param rows - this period's acquisition rows
- * @param previousRows - the same for the previous period, when it was fetched
- * @param floor - below this many sessions a channel is pooled into "Everything else"
- */
-export function channelMix(
-	rows: readonly SourceRow[],
-	previousRows: readonly SourceRow[] | undefined,
-	floor = MIN_DELTA_BASE,
-): ChannelShift[] {
-	const sum = (list: readonly SourceRow[]) => {
-		const out = new Map<string, number>()
-		for (const row of list) {
-			const key = row.channel || 'Unknown'
-			out.set(key, (out.get(key) ?? 0) + (Number.isFinite(row.sessions) ? row.sessions : 0))
-		}
-		return out
-	}
-
-	const now = sum(rows)
-	const before = previousRows ? sum(previousRows) : null
-
-	const big: ChannelShift[] = []
-	let pooledNow = 0
-	let pooledBefore = 0
-	let pooledAny = false
-
-	for (const [channel, value] of now) {
-		// The floor applies to the CURRENT period: a channel that mattered last period and has
-		// collapsed is exactly what this chart is for, so it must not be pooled away for being
-		// small now.
-		const previousValue = before?.get(channel) ?? null
-		if (value >= floor || (previousValue !== null && previousValue >= floor)) {
-			big.push({ channel, now: value, before: previousValue })
-			continue
-		}
-		pooledAny = true
-		pooledNow += value
-		pooledBefore += previousValue ?? 0
-	}
-
-	// Channels that existed last period and have vanished entirely this one.
-	if (before) {
-		for (const [channel, previousValue] of before) {
-			if (now.has(channel)) continue
-			if (previousValue >= floor) big.push({ channel, now: 0, before: previousValue })
-			else { pooledAny = true; pooledBefore += previousValue }
-		}
-	}
-
-	big.sort((a, b) => b.now - a.now || (b.before ?? 0) - (a.before ?? 0))
-	if (pooledAny) {
-		big.push({ channel: 'Everything else', now: pooledNow, before: before ? pooledBefore : null })
-	}
-	return big
-}
 
 export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElement {
 	const segments = data.segments ?? []
@@ -1593,17 +1516,24 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 				label: step.label,
 				value: step.count.value,
 				conversionFromPrevious: step.conversionFromPrevious,
+				// The device split, subdividing this rung's bar rather than drawn as a second chart.
+				// Only counts that are present and whole travel: a segment GA4 stopped reporting is
+				// left out of the split rather than drawn as a shrunken share of one.
+				...(segments.length > 0
+					? {
+						segments: segments.flatMap((segment) => {
+							const cell = segment.steps.find((s) => s.key === step.key)
+							const value = cell ? metricSortValue(cell.count) : null
+							return value === null ? [] : [{ key: segment.key, label: segment.label, value }]
+						}),
+					}
+					: {}),
 				...(step.count.status === 'partial' && step.count.coveredFrom
 					? { partial: { from: formatDay(step.count.coveredFrom) } }
 					: {}),
 			}],
 	)
 
-	// The steps that cover the whole window, which are the only ones a share can be read across.
-	const wholeSpine = spine.filter((step) => {
-		const cell = allSteps.find((s) => s.key === step.key)
-		return cell?.count.status !== 'partial'
-	})
 
 	const tracked = data.measurement === 'sequence'
 
@@ -1633,33 +1563,14 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 			    comparison the tool made. Its buttons also printed a bare rate to two decimals with
 			    no denominator and no floor: the same claim spread() refuses below 200 users,
 			    arriving through the back door with more implied precision. */}
-			{/* The shape first, the numbers behind a disclosure.
+			{/* ONE chart, not two. The device split now subdivides the funnel's own bars.
 			
-			    A table answers "how many" precisely and "where does it break" slowly — fifteen cells
-			    the reader has to hold in their head. The lines answer the second question at a glance
-			    and the figures are still one click away, which is the right order for someone with
-			    five minutes. */}
-			{/* Part-window steps are DROPPED from this chart, not drawn and not merely cut at.
-			
-			    Cutting each line where the window changes is honest and useless: at Darden the first
-			    step after entry is part-window, so every line became a single vertex and the chart —
-			    the one view that shows mobile converting at a ninth of desktop, which is the most
-			    actionable thing on this tab — disappeared with nothing saying why.
-			
-			    Comparing two segments across the steps that DO cover the whole window is both honest
-			    and useful. The funnel below still lists every step, with the dropped ones hatched and
-			    keyed, so nothing is hidden — it is only left out of a comparison it cannot join. */}
-			<SurvivalLines
-				segments={segments.map((segment) => ({
-					key: segment.key,
-					label: segment.label,
-					values: wholeSpine.map((step) => {
-						const cell = segment.steps.find((s) => s.key === step.key)
-						return cell ? metricSortValue(cell.count) : null
-					}),
-				}))}
-				stepLabels={wholeSpine.map((step) => step.label)}
-			/>
+			    A separate survival chart drew the same segments as normalised shares on its own axis,
+			    directly above a funnel drawing the pooled counts — two pictures of one fact. The
+			    share-only one could not print a count, and at rungs of 23, 12 and 7 the count is the
+			    only figure that survives; its denominator floor also silenced it at exactly those
+			    rungs, which are the ones about money. The funnel already prints every count, withholds
+			    every ratio it cannot support, and handles the part-window case. */}
 
 			{segments.length >= 2 && (
 			<ChartData
