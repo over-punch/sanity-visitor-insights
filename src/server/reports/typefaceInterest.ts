@@ -94,6 +94,21 @@ export interface TypefaceInterestInput {
 }
 
 /** Run the typeface-interest report. */
+/**
+ * Whether two metrics were measured over the same days.
+ *
+ * `partial` carries the date its coverage begins, so two partials from different cutovers are not
+ * comparable even though both are honest. An `ok` pair spans the whole range and always matches.
+ *
+ * @param a - one metric
+ * @param b - the other
+ */
+function coversSameWindow(a: MetricValue, b: MetricValue): boolean {
+	if (a.status === 'unavailable' || b.status === 'unavailable') return false
+	const from = (m: MetricValue): string | null => (m.status === 'partial' ? m.coveredFrom : null)
+	return from(a) === from(b)
+}
+
 export async function typefaceInterest(input: TypefaceInterestInput): Promise<TypefaceInterestData> {
 	const { config, range, ga4, sanity } = input
 
@@ -234,7 +249,13 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 		// not a rate and must not be printed as one. Clamped rather than shown above 1 in the
 		// single-event case too: a value over 100% is evidence the inputs disagree, not a finding.
 		const rateIsProportion = testerEventCount === 1
+		// Both sides must cover the SAME window. `view_item` and `tester_engaged` have their own
+		// cutover dates — on Darden, 1 September and 9 September — so two metrics that are each
+		// honestly `partial` can still span different numbers of days, and dividing one by the other
+		// produces a rate over neither.
+		const sameWindow = coversSameWindow(viewedMetric, testedMetric)
 		const rawRate =
+			sameWindow &&
 			viewedMetric.status !== 'unavailable' &&
 			testedMetric.status !== 'unavailable' &&
 			viewedMetric.value > 0
@@ -245,8 +266,16 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 		// The ratio a foundry actually acts on. Orders over distinct viewers — the same shape as the
 		// test rate, and the column that sorts the catalogue into "looked at and not selling",
 		// which is where a pricing or specimen-page problem shows up.
+		//
+		// Withheld outright when the view count covers only part of the window. Orders are read from
+		// the order book across the WHOLE range, so a part-window denominator divides ninety-one days
+		// of sales by three days of viewers. The comment above describes exactly that failure and
+		// says applyCoverage fixed it — but this test admitted `partial`, and `Math.min(1, ...)`
+		// then clamped the impossibility into a plausible-looking 100%, which the panel indexes and
+		// prints as something like "35x catalogue" on the one column the tab tells a reader to act
+		// on. Marking the input partial was necessary and was never sufficient.
 		const buyRate =
-			viewedMetric.status !== 'unavailable' &&
+			viewedMetric.status === 'ok' &&
 			boughtMetric.status !== 'unavailable' &&
 			viewedMetric.value > 0
 				? Math.min(1, boughtMetric.value / viewedMetric.value)

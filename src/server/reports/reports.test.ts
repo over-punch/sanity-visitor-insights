@@ -367,6 +367,100 @@ describe('typefaceInterest', () => {
 		expect(data.rows.map((r) => r.typeface).sort()).toEqual(['Freight', 'Omnes'])
 	})
 
+	it('withholds the buy rate when the view count covers only part of the range', async () => {
+		// THE defect this guards. Orders are read from the order book across the WHOLE range, so a
+		// view count that began mid-range divides ninety-one days of sales by three days of viewers.
+		// The old test admitted `partial` and `Math.min(1, ...)` clamped the impossibility to a
+		// plausible 100%, which the panel indexes and prints as "35x catalogue" on the one column
+		// the tab tells a reader to act on.
+		const config = siteConfig({
+			eventCutovers: { ...siteConfig().eventCutovers, view_item: '2026-08-25' },
+		})
+		const ga4 = createFakeGa4Client({
+			single: (request) => {
+				const filter = request.dimensionFilter as { filter?: { stringFilter?: { value?: string } } }
+				const event = filter?.filter?.stringFilter?.value
+				if (event === 'view_item') return makeGa4Report([{ dimensions: ['Freight'], metrics: [40] }])
+				return makeGa4Report([{ dimensions: ['Freight'], metrics: [10] }])
+			},
+		})
+		const sanity = createFakeSanityClient(() => [
+			{ typefaces: [{ title: 'Freight' }] },
+			{ typefaces: [{ title: 'Freight' }] },
+			{ typefaces: [{ title: 'Freight' }] },
+		])
+
+		const data = await typefaceInterest({ config, range, ga4, sanity })
+		const row = data.rows.find((r) => r.typeface === 'Freight')
+		// The count is still real and still shown.
+		expect(row?.viewed.status).toBe('partial')
+		// The rate across two windows is not.
+		expect(row?.buyRate).toBeNull()
+	})
+
+	it('still computes the buy rate when the view count spans the whole range', async () => {
+		const ga4 = createFakeGa4Client({
+			single: (request) => {
+				const filter = request.dimensionFilter as { filter?: { stringFilter?: { value?: string } } }
+				const event = filter?.filter?.stringFilter?.value
+				if (event === 'view_item') return makeGa4Report([{ dimensions: ['Freight'], metrics: [40] }])
+				return makeGa4Report([{ dimensions: ['Freight'], metrics: [10] }])
+			},
+		})
+		const sanity = createFakeSanityClient(() => [
+			{ typefaces: [{ title: 'Freight' }] },
+			{ typefaces: [{ title: 'Freight' }] },
+		])
+
+		const data = await typefaceInterest({ config: siteConfig(), range, ga4, sanity })
+		expect(data.rows.find((r) => r.typeface === 'Freight')?.buyRate).toBeCloseTo(0.05, 5)
+	})
+
+	it('withholds the test rate when its two sides began on different days', async () => {
+		// view_item and tester_engaged carry their own cutovers — on Darden, 1 September and 9
+		// September. Two metrics that are each honestly partial can still span different numbers of
+		// days, and one divided by the other is a rate over neither.
+		const config = siteConfig({
+			eventCutovers: {
+				...siteConfig().eventCutovers,
+				view_item: '2026-08-22',
+				tester_engaged: '2026-08-25',
+			},
+		})
+		const ga4 = createFakeGa4Client({
+			single: (request) => {
+				const filter = request.dimensionFilter as { filter?: { stringFilter?: { value?: string } } }
+				const event = filter?.filter?.stringFilter?.value
+				if (event === 'view_item') return makeGa4Report([{ dimensions: ['Freight'], metrics: [200] }])
+				return makeGa4Report([{ dimensions: ['Freight'], metrics: [50] }])
+			},
+		})
+
+		const data = await typefaceInterest({ config, range, ga4, sanity: null })
+		expect(data.rows[0]?.testRate).toBeNull()
+	})
+
+	it('computes the test rate when both sides began on the same day', async () => {
+		const config = siteConfig({
+			eventCutovers: {
+				...siteConfig().eventCutovers,
+				view_item: '2026-08-22',
+				tester_engaged: '2026-08-22',
+			},
+		})
+		const ga4 = createFakeGa4Client({
+			single: (request) => {
+				const filter = request.dimensionFilter as { filter?: { stringFilter?: { value?: string } } }
+				const event = filter?.filter?.stringFilter?.value
+				if (event === 'view_item') return makeGa4Report([{ dimensions: ['Freight'], metrics: [200] }])
+				return makeGa4Report([{ dimensions: ['Freight'], metrics: [50] }])
+			},
+		})
+
+		const data = await typefaceInterest({ config, range, ga4, sanity: null })
+		expect(data.rows[0]?.testRate).toBeCloseTo(0.25, 5)
+	})
+
 	it('computes a test rate only where both sides are real numbers', async () => {
 		const ga4 = createFakeGa4Client({
 			single: (request) => {

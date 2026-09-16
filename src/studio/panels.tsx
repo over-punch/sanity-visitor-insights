@@ -1839,6 +1839,11 @@ export function catalogueRate(rows: Array<{ viewed?: MetricValue; bought?: Metri
 	let views = 0
 	let sales = 0
 	for (const row of rows) {
+		// Whole-window views only. `metricSortValue` returns the value for `partial` as well as `ok`,
+		// so a family whose view count covers thirteen days of a thirty-one-day range was pooled with
+		// families covering all of it — and the benchmark every OTHER family is measured against was
+		// itself computed across a mixture of windows.
+		if (row.viewed?.status !== 'ok') continue
 		const viewed = metricSortValue(row.viewed)
 		const bought = metricSortValue(row.bought)
 		// Both sides or neither: a family GA4 has no view count for cannot contribute its sales to a
@@ -2098,9 +2103,15 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 									// not be benchmarked against at all.
 									const views = metricSortValue(row.viewed)
 									const tooQuiet = views !== null && views < MIN_FAMILY_VIEWS
+									// Three absences, not two. A part-window view count is neither "too quiet"
+									// nor simply missing — it is a real number that cannot be a denominator
+									// for orders read across the whole range.
+									const partWindow = row.viewed?.status === 'partial'
 									return (
 										<Text size={1} muted aria-label={`${row.typeface} not comparable`}>
-											{tooQuiet ? 'too few views to compare' : '—'}
+											{partWindow
+												? 'view tracking started mid-period'
+												: tooQuiet ? 'too few views to compare' : '—'}
 										</Text>
 									)
 								}

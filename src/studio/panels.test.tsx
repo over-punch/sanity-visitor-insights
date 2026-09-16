@@ -4687,3 +4687,53 @@ describe('a sparse envelope degrades instead of throwing', () => {
 		expect(() => render(<DataHealthPanel data={bare as never} />)).not.toThrow()
 	})
 })
+
+describe('the catalogue benchmark pools one window', () => {
+	// `metricSortValue` returns the value for `partial` as well as `ok`, so a family whose view
+	// count covered thirteen days of a thirty-one-day range was pooled with families covering all of
+	// it — and the benchmark every OTHER family is measured against was itself computed across a
+	// mixture of windows.
+	it('leaves a part-window family out of the pooled rate', () => {
+		const whole = [
+			{ typeface: 'Freight', viewed: ok(1000), bought: ok(10) },
+			{ typeface: 'Omnes', viewed: ok(1000), bought: ok(10) },
+		]
+		const withPartial = [
+			...whole,
+			// Thirteen days of views against a full range of orders: a rate ten times the others.
+			{ typeface: 'Halyard', viewed: partial(100, '2026-09-01', 'added then'), bought: ok(10) },
+		]
+		expect(catalogueRate(withPartial as never)).toBe(catalogueRate(whole as never))
+	})
+
+	it('still returns null when no family has a whole-window count', () => {
+		const allPartial = [{ typeface: 'Freight', viewed: partial(100, '2026-09-01', 'x'), bought: ok(10) }]
+		expect(catalogueRate(allPartial as never)).toBeNull()
+	})
+})
+
+describe('the sells-vs-catalogue cell names which absence it is', () => {
+	const row = (viewed: unknown) => ({
+		typeface: 'Freight', viewed, tested: ok(0), bought: ok(2),
+		revenue: ok(400), testRate: null, buyRate: null,
+	})
+
+	it('distinguishes a part-window count from a quiet family', () => {
+		// Three absences, not two: a real number that cannot be a denominator is neither "too quiet"
+		// nor missing.
+		const html = render(<TypefaceInterestPanel data={{
+			rows: [row(partial(120, '2026-09-01', 'added then'))],
+			interpretationNote: '', testerEventCount: 1,
+		} as never} />)
+		expect(html).toContain('view tracking started mid-period')
+		expect(html).not.toContain('too few views to compare')
+	})
+
+	it('still says too few for a family nobody looked at', () => {
+		const html = render(<TypefaceInterestPanel data={{
+			rows: [row(ok(3))],
+			interpretationNote: '', testerEventCount: 1,
+		} as never} />)
+		expect(html).toContain('too few views to compare')
+	})
+})
