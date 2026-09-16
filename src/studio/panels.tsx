@@ -76,8 +76,8 @@ function metricOr(metric: MetricValue | undefined, detail: string): MetricValue 
 const OLDER_ROUTE = 'This site\u2019s analytics route is older than this figure — it will appear after the site is next deployed.'
 
 /** Largest available value across metrics, for scaling bars. */
-function maxOf(metrics: MetricValue[]): number {
-	return metrics.reduce((max, metric) => (metric.status === 'unavailable' ? max : Math.max(max, metric.value)), 0)
+function maxOf(metrics: Array<MetricValue | undefined>): number {
+	return metrics.reduce((max, metric) => (!metric || metric.status === 'unavailable' ? max : Math.max(max, metric.value)), 0)
 }
 
 
@@ -205,9 +205,17 @@ export function OverviewPanel({ data, previous, onBrush }: {
 					<Stack space={3}>
 						<Label size={1} muted>Revenue</Label>
 						<div style={figureRow}>
-							{metricOr(data.revenue, OLDER_ROUTE).status === 'ok'
-								? <Text size={4}>{formatMoney((data.revenue as { value: number }).value, data.currency ?? null)}</Text>
-								: <MetricFigure metric={metricOr(data.revenue, OLDER_ROUTE)} label="Revenue" />}
+							{/* One render path, told what the number is. The card used to take the currency
+							    branch only on `ok` and fall through to MetricFigure — and therefore to the
+							    COUNT formatter — for everything else. Revenue here is permanently partial,
+							    because most orders predate the amount field, so the branch never fired and
+							    the tab's headline money rendered as a bare "12,346". */}
+							<MetricFigure
+								metric={metricOr(data.revenue, OLDER_ROUTE)}
+								label="Revenue"
+								unit="money"
+								currency={data.currency ?? null}
+							/>
 							<Delta current={metricSortValue(data.revenue)} previous={metricSortValue(previous?.revenue)} />
 						</div>
 						{/* The rank, beside the change rather than instead of it.
@@ -227,7 +235,7 @@ export function OverviewPanel({ data, previous, onBrush }: {
 					<Stack space={3}>
 						<Label size={1} muted>Orders</Label>
 						<div style={figureRow}>
-							<MetricFigure metric={data.orders} label="Orders" />
+							<MetricFigure metric={metricOr(data.orders, OLDER_ROUTE)} label="Orders" />
 							<Delta current={metricSortValue(data.orders)} previous={metricSortValue(previous?.orders)} />
 						</div>
 						{rankLine(data.crossSource, (d) => d.orders) && (
@@ -245,7 +253,7 @@ export function OverviewPanel({ data, previous, onBrush }: {
 							<MetricFigure metric={metricOr(data.vercelPageviews, OLDER_ROUTE)} label="Pageviews" />
 							<Delta current={metricSortValue(data.vercelPageviews)} previous={metricSortValue(previous?.vercelPageviews)} />
 						</div>
-						{data.vercelPageviews?.status !== 'unavailable' && (
+						{data.vercelPageviews && data.vercelPageviews.status !== 'unavailable' && (
 							<Text size={0} muted>Pageviews, from Vercel’s own counter.</Text>
 						)}
 					</Stack>
@@ -297,7 +305,7 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								)
 							})()}
 						</div>
-						{data.audience?.status !== 'unavailable' && (
+						{data.audience && data.audience.status !== 'unavailable' && (
 							<Text size={0} muted>
 								Everyone subscribed today, not just this period. Mailchimp&rsquo;s own count, so it is
 								not consent-gated or blockable.
@@ -330,10 +338,11 @@ export function OverviewPanel({ data, previous, onBrush }: {
 						{averageOrderValue(data).status === 'partial' && (averageOrderValue(data) as { note?: string }).note && (
 							<Text size={0} muted>{(averageOrderValue(data) as { note?: string }).note}</Text>
 						)}
-						{averageOrderValue(data).status !== 'unavailable' && (
+						{averageOrderValue(data).status === 'ok' && (
 							<Text size={0} muted>
-								{/* The denominator moved into the figure above, where it belongs. This caption
-								    used to carry it in prose as well. */}
+								{/* Only when it IS exact. Gated on `!== 'unavailable'` this rendered directly
+								    beneath "Averaged over the 2 of 7 orders that carry an amount", so the card
+								    stated a caveat and then denied it, eight words apart. */}
 								From your orders, so exact.
 							</Text>
 						)}
@@ -360,7 +369,7 @@ export function OverviewPanel({ data, previous, onBrush }: {
 							]}
 							unavailable={<MetricFigure metric={visitorsPerOrder(data)} label="Visitors per order" />}
 						/>
-						{data.vercelVisitors?.status !== 'unavailable' && (
+						{data.vercelVisitors && data.vercelVisitors.status !== 'unavailable' && (
 							<Text size={0} muted>
 								Vercel&rsquo;s visitor count. A ceiling — some are bots or the same person twice.
 							</Text>
@@ -799,7 +808,11 @@ function Verdict({ data, previous }: { data: MeasurementHealthData; previous?: M
 				: data.capture?.discrepancy
 					? 'measurement disagrees between sources'
 					: null
-	if (broken) parts.push(broken)
+	// NOT pushed into `parts`. It was joined to the business facts with a middot and set in the same
+	// size, so three facts about the foundry and one about Google Analytics were grammatical peers —
+	// and on a site where GA4 sees a fifth of its traffic, the amber alarm on the default tab led
+	// with the plumbing while the revenue sat inside it as a clause. Every word is kept; only the
+	// rank changes.
 
 	// Not null.
 	//
@@ -808,7 +821,10 @@ function Verdict({ data, previous }: { data: MeasurementHealthData; previous?: M
 	// fields the verdict reads. The tab then rendered six em-dashes and a footer, with nothing
 	// anywhere saying there was nothing to report — which reads as the tool being broken rather
 	// than the window being empty.
-	if (parts.length === 0) {
+	// `broken` no longer fills `parts`, so this guard has to count it too — otherwise a window with a
+	// coverage reading and no business figures, which is exactly the state where that reading is the
+	// only thing worth saying, would render "No figures arrived".
+	if (parts.length === 0 && !broken) {
 		return (
 			<Card padding={3} radius={2} tone="transparent" border style={{ borderLeftWidth: 3, borderLeftStyle: 'solid' }}>
 				<Text size={4}>No figures arrived for this window.</Text>
@@ -839,9 +855,16 @@ function Verdict({ data, previous }: { data: MeasurementHealthData; previous?: M
 			// this card is the tool's only alarm. Losing its colour must not lose the signal.
 			style={broken ? { borderLeftWidth: 3, borderLeftStyle: 'solid' } : undefined}
 		>
-			{/* size={3}, not size={2}. It was set one step above body and SMALLER than the figures
-			    beneath it, so the panel's thesis read as a caption for the cards. */}
-			<Text size={3} weight={broken ? 'semibold' : 'medium'}>{parts.join(' · ')}{closing}</Text>
+			<Stack space={2}>
+				{/* size={3}, not size={2}. It was set one step above body and SMALLER than the figures
+				    beneath it, so the panel's thesis read as a caption for the cards. */}
+				{parts.length > 0 && (
+					<Text size={3} weight={broken ? 'semibold' : 'medium'}>{parts.join(' \u00b7 ')}{closing}</Text>
+				)}
+				{/* The instrument, beneath and quieter. It is a real qualifier on the traffic figure
+				    and it stays on the alarm card — it is simply no longer the first thing read. */}
+				{broken && <Text size={1} muted>{broken}</Text>}
+			</Stack>
 		</Card>
 	)
 }
@@ -939,11 +962,11 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 					<Stack space={3}>
 						<div style={figureRow}>
 							<Label size={1} muted>Pageviews Vercel counted</Label>
-							<MetricFigure metric={data.vercelPageviews} label="Vercel pageviews" size={3} />
+							<MetricFigure metric={metricOr(data.vercelPageviews, OLDER_ROUTE)} label="Vercel pageviews" size={3} />
 						</div>
 						<div style={figureRow}>
 							<Label size={1} muted>Seen by Google Analytics</Label>
-							<MetricFigure metric={data.ga4Pageviews} label="GA4 pageviews" size={3} />
+							<MetricFigure metric={metricOr(data.ga4Pageviews, OLDER_ROUTE)} label="GA4 pageviews" size={3} />
 						</div>
 						<Text size={0} muted>
 							Only one source answered for this range, so there is nothing to compare.
@@ -1007,7 +1030,7 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 						<Card padding={3} radius={2} tone="transparent" border>
 							<Stack space={3}>
 								<Label size={1} muted>Sessions, corrected for what GA4 misses</Label>
-								<MetricFigure metric={data.estimatedSessions} label="Estimated sessions" />
+								<MetricFigure metric={metricOr(data.estimatedSessions, OLDER_ROUTE)} label="Estimated sessions" />
 							</Stack>
 						</Card>
 					)}
@@ -1063,13 +1086,13 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 					<Card padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
 							<Label size={1} muted>GA4 sessions</Label>
-							<MetricFigure metric={data.ga4Sessions} label="GA4 sessions" />
+							<MetricFigure metric={metricOr(data.ga4Sessions, OLDER_ROUTE)} label="GA4 sessions" />
 						</Stack>
 					</Card>
 					<Card padding={3} radius={2} tone="transparent" border>
 						<Stack space={3}>
 							<Label size={1} muted>Consent granted</Label>
-							<MetricFigure metric={data.consentRate} label="Consent granted, share of visitors GA4 saw" unit="percent" />
+							<MetricFigure metric={metricOr(data.consentRate, OLDER_ROUTE)} label="Consent granted, share of visitors GA4 saw" unit="percent" />
 						</Stack>
 					</Card>
 				</div>
@@ -1576,6 +1599,12 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 			}],
 	)
 
+	// The steps that cover the whole window, which are the only ones a share can be read across.
+	const wholeSpine = spine.filter((step) => {
+		const cell = allSteps.find((s) => s.key === step.key)
+		return cell?.count.status !== 'partial'
+	})
+
 	const tracked = data.measurement === 'sequence'
 
 	return (
@@ -1610,16 +1639,26 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 			    the reader has to hold in their head. The lines answer the second question at a glance
 			    and the figures are still one click away, which is the right order for someone with
 			    five minutes. */}
+			{/* Part-window steps are DROPPED from this chart, not drawn and not merely cut at.
+			
+			    Cutting each line where the window changes is honest and useless: at Darden the first
+			    step after entry is part-window, so every line became a single vertex and the chart —
+			    the one view that shows mobile converting at a ninth of desktop, which is the most
+			    actionable thing on this tab — disappeared with nothing saying why.
+			
+			    Comparing two segments across the steps that DO cover the whole window is both honest
+			    and useful. The funnel below still lists every step, with the dropped ones hatched and
+			    keyed, so nothing is hidden — it is only left out of a comparison it cannot join. */}
 			<SurvivalLines
 				segments={segments.map((segment) => ({
 					key: segment.key,
 					label: segment.label,
-					values: spine.map((step) => {
+					values: wholeSpine.map((step) => {
 						const cell = segment.steps.find((s) => s.key === step.key)
 						return cell ? metricSortValue(cell.count) : null
 					}),
 				}))}
-				stepLabels={spine.map((step) => step.label)}
+				stepLabels={wholeSpine.map((step) => step.label)}
 			/>
 
 			{segments.length >= 2 && (

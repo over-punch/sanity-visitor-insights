@@ -343,15 +343,38 @@ export interface MetricFigureProps {
 	 * suffix inverted the conclusion.
 	 *
 	 * 'percent' expects a 0-100 value, matching what measurementHealth produces.
+	 *
+	 * 'money' writes the figure in the range's currency. Without it a PARTIAL revenue reached the
+	 * count formatter, so Darden's default tab — where revenue is permanently partial, because most
+	 * orders predate the amount field — rendered its headline money as a bare "12,346", beside an
+	 * "Average order US$455" that did carry a currency.
 	 */
-	unit?: 'count' | 'percent'
+	unit?: 'count' | 'percent' | 'money'
+	/** ISO 4217 code. Read only when `unit` is 'money'. */
+	currency?: string | null
+}
+
+/**
+ * The badge on a partial figure.
+ *
+ * It was the fixed string "Some orders only", written for the revenue case and then applied to
+ * every partial metric in the tool — including the GA4 view counts on Typeface interest, where it
+ * is simply false: those are pageviews spanning an event cutover, and no order is involved.
+ *
+ * `coveredFrom` distinguishes the two. A cutover or an outage carries the date coverage begins; a
+ * gap in the order book does not.
+ *
+ * @param metric - the partial value
+ */
+function partialBadge(metric: { coveredFrom?: string }): string {
+	return metric.coveredFrom ? `From ${formatDay(metric.coveredFrom)} only` : 'Some orders only'
 }
 
 /**
  * Render a metric value, handling the absent case visibly.
  * Screen readers get the reason text rather than an unexplained dash.
  */
-export function MetricFigure({ metric, label, size = 4, unit = 'count' }: MetricFigureProps): React.ReactElement {
+export function MetricFigure({ metric, label, size = 4, unit = 'count', currency = null }: MetricFigureProps): React.ReactElement {
 	if (metric.status === 'unavailable') {
 		// Guarded: the route can be newer than the Studio and send a reason this build has never
 		// heard of, which rendered the word "undefined" to the reader.
@@ -382,7 +405,11 @@ export function MetricFigure({ metric, label, size = 4, unit = 'count' }: Metric
 
 	// Percentages keep one decimal, since that is the precision the server produced; rounding to a
 	// whole number here would make a 0.4-point move look like no move at all.
-	const formatted = unit === 'percent' ? `${metric.value.toFixed(1)}%` : formatCount(metric.value)
+	const formatted = unit === 'percent'
+		? `${metric.value.toFixed(1)}%`
+		: unit === 'money'
+			? formatMoney(metric.value, currency)
+			: formatCount(metric.value)
 
 	if (metric.status === 'partial') {
 		return (
@@ -391,7 +418,7 @@ export function MetricFigure({ metric, label, size = 4, unit = 'count' }: Metric
 					{formatted}
 					<span style={visuallyHidden}>, partial. {metric.note}</span>
 				</Text>
-				<Badge tone="caution" fontSize={0}>Some orders only</Badge>
+				<Badge tone="caution" fontSize={0}>{partialBadge(metric)}</Badge>
 			</Stack>
 		)
 	}
@@ -404,7 +431,9 @@ export function MetricFigure({ metric, label, size = 4, unit = 'count' }: Metric
 		// introduced to make impossible.
 		const range = unit === 'percent'
 			? `${metric.low.toFixed(1)}% to ${metric.high.toFixed(1)}%`
-			: `${formatCount(metric.low)} to ${formatCount(metric.high)}`
+			: unit === 'money'
+				? `${formatMoney(metric.low, currency)} to ${formatMoney(metric.high, currency)}`
+				: `${formatCount(metric.low)} to ${formatCount(metric.high)}`
 
 		return (
 			<Stack space={2}>
@@ -643,8 +672,18 @@ function rateLine(
 	if (index === 0) return <Text size={0} muted>100% — everyone who arrived</Text>
 
 	// A count measured over fewer days than its denominator cannot carry a rate against it.
+	//
+	// The wording matters as much as the withholding. "Only counted from 1 Sep" reads as a fault —
+	// something broke, GA4 lost data — when the truth is the opposite: nobody was looking before
+	// that date because the tracking did not exist. The server already builds that sentence and it
+	// was being dropped on the way in.
 	if (stage.partial) {
-		return <Text size={0} muted>only counted from {stage.partial.from}, so no share is shown</Text>
+		return (
+			<Text size={0} muted>
+				tracking added {stage.partial.from}, so this step covers fewer days than the ones above — no
+				share is shown
+			</Text>
+		)
 	}
 
 	const canRate = entry >= MIN_RATE_DENOMINATOR && stage.value >= MIN_RATE_DENOMINATOR
@@ -758,22 +797,23 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
 							</div>
 
 							<div aria-hidden="true" style={{ ...barTrack, height: 10 }}>
-								{/* A partial rung is hatched, so the drawing carries the same qualification as
-								    the sentence under it. A solid bar beside other solid bars asserts that all
-								    of them cover the same days. */}
+								{/* A partial rung gets NO BAR — a full-width hatched rail instead.
+								
+								    Drawing it to its raw share was the half-fix: the sentence said "no share is
+								    shown" while the geometry went on showing one. A count over sixteen days
+								    against a denominator over thirty draws about half the length it should, and
+								    a reader measures bars against each other whatever the caption says. A rail
+								    with no fill cannot be mis-measured, which is the same refusal
+								    ContainmentBar makes rather than draw a containment that does not hold. */}
 								<div
-									style={{
-										...barFill,
-										width: `${width}%`,
-										...(stage.partial
-											? {
-												backgroundImage: `repeating-linear-gradient(135deg, ${mark('bar.fill')} 0 4px, transparent 4px 8px)`,
-												backgroundColor: 'transparent',
-												outline: `1px solid ${mark('bar.fill')}`,
-												outlineOffset: -1,
-											}
-											: {}),
-									}}
+									style={stage.partial
+										? {
+											height: '100%',
+											width: '100%',
+											borderRadius: 3,
+											backgroundImage: `repeating-linear-gradient(135deg, ${mark('bar.partial')} 0 4px, transparent 4px 8px)`,
+										}
+										: { ...barFill, width: `${width}%` }}
 								/>
 							</div>
 
@@ -796,19 +836,24 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
 							  * size. It is the RATIO that needs a denominator, which is the same rule
 							  * the revenue split and the catalogue index already follow.
 							  */}
-							<Text size={0} muted>
-								{/* Gated on BOTH ends. The share was gated on `entry`, which is stage zero and
-								    therefore the funnel's largest number — so it was withheld only when the
-								    whole funnel had under thirty entries, never when the rung itself was
-								    thin. And a withheld step-to-step rate fell silently to an empty string,
-								    leaving exactly the unexplained gap the share half avoids. */}
-								{rateLine(stage, index, entry, share, stages[0]?.label ?? '')}
-							</Text>
+							{rateLine(stage, index, entry, share, stages[0]?.label ?? '')}
 						</div>
 					</li>
 				)
 			})}
 		</ol>
+		{/* The hatch gets a key. It is a new mark, drawn on the loudest rungs in the chart, and it
+		    shipped with nothing anywhere saying what it meant — in the same work whose whole subject
+		    was legends that do not match their graphs. */}
+		{stages.some((stage) => stage.partial) && (
+			<div style={funnelKey}>
+				<span aria-hidden="true" style={funnelKeySwatch} />
+				<Text size={0} muted>
+					Striped: tracking started partway through this period, so the step covers fewer days than
+					the ones above it and cannot be compared with them.
+				</Text>
+			</div>
+		)}
 		{withheldAny && (
 			<Text size={0} muted>
 				Shares are shown only for steps at least {MIN_RATE_DENOMINATOR} people reached. Below that a
@@ -852,6 +897,19 @@ function gapLabel(delta: number, measurement: 'sequence' | 'independent-totals',
 	// here deliberately. Under a tracked sequence it should be impossible, which makes it worth
 	// stating either way.
 	return `${formatCount(-delta)} more — not a subset of the step above`
+}
+
+/** The hatch key, sat under the chart with the other things said once per funnel. */
+const funnelKey: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, paddingTop: 4 }
+
+/** The hatch itself, at legend size, drawn exactly as the rail draws it. */
+const funnelKeySwatch: React.CSSProperties = {
+	display: 'inline-block',
+	width: 24,
+	height: 10,
+	flex: '0 0 auto',
+	borderRadius: 3,
+	backgroundImage: `repeating-linear-gradient(135deg, ${mark('bar.partial')} 0 4px, transparent 4px 8px)`,
 }
 
 /** The funnel's list wrapper. Numbering is suppressed — the rungs are already in order visually. */
@@ -1206,7 +1264,7 @@ export function SectionTitle({
  * @param whole - the complete count
  * @param part - the lossier count that should sit inside it
  */
-export function isContainment(whole: MetricValue, part: MetricValue): boolean {
+export function isContainment(whole: MetricValue | undefined, part: MetricValue | undefined): boolean {
 	const w = valueOrNull(whole)
 	const p = valueOrNull(part)
 	return w !== null && p !== null && w > 0 && p <= w
@@ -1428,7 +1486,7 @@ export function ShiftRows({
 /**
  * Where each segment falls out, rather than only that it does.
  *
- * `SegmentTable` is three columns by five rows of counts and rates. Reading "mobile falls off a
+ * the figures table beneath is three columns by five rows of counts and rates. Reading "mobile falls off a
  * cliff between landing and viewing" out of fifteen cells is work the chart should be doing, and
  * the sentence that states the conclusion only fires at a threefold gap on 200+ users — so the
  * ordinary twofold case is invisible in both the table and the prose.
@@ -1444,10 +1502,20 @@ export function ShiftRows({
 export function SurvivalLines({
 	segments,
 	stepLabels,
+	partialSteps = [],
 	minDenominator = MIN_RATE_DENOMINATOR,
 }: {
 	segments: ReadonlyArray<{ key: string; label: string; values: ReadonlyArray<number | null> }>
 	stepLabels: readonly string[]
+	/**
+	 * Which step indices were measured over only part of the window.
+	 *
+	 * The same coverage the funnel carries, and for the same reason. Without it this chart drew a
+	 * thirteen-day count as a share of a thirty-one-day one, as a solid line vertex, beside a
+	 * full-window line — while `FunnelChart`, fed the identical data forty lines further down the
+	 * same tab, refused to print that share at all. Two charts, one fact, opposite policies.
+	 */
+	partialSteps?: readonly number[]
 	minDenominator?: number
 }): React.ReactElement | null {
 	// Hover state is the step index, not a coordinate — the same shape the timeline settled on, and
@@ -1483,6 +1551,10 @@ export function SurvivalLines({
 			const previous = i === 0 ? entry : segment.values[i - 1]
 			if (value === null || value === undefined) break
 			if (i > 0 && (previous === null || previous === undefined || previous < minDenominator)) break
+			// A step measured over fewer days than the entry step cannot be a share of it. The line
+			// stops here rather than drawing a vertex that looks like a fall and is a change of
+			// window — the same refusal the funnel makes, which this chart did not inherit.
+			if (partialSteps.includes(i)) break
 			const share = Math.min(1, value / entry)
 			points.push([x(i), height - share * height])
 			shares.push(share)
@@ -1536,7 +1608,7 @@ export function SurvivalLines({
 							width={width / (stepLabels.length - 1) / (i === 0 || i === stepLabels.length - 1 ? 2 : 1)}
 							height={height}
 							fill="transparent"
-							onMouseEnter={() => setActive(i)}
+							onMouseEnter={() => { setSteppedByKey(false); setActive(i) }}
 							onMouseLeave={() => setActive(null)}
 						/>
 					))}
@@ -1592,7 +1664,9 @@ export function SurvivalLines({
 						key={label}
 						type="button"
 						style={survivalTick(i === active, i, stepLabels.length)}
-						aria-pressed={i === active}
+						// Not aria-pressed. This reads a step out; it does not latch one, and announcing a
+						// toggle that cannot be toggled is a promise nothing keeps.
+						aria-label={`Read ${label}`}
 						onMouseEnter={() => { setSteppedByKey(false); setActive(i) }}
 						onMouseLeave={() => setActive(null)}
 						onFocus={() => { setSteppedByKey(true); setActive(i) }}

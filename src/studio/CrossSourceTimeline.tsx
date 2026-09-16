@@ -1378,7 +1378,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 				)}
 				{markers.length > 0 && (
 					<LegendKey
-						swatch={<span style={legendMarker} />}
+						swatch={<span style={legendMarker}><span style={legendMarkerDot} /></span>}
 						label="Dashed rules with a dot mark campaign sends"
 					/>
 				)}
@@ -1457,11 +1457,32 @@ function legendBlock(fill: string, edge: string): React.CSSProperties {
 const legendMarker: React.CSSProperties = {
 	display: 'inline-block',
 	position: 'relative',
-	width: 0,
+	width: 1,
 	height: 12,
 	borderLeft: '1px dashed currentColor',
+	// The rule's OWN weight. The chart draws the line at 0.5 and only the dot at 0.7, so putting 0.7
+	// on the whole element made the legend's rule heavier than the rule it names — the same class of
+	// mismatch this legend work exists to remove.
+	opacity: 0.5,
+}
+
+/**
+ * The dot that sits on top of a campaign rule.
+ *
+ * A real element. It was a pair of box-shadows with zero spread, and a shadow with no spread
+ * replicates the whole 1x12 border box rather than a point — so the "dot" rendered as a 2px x 12px
+ * bar, sitting left of the rule instead of on it and overflowing 6px into the row above. The mark
+ * it names is a 6px circle centred on the rule, 2px above its top.
+ */
+const legendMarkerDot: React.CSSProperties = {
+	position: 'absolute',
+	top: -3,
+	left: -2.5,
+	width: 6,
+	height: 6,
+	borderRadius: '50%',
+	background: 'currentColor',
 	opacity: 0.7,
-	boxShadow: '-2px -6px 0 0 currentColor, -1px -6px 0 0 currentColor',
 }
 
 /**

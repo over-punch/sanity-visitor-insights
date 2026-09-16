@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { COMPARISON, COMPARISON_ON_DARK, COMPARISON_ON_LIGHT, GROUNDS, MARKS, REGION_ALPHA, SERIES, composite, contrast, luminance, mark, seriesFill, type SeriesKey , baseHex } from './palette'
+import { COMPARISON, COMPARISON_ON_DARK, COMPARISON_ON_LIGHT, COMPARISON_STYLE, COMPARISON_TEXT, GROUNDS, MARKS, REGION_ALPHA, SERIES, composite, contrast, luminance, mark, seriesFill, type SeriesKey , baseHex } from './palette'
 
 /** Simulate how a colour appears to a dichromat, via the standard LMS projection. */
 function simulate(hex: string, kind: 'deuteranopia' | 'protanopia'): [number, number, number] {
@@ -230,5 +230,41 @@ describe('the comparison identity is legible as text, not only as a mark', () =>
 		}
 		expect(Math.abs(hue(COMPARISON_ON_LIGHT) - hue(COMPARISON_ON_DARK))).toBeLessThan(15)
 		expect(Math.abs(hue(COMPARISON) - hue(COMPARISON_ON_LIGHT))).toBeLessThan(15)
+	})
+})
+
+describe('the comparison stylesheet selects on what Sanity actually sets', () => {
+	// This was got wrong once and only caught by looking at the running Studio. The first version
+	// used light-dark() on :root, which measures correctly in isolation and is wrong here — Sanity
+	// puts `color-scheme` on the CARD, not the root, so at :root the used scheme is `normal` and
+	// light-dark() resolves to its LIGHT half. A dark Studio would have rendered #6A4FC4 on #13141b
+	// at 3.09:1, worse than the balanced colour it replaced.
+	//
+	// Verified in the browser: the outermost Card carries data-scheme="dark" with background
+	// #13141b and data-scheme="light" with #ffffff — the two grounds this module measures against.
+
+	it('keys the pair off data-scheme, not off the root colour scheme', () => {
+		expect(COMPARISON_STYLE).toContain('[data-scheme="light"]')
+		expect(COMPARISON_STYLE).toContain('[data-scheme="dark"]')
+	})
+
+	it('does not depend on a colour scheme being set on the root', () => {
+		// light-dark() at :root is the specific mistake; it must not come back.
+		expect(COMPARISON_STYLE).not.toContain('light-dark')
+	})
+
+	it('assigns each half to the ground it was measured against', () => {
+		const light = COMPARISON_STYLE.split('[data-scheme="light"]')[1]?.split('}')[0] ?? ''
+		const dark = COMPARISON_STYLE.split('[data-scheme="dark"]')[1]?.split('}')[0] ?? ''
+		expect(light).toContain(COMPARISON_ON_LIGHT)
+		expect(dark).toContain(COMPARISON_ON_DARK)
+	})
+
+	it('leaves the balanced colour reachable when the attribute is absent', () => {
+		// A Studio that stops setting data-scheme must degrade to where this started, not to
+		// currentColor — which is why every use site reads the property through a var() fallback.
+		expect(COMPARISON_STYLE).toContain(`:root { --vi-comparison: ${COMPARISON}; }`)
+		expect(COMPARISON_TEXT).toContain(COMPARISON)
+		expect(COMPARISON_TEXT).toContain('var(--vi-comparison')
 	})
 })

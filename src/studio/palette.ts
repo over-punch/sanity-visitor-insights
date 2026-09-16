@@ -112,10 +112,17 @@ export const COMPARISON = '#8368D4'
  * naming the window — all of them small text, which WCAG 1.4.3 holds to 4.5:1. No single colour can
  * reach that on both grounds, so text gets a pair, one per ground, and the browser picks.
  *
- * `light-dark()` resolves against the used `color-scheme`, which Studio sets. Where it is not
- * supported the custom property never gets its second definition and the `var()` fallback applies —
- * so the worst case is exactly the balanced colour, which is where this started. Nothing regresses;
- * the common case simply gets 5.95:1 on the light card and 7.00:1 on the dark one.
+ * The pair is selected off Sanity's own `data-scheme` attribute. An earlier version used
+ * `light-dark()` on `:root` — which measured correctly in isolation and was wrong in the Studio,
+ * because Sanity sets `color-scheme` on the CARD, not on the root. At `:root` the used scheme is
+ * `normal`, `light-dark()` resolves to its light half, and a dark Studio would have rendered the
+ * light colour at 3.09:1 — worse than the balanced colour it replaced. Verified in the browser
+ * rather than reasoned about: the outermost Card carries `data-scheme="dark"` with background
+ * #13141b, and `data-scheme="light"` with #ffffff, which are exactly the two grounds this module
+ * measures against.
+ *
+ * Every use site keeps the balanced colour as its `var()` fallback, so if that attribute ever
+ * changes the identity degrades to where it started rather than disappearing.
  */
 export const COMPARISON_TEXT = `var(--vi-comparison, ${COMPARISON})`
 
@@ -126,15 +133,15 @@ export const COMPARISON_ON_DARK = '#A594E8'
 /**
  * The stylesheet that defines `--vi-comparison`, rendered once by the tool.
  *
- * A custom property rather than an inline style because an inline style cannot carry a fallback
- * declaration: React sets one value per key, so an unsupported `light-dark()` would be dropped and
- * the text would fall back to `currentColor` — losing the identity rather than degrading it.
+ * A custom property rather than an inline style because an inline style cannot carry a fallback:
+ * React sets one value per key, so there would be no way to say "this colour, or that one if the
+ * ground is dark" without knowing the theme at render time, which this package deliberately does
+ * not.
  */
 export const COMPARISON_STYLE = `
 :root { --vi-comparison: ${COMPARISON}; }
-@supports (color: light-dark(#000, #fff)) {
-	:root { --vi-comparison: light-dark(${COMPARISON_ON_LIGHT}, ${COMPARISON_ON_DARK}); }
-}
+[data-scheme="light"] { --vi-comparison: ${COMPARISON_ON_LIGHT}; }
+[data-scheme="dark"] { --vi-comparison: ${COMPARISON_ON_DARK}; }
 `.trim()
 
 /** The grounds a colour has to work on: Sanity's light card and its dark one. */
@@ -211,6 +218,10 @@ export const MARKS: Record<string, Mark> = {
 	'chart.ghost': { key: 'comparison', alpha: 1, role: 'data', note: 'The same window last period, behind everything' },
 	'chart.grid': { key: 'neutral', alpha: 0.18, role: 'furniture', note: 'Grid rules' },
 	'bar.fill': { key: 'vercel', alpha: 1, role: 'data', note: 'Every proportion, comparison and funnel bar' },
+	// The hatch on a rung whose count covers fewer days than the rail it sits in. A `data` mark, not
+	// furniture: it is the only thing on that rung saying the figure is not comparable, so it has to
+	// be as visible as a bar would have been.
+	'bar.partial': { key: 'vercel', alpha: 1, role: 'data', note: 'A funnel rung measured over part of the window' },
 	'bar.track': { key: 'neutral', alpha: 0.12, role: 'furniture', note: 'The rail a bar sits in' },
 	// Neither a source nor money. It was drawn in the REVENUE hue, so a magenta bar between funnel
 	// rungs read as takings; GA4's hue was rejected for the opposite reason, since that hue means

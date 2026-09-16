@@ -56,8 +56,9 @@ const SEQUENCE_NOTE =
 	'so this is an observed sequence rather than a set of independent totals.'
 
 const APPROXIMATION_NOTE =
-	'These are independent per-step totals, not tracked journeys. GA4 cannot report the actual path a ' +
-	'visitor took, so a visitor counted at one step is not necessarily the same visitor counted at the next.'
+	'Each step is counted on its own. Google Analytics cannot follow one visitor through a sequence, ' +
+	'so somebody counted at one step is not necessarily the same person counted at the next — which ' +
+	'means the difference between two steps is not a number of people who left.'
 
 /**
  * Run the journey report.

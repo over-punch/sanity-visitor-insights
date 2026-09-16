@@ -329,7 +329,10 @@ describe('journey', () => {
 		const data = await journey(siteConfig(), ga4, range)
 
 		expect(data.approximate).toBe(true)
-		expect(data.approximationNote).toContain('not tracked journeys')
+		// The wording a foundry owner meets, not the analyst's phrase. "Independent per-step totals"
+		// was removed from the heading above this and survived in the body beneath it.
+		expect(data.approximationNote).toContain('Each step is counted on its own')
+		expect(data.approximationNote).not.toContain('independent per-step totals')
 	})
 
 	it('keeps the funnel when the supplementary exit-page query fails', async () => {
@@ -814,7 +817,10 @@ describe('journey funnel', () => {
 
 		expect(result.measurement).toBe('independent-totals')
 		expect(result.approximate).toBe(true)
-		expect(result.approximationNote).toContain('not tracked journeys')
+		// The claim is that the fallback DENIES a tracked sequence, whatever words it uses — and
+		// forbids the drop-off reading that denial exists to prevent.
+		expect(result.approximationNote).toContain('cannot follow one visitor through a sequence')
+		expect(result.approximationNote).toContain('not a number of people who left')
 		expect(result.steps.every((step) => step.count.status !== 'unavailable')).toBe(true)
 	})
 

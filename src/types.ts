@@ -86,8 +86,12 @@ export function partial(value: number, coveredFrom: string, note: string): Metri
  * Read a metric's number, or `null` when there isn't a usable one.
  * Use at render time so the absent case has to be handled explicitly.
  */
-export function valueOrNull(metric: MetricValue): number | null {
-	return metric.status === 'unavailable' ? null : metric.value
+export function valueOrNull(metric: MetricValue | undefined): number | null {
+	// Undefined is treated as absent, not as a type error to crash on. A site's API route can be
+	// older than the Studio bundle reading it — the package documents that as its normal state
+	// between a publish and a redeploy — so every field is optional in practice whatever the type
+	// says, and a helper that throws on one takes the whole panel down.
+	return !metric || metric.status === 'unavailable' ? null : metric.value
 }
 
 // ---------------------------------------------------------------------------

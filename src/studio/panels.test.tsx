@@ -24,7 +24,7 @@ import { decodeView, encodeView, mergeIntoHash } from './urlState'
 import { captureModel, fromOrders, fromPageviews, grossUp } from '../core/capture'
 import { forgetShortfalls, knownShortfall, rememberShortfall } from './useReport'
 import { CrossSourceTimeline, HoverCard, colorFor, dayIndexAt, findCoverageIncident } from './CrossSourceTimeline'
-import { COMPARISON, MARKS, SERIES, mark, seriesFill } from './palette'
+import { COMPARISON, COMPARISON_TEXT, MARKS, SERIES, mark, seriesFill } from './palette'
 import React from 'react'
 import {
 	AcquisitionPanel,
@@ -123,7 +123,10 @@ describe('MetricFigure', () => {
 	it('marks a partial value as partial while still showing the number', () => {
 		const html = render(<MetricFigure metric={partial(120, '2026-09-01', 'Undercounted: outage')} label="Purchases" />)
 		expect(html).toContain('120')
-		expect(html).toContain('Some orders only')
+		// Named from the metric. The badge was the fixed string "Some orders only" — written for the
+		// revenue case and then worn by every partial figure in the tool, including GA4 view counts
+		// on Typeface interest, where no order is involved and it is simply false.
+		expect(html).toContain('From 1 Sept only')
 	})
 })
 
@@ -184,7 +187,7 @@ describe('MeasurementHealthPanel', () => {
 describe('JourneyPanel', () => {
 	const data = {
 		approximate: true as const,
-		approximationNote: 'Independent per-step totals, not tracked journeys.',
+		approximationNote: 'Each step is counted on its own, not as a tracked journey.',
 		steps: [
 			{ key: 'landed', label: 'Landed', event: 'page_view', count: ok(33486), conversionFromPrevious: null },
 			{ key: 'tested', label: 'Used the type tester', event: 'tester_engaged', count: unavailable('not_instrumented'), conversionFromPrevious: null },
@@ -220,7 +223,7 @@ describe('JourneyPanel', () => {
 	it('names the fallback as independent totals and keeps the caution', () => {
 		const html = render(<JourneyPanel data={data} />)
 		expect(html).toContain('Not a tracked path')
-		expect(html).toContain('not tracked journeys')
+		expect(html).toContain('Each step is counted on its own')
 		// Cautionary tone, because independent totals invite a drop-off reading they cannot support.
 		expect(html).toContain('caution')
 		// And the gaps between rungs are never described as people who left.
@@ -228,7 +231,8 @@ describe('JourneyPanel', () => {
 		// Nor as an arithmetic difference. "N fewer" was drawn on every gap, right-aligned against
 		// the empty space where a tracked funnel would have put a bar — arithmetic the reader can do
 		// from the two counts either side, restated under a card that forbids reading it as drop-off.
-		expect(html).not.toContain('fewer')
+		// Scoped to the gap wording: the hatch key legitimately says "fewer days".
+		expect(html).not.toMatch(/\d+ fewer/)
 	})
 
 	it('presents a tracked funnel as a sequence rather than as a caveat', () => {
@@ -4063,15 +4067,17 @@ describe('the comparison identity', () => {
 	it('draws the move and its baseline in the one comparison colour', () => {
 		const html = render(<Delta current={357} previous={298} />)
 		// Both halves, so "from 298" cannot drift back into a grey of its own.
-		expect(html.match(new RegExp(COMPARISON, 'gi'))?.length).toBeGreaterThanOrEqual(2)
+		// The PROPERTY, not the hex. The hex is only the var() fallback now, so matching it passed on
+		// the failure mode — which is exactly how a dark-theme contrast bug shipped green last pass.
+		expect(html.match(/var\(--vi-comparison/g)?.length).toBeGreaterThanOrEqual(2)
 	})
 
 	it('draws a good move and a bad move in the same colour', () => {
 		// The whole point: hue says "this is a comparison", never "this is good news".
 		const good = render(<Delta current={357} previous={298} />)
 		const bad = render(<Delta current={298} previous={357} />)
-		expect(good).toContain(COMPARISON)
-		expect(bad).toContain(COMPARISON)
+		expect(good).toContain(COMPARISON_TEXT)
+		expect(bad).toContain(COMPARISON_TEXT)
 	})
 
 	it('still separates a good move from a bad one without using colour', () => {
@@ -4090,7 +4096,7 @@ describe('the comparison identity', () => {
 		// Percentage points, on the 0-100 scale the panels pass — 26.9% against 31.1%, as the
 		// No-source card shows it.
 		const falling = render(<Delta current={26.9} previous={31.1} unit="percent" riseIsGood={false} />)
-		expect(falling).toContain(COMPARISON)
+		expect(falling).toContain(COMPARISON_TEXT)
 		expect(falling).toContain('\u2193')
 	})
 
@@ -4124,7 +4130,7 @@ describe('a funnel rung measured over fewer days says so', () => {
 
 	const partialStages = [
 		{ key: 'landed', label: 'Landed', value: 475, conversionFromPrevious: null },
-		{ key: 'viewed', label: 'Viewed a typeface', value: 161, conversionFromPrevious: 0.339, partial: { from: '1 Sep' } },
+		{ key: 'viewed', label: 'Viewed a typeface', value: 161, conversionFromPrevious: 0.339, partial: { from: '1 Sept' } },
 		{ key: 'bought', label: 'Purchased', value: 7, conversionFromPrevious: 0.043 },
 	]
 
@@ -4135,7 +4141,9 @@ describe('a funnel rung measured over fewer days says so', () => {
 
 	it('says which day the count starts from', () => {
 		const html = render(<FunnelChart stages={partialStages} measurement="independent-totals" />)
-		expect(html).toContain('only counted from 1 Sep')
+		// The reason, not just the date. "Only counted from 1 Sep" reads as a fault; the truth is
+		// that nobody was looking before then because the tracking did not exist.
+		expect(html).toContain('tracking added 1 Sept')
 	})
 
 	it('still shows the count, which is real for the days it covers', () => {
@@ -4181,7 +4189,7 @@ describe('the panel carries a step\'s coverage into the chart', () => {
 
 	const withPartial = {
 		approximate: true as const,
-		approximationNote: 'Independent per-step totals, not tracked journeys.',
+		approximationNote: 'Each step is counted on its own, not as a tracked journey.',
 		steps: [
 			{ key: 'landed', label: 'Landed', event: 'page_view', count: ok(475), conversionFromPrevious: null },
 			{
@@ -4199,7 +4207,7 @@ describe('the panel carries a step\'s coverage into the chart', () => {
 
 	it('marks the rung rather than drawing it as a full-window count', () => {
 		const html = render(<JourneyPanel data={withPartial as never} />)
-		expect(html).toContain('only counted from 1 Sep')
+		expect(html).toContain('tracking added 1 Sept')
 	})
 
 	it('does not print a share across two different windows', () => {
@@ -4368,5 +4376,314 @@ describe('a caption does not explain a number that is not there', () => {
 		expect(html).toContain('from Vercel’s own counter')
 		expect(html).toContain('Everyone subscribed today')
 		expect(html).toContain('some are bots or the same person twice')
+	})
+})
+
+describe('a part-window rung refuses the encoding, not just the number', () => {
+	// The half-fix that shipped: the SENTENCE said no share was shown while the BAR went on showing
+	// one. 161 counted over sixteen days, drawn at 161/475 of a rail whose denominator spans thirty,
+	// reads as "a third of arrivals" when the comparable figure is nearer two thirds. A reader
+	// measures bars against each other whatever the caption says.
+
+	const stages = [
+		{ key: 'landed', label: 'Landed', value: 475, conversionFromPrevious: null },
+		{ key: 'viewed', label: 'Viewed a typeface', value: 161, conversionFromPrevious: 0.339, partial: { from: '1 Sept' } },
+	]
+
+	it('draws no proportional bar for the partial rung', () => {
+		const html = render(<FunnelChart stages={stages} measurement="independent-totals" />)
+		// 161/475 is 33.9%. No element may be that wide.
+		expect(html).not.toMatch(/width:\s*33\.\d+%/)
+	})
+
+	it('draws the full rail instead, which cannot be mis-measured against the rung above', () => {
+		const html = render(<FunnelChart stages={stages} measurement="independent-totals" />)
+		expect(html).toContain('repeating-linear-gradient')
+		expect(html).toMatch(/repeating-linear-gradient[^"]*"/)
+	})
+
+	it('still draws a proportional bar for a rung that covers the whole window', () => {
+		const html = render(<FunnelChart stages={[
+			{ key: 'landed', label: 'Landed', value: 475, conversionFromPrevious: null },
+			{ key: 'viewed', label: 'Viewed a typeface', value: 161, conversionFromPrevious: 0.339 },
+		]} measurement="independent-totals" />)
+		expect(html).toMatch(/width:\s*33\.\d+%/)
+	})
+
+	it('keys the hatch, since it is a mark like any other', () => {
+		// It shipped with nothing anywhere saying what a striped bar meant — in the same work whose
+		// subject was legends that do not match their graphs.
+		const html = render(<FunnelChart stages={stages} measurement="independent-totals" />)
+		expect(html).toContain('Striped: tracking started partway through this period')
+	})
+
+	it('says nothing about stripes when no rung is striped', () => {
+		const html = render(<FunnelChart stages={[
+			{ key: 'landed', label: 'Landed', value: 475, conversionFromPrevious: null },
+		]} measurement="independent-totals" />)
+		expect(html).not.toContain('Striped:')
+	})
+})
+
+describe('the average-order card does not contradict itself', () => {
+	const partialAov = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), ordersWithTotal: 2, vercelDailyUnavailable: false,
+		revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '',
+		audience: ok(4210), audienceGrowth: ok(108), crossSource: [], timelineEvents: [], campaigns: [],
+	}
+
+	it('does not call an average over 2 of 7 orders exact', () => {
+		// Both captions rendered, eight words apart, under the tab's second-largest figure: the card
+		// stated its caveat and then denied it.
+		const html = render(<OverviewPanel data={partialAov as never} />)
+		expect(html).toContain('2 of 7 orders')
+		expect(html).not.toContain('From your orders, so exact.')
+	})
+
+	it('still says so when every order carries an amount', () => {
+		const html = render(<OverviewPanel data={{ ...partialAov, ordersWithTotal: 7 } as never} />)
+		expect(html).toContain('From your orders, so exact.')
+	})
+})
+
+describe('a caption needs a figure to be about', () => {
+	// `undefined?.status !== "unavailable"` is TRUE. These fields are absent whenever a site's
+	// analytics route predates them — the exact case `metricOr(..., OLDER_ROUTE)` exists for — so
+	// tightening the gate in an earlier pass produced a dash, an explanation that the route is old,
+	// and then a sentence about where the number came from.
+	const noRouteFields = {
+		ga4Pageviews: ok(475), shortfallRatio: 0.798, ga4Sessions: ok(357), orders: ok(7),
+		consentRate: unavailable('not_instrumented'), ordersWithTotal: 7,
+		revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '',
+		crossSource: [], timelineEvents: [], campaigns: [],
+		// vercelPageviews, vercelVisitors, audience and audienceGrowth deliberately absent.
+	}
+
+	it('says nothing about Vercel when the route never sent a Vercel figure', () => {
+		const html = render(<OverviewPanel data={noRouteFields as never} />)
+		expect(html).not.toContain('from Vercel’s own counter')
+		expect(html).not.toContain('some are bots or the same person twice')
+	})
+
+	it('says nothing about the mailing list when the route never sent one', () => {
+		const html = render(<OverviewPanel data={noRouteFields as never} />)
+		expect(html).not.toContain('Everyone subscribed today')
+	})
+})
+
+describe('the comparison identity is delivered, not just declared', () => {
+	it('reads the colour through the property the stylesheet defines', () => {
+		// Matching the bare hex passes on the var() FALLBACK, so it cannot tell a working property
+		// from one resolving to the wrong half of the pair. That is how a dark-theme contrast bug
+		// shipped green.
+		const html = render(<Delta current={357} previous={298} />)
+		expect(html).toContain('var(--vi-comparison')
+	})
+
+	it('keeps a fallback, so a missing stylesheet degrades rather than erases the identity', () => {
+		const html = render(<Delta current={357} previous={298} />)
+		expect(html).toContain(COMPARISON)
+	})
+})
+
+describe('the survival chart respects the same coverage the funnel does', () => {
+	// The funnel bug, un-fixed one component up the same tab: segment step counts carry `partial`
+	// exactly as the funnel's do, and this chart drew a thirteen-day count as a share of a
+	// thirty-one-day one — as a solid vertex, beside a full-window line — while the funnel forty
+	// lines below refused to print that share at all.
+	const steps = ['Landed', 'Viewed', 'Tested']
+	const segs = [
+		{ key: 'desktop', label: 'Desktop', values: [1000, 400, 100] },
+		{ key: 'mobile', label: 'Mobile', values: [800, 300, 90] },
+	]
+
+	it('draws nothing at all when the window changes at the first step after entry', () => {
+		// Every line would be a single vertex, and a chart of two dots is not a comparison. Drawing
+		// nothing is the honest outcome — the funnel below still lists the steps, and its hatch key
+		// explains why they are not comparable.
+		const html = renderToStaticMarkup(
+			<ThemeProvider theme={theme}>
+				<SurvivalLines segments={segs} stepLabels={steps} partialSteps={[1]} />
+			</ThemeProvider>,
+		)
+		expect(html).toBe('')
+	})
+
+	it('draws the whole line when every step covers the window', () => {
+		const html = render(<SurvivalLines segments={segs} stepLabels={steps} />)
+		const points = [...html.matchAll(/points="([^"]+)"/g)].map((m) => (m[1] ?? '').split(' ').length)
+		expect(points).toEqual([3, 3])
+	})
+
+	it('draws up to the partial step and no further', () => {
+		const html = render(<SurvivalLines segments={segs} stepLabels={steps} partialSteps={[2]} />)
+		const points = [...html.matchAll(/points="([^"]+)"/g)].map((m) => (m[1] ?? '').split(' ').length)
+		expect(points).toEqual([2, 2])
+	})
+})
+
+describe('the headline revenue figure carries its currency', () => {
+	// The card took the money formatter only on `ok` and fell through to MetricFigure — and so to
+	// the COUNT formatter — for everything else. Revenue on this site is permanently partial,
+	// because most orders predate the amount field, so the branch never fired and the tab's headline
+	// money rendered as a bare number beside an "Average order US$455" that did carry one.
+	const base = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), ordersWithTotal: 2, vercelDailyUnavailable: false,
+		currency: 'USD', orderStatuses: {}, interpretation: '',
+		audience: ok(4210), audienceGrowth: ok(108), crossSource: [], timelineEvents: [], campaigns: [],
+	}
+
+	it('writes a partial revenue as money, not as a count', () => {
+		const html = render(<OverviewPanel data={{ ...base, revenue: partial(12346, '', 'over 2 of 7') } as never} />)
+		expect(html).toContain('US$12,346')
+		expect(html).not.toMatch(/>12,346</)
+	})
+
+	it('writes an exact revenue as money too', () => {
+		const html = render(<OverviewPanel data={{ ...base, revenue: ok(910), ordersWithTotal: 7 } as never} />)
+		expect(html).toContain('US$910')
+	})
+})
+
+describe('a withheld rate leaves no element behind', () => {
+	// This was claimed as fixed in a commit message and was not in the diff — the edit silently
+	// matched nothing. `rateLine` returns its own <Text> or null, so the surviving wrapper produced
+	// a Text inside a Text when there was a rate, and an empty Text holding a line of leading under
+	// every rung when there was not.
+	const stages = (values: number[]) => values.map((value, i) => ({
+		key: `s${i}`,
+		label: ['Landed', 'Viewed', 'Tested', 'Added', 'Checkout', 'Bought'][i]!,
+		value,
+		conversionFromPrevious: i === 0 ? null : value / values[i - 1]!,
+	}))
+
+	it('renders no empty text element under a rung whose rate was withheld', () => {
+		const html = render(<FunnelChart stages={stages([1000, 5])} measurement="sequence" />)
+		expect(html).not.toMatch(/data-ui="Text"[^>]*><span><\/span>/)
+	})
+
+	it('does not nest one text element inside another when there is a rate', () => {
+		// A block inside an inline, and two stacked line boxes for one sentence.
+		const html = render(<FunnelChart stages={stages([2000, 900])} measurement="sequence" />)
+		expect(html).not.toMatch(/data-ui="Text"[^>]*><span><div[^>]*data-ui="Text"/)
+	})
+})
+
+describe('the device comparison survives a part-window step', () => {
+	// Cutting every line where the window changes is honest and useless: at Darden the first step
+	// after entry is part-window, so each line became a single vertex and the chart returned null —
+	// the view showing mobile converting at a ninth of desktop simply vanished, with nothing saying
+	// why. Dropping those steps keeps the comparison over the steps that can carry one.
+	const partialMid = {
+		approximate: true as const,
+		approximationNote: 'Each step is counted on its own, not as a tracked journey.',
+		segmentDimension: 'device',
+		steps: [
+			{ key: 'landed', label: 'Landed', event: 'page_view', count: ok(475), conversionFromPrevious: null },
+			{ key: 'viewed', label: 'Viewed a typeface', event: 'view_item', count: partial(161, '2026-09-01', 'added then'), conversionFromPrevious: 0.339 },
+			{ key: 'cart', label: 'Added to cart', event: 'add_to_cart', count: ok(23), conversionFromPrevious: 0.143 },
+			{ key: 'bought', label: 'Purchased', event: 'purchase', count: ok(7), conversionFromPrevious: 0.304 },
+		],
+		segments: [
+			{ key: 'desktop', label: 'Desktop', steps: [
+				{ key: 'landed', label: 'Landed', event: 'page_view', count: ok(232), conversionFromPrevious: null },
+				{ key: 'viewed', label: 'Viewed a typeface', event: 'view_item', count: partial(96, '2026-09-01', 'added then'), conversionFromPrevious: 0.414 },
+				{ key: 'cart', label: 'Added to cart', event: 'add_to_cart', count: ok(18), conversionFromPrevious: 0.188 },
+				{ key: 'bought', label: 'Purchased', event: 'purchase', count: ok(6), conversionFromPrevious: 0.333 },
+			] },
+			{ key: 'mobile', label: 'Mobile', steps: [
+				{ key: 'landed', label: 'Landed', event: 'page_view', count: ok(219), conversionFromPrevious: null },
+				{ key: 'viewed', label: 'Viewed a typeface', event: 'view_item', count: partial(58, '2026-09-01', 'added then'), conversionFromPrevious: 0.265 },
+				{ key: 'cart', label: 'Added to cart', event: 'add_to_cart', count: ok(5), conversionFromPrevious: 0.086 },
+				{ key: 'bought', label: 'Purchased', event: 'purchase', count: ok(1), conversionFromPrevious: 0.2 },
+			] },
+		],
+		topLandingPages: [],
+		outcomes: [],
+		measurement: 'independent-totals' as const,
+	}
+
+	it('still draws both segments', () => {
+		const html = render(<JourneyPanel data={partialMid as never} />)
+		const strokes = [...html.matchAll(/<polyline[^>]*stroke="([^"]+)"/g)].map((m) => m[1])
+		expect(strokes).toHaveLength(2)
+	})
+
+	it('leaves the part-window step out of the comparison entirely', () => {
+		// Present in the funnel below, absent from this chart's axis — it cannot join a comparison
+		// whose other points span a different number of days.
+		const html = render(<JourneyPanel data={partialMid as never} />)
+		const axis = html.slice(0, html.indexOf('Landed</button>') + 40)
+		expect(axis).not.toContain('>Viewed a typeface</button>')
+		// And the funnel still lists it.
+		expect(html).toContain('tracking added 1 Sept')
+	})
+
+	it('compares across the steps that do cover the whole window', () => {
+		const html = render(<JourneyPanel data={partialMid as never} />)
+		// Three whole steps are on the axis — Landed, Added to cart, Purchased — but each line stops
+		// after two: the cart counts (18 desktop, 5 mobile) are under the denominator floor, so a
+		// third vertex would be a share computed on single digits. Both refusals compose, and the
+		// comparison that matters — where the two segments separate — is still drawn.
+		const points = [...html.matchAll(/points="([^"]+)"/g)].map((m) => (m[1] ?? '').split(' ').length)
+		expect(points).toEqual([2, 2])
+	})
+})
+
+describe('the verdict leads with the business, not the instrument', () => {
+	// The loudest object on the default tab is this card. It joined three facts about the foundry
+	// and one about Google Analytics with middots, in one size — so on a site where GA4 sees a fifth
+	// of its traffic, an owner with five minutes read an amber alarm whose first clause was
+	// plumbing, and had to parse to the end to find the money.
+	const base = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), ordersWithTotal: 7, vercelDailyUnavailable: false,
+		revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '',
+		audience: ok(4210), audienceGrowth: ok(108), crossSource: [], timelineEvents: [], campaigns: [],
+	}
+	const before = { ...base, revenue: ok(640), orders: ok(5), vercelPageviews: ok(2100) }
+
+	it('puts the money before the measurement fault', () => {
+		const html = render(<OverviewPanel data={base as never} previous={before as never} />)
+		expect(html.indexOf('US$910')).toBeLessThan(html.indexOf('treat its figures as broken'))
+	})
+
+	it('keeps the fault on the card, in smaller type', () => {
+		// Demoted, not deleted — it is a real qualifier on the traffic figure beside it.
+		const html = render(<OverviewPanel data={base as never} previous={before as never} />)
+		expect(html).toContain('treat its figures as broken')
+	})
+
+	it('still says something when the coverage reading is all there is', () => {
+		// `broken` used to fill `parts`; moving it out meant a window with no business figures fell
+		// through to "No figures arrived", which is the one state where the reading is the finding.
+		const bare = {
+			shortfallRatio: 0.798, ga4Pageviews: ok(475), orderStatuses: {}, interpretation: '',
+			crossSource: [], timelineEvents: [], campaigns: [], currency: 'USD',
+		}
+		const html = render(<OverviewPanel data={bare as never} />)
+		expect(html).toContain('treat its figures as broken')
+		expect(html).not.toContain('No figures arrived for this window')
+	})
+})
+
+describe('a sparse envelope degrades instead of throwing', () => {
+	// `MetricFigure` reads `metric.status` on its first line, so a field the site's route never sent
+	// threw and took the whole panel with it. `metricOr` exists for exactly this case — the window
+	// between publishing this package and redeploying a site, which the file elsewhere calls "the
+	// normal state of this repo".
+	it('renders Overview from an envelope missing most fields', () => {
+		const bare = { shortfallRatio: 0.798, orderStatuses: {}, interpretation: '', crossSource: [], timelineEvents: [], campaigns: [] }
+		expect(() => render(<OverviewPanel data={bare as never} />)).not.toThrow()
+	})
+
+	it('renders Data health from one too', () => {
+		const bare = { orderStatuses: {}, interpretation: '', crossSource: [], timelineEvents: [] }
+		expect(() => render(<DataHealthPanel data={bare as never} />)).not.toThrow()
 	})
 })
