@@ -280,6 +280,14 @@ export interface AcquisitionData {
 	actualRevenue?: number | null
 	/** Sanity's exact order count for the window. Null when absent. */
 	actualOrders?: number | null
+	/**
+	 * How many of `actualOrders` carried no amount, so `actualRevenue` does not cover them.
+	 *
+	 * The two figures counted different orders and the sentence joined them as if they were one:
+	 * "Revenue is US$3,150 from 69 orders" where the money covers eleven. The count was already
+	 * computed in `orders.ts` and dropped on the way out.
+	 */
+	ordersMissingTotal?: number | null
 	/** ISO currency for the apportioned figures, from site config. Null when the site names none. */
 	currency?: string | null
 }
@@ -438,6 +446,15 @@ export interface TypefaceInterestData {
 	rowsTruncated: boolean
 	/** Whether the revenue column is an apportionment rather than a measured per-family value. */
 	revenueIsApportioned: boolean
+	/**
+	 * Money from orders that resolve to no family in this catalogue.
+	 *
+	 * Without it the column sums to less than the range's revenue and nothing on screen says why —
+	 * which is the reason `orders.ts` computes the figure, in a comment, before this dropped it.
+	 */
+	unattributedRevenue?: number | null
+	/** Orders in this range carrying no amount, so the revenue column does not cover them. */
+	ordersMissingTotal?: number | null
 	/** ISO 4217 code for the revenue column, or null when revenue is unavailable. */
 	currency: string | null
 }

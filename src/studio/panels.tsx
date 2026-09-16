@@ -226,7 +226,15 @@ export function OverviewPanel({ data, previous, onBrush }: {
 						    rank is what tells them whether the week was normal, which the percentage
 						    never could. Exact quantities only: ranking a GA4 figure would rank the
 						    instrument's mood alongside the business. */}
-						{rankLine(data.crossSource, (d) => d.revenue) && (
+						{/* Gated on the SAME condition as the timeline's revenue row, which is the point.
+						
+						    `crossSource[].revenue` is `revenueByDate[date] ?? 0`, and a day whose orders
+						    all lacked an amount has no key — so it is summed as a zero. The chart below
+						    refuses to draw that series for exactly this reason; the rank line beside it
+						    ranked weeks off the same numbers and announced "best of the last 13 weeks".
+						    One chart declining to show a series while a sentence four inches up draws a
+						    conclusion from it is the disagreement this whole review kept finding. */}
+						{revenueCoversEveryOrder(data) && rankLine(data.crossSource, (d) => d.revenue) && (
 							<Text size={0} muted>{rankLine(data.crossSource, (d) => d.revenue)}</Text>
 						)}
 					</Stack>
@@ -1334,8 +1342,16 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 					// which is a different claim from measured. Saying so here is what makes the
 					// column usable rather than another figure to distrust.
 					<Text size={0} muted>
+						{/* The denominator the money actually covers. `actualRevenue` sums only orders
+						    carrying an amount and `actualOrders` counts all of them, so this read
+						    "Revenue is US$3,150 from 69 orders" where the money covered eleven — two
+						    different sets of orders joined by the word "from". */}
 						Revenue is {formatMoney(finiteOrNull(data.actualRevenue) ?? 0, data.currency ?? null)} from{' '}
-						{finiteOrNull(data.actualOrders) === null ? 'your orders' : `${formatCount(data.actualOrders as number)} orders`} in Sanity,
+						{finiteOrNull(data.actualOrders) === null
+							? 'your orders'
+							: (data.ordersMissingTotal ?? 0) > 0
+								? `the ${formatCount((data.actualOrders as number) - (data.ordersMissingTotal as number))} of ${formatCount(data.actualOrders as number)} orders that carry an amount`
+								: `${formatCount(data.actualOrders as number)} orders`}{' '}in Sanity,
 						split across the {formatCount(data.trackedPurchases ?? 0)} purchase
 						{data.trackedPurchases === 1 ? '' : 's'} Google Analytics attributed to a source. Google
 						Analytics sees a fraction of your traffic, so treat this as a proportion with a real total
@@ -1992,7 +2008,8 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 					visitors who buy: Google Analytics sees only a fraction of the views, which moves every
 					family together and so cancels out here. With one or two sales a family will still swing a
 					long way, so read it alongside the order counts beside it.
-					{' '}Bought and Revenue come from your own orders and are exact — do not scale those up.
+					{' '}Bought and Revenue come from your own orders, not from Google Analytics — do not scale
+					those up.
 					{' '}A family needs a reasonable number of views before it gets a comparison at all;
 					below that it says so rather than ranking one order against the catalogue.
 				</Text>
@@ -2170,8 +2187,29 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 			    ~28 words apart, which read as a stutter and made the other notes look cheaper. */}
 			{data.revenueIsApportioned && (
 				<Text size={0} muted>
-					Revenue is apportioned: an order covering several families or licences is split evenly
-					between them, because the order documents carry no per-line value.
+					{/* "Apportioned" was the stall, and it was not even the risk — EVENLY is. A foundry
+					    that sold two weights on one invoice sees half the money against each, which is
+					    not how they booked it. */}
+					An order covering several families is split evenly between them, because the order
+					documents carry no per-line value.
+				</Text>
+			)}
+			{/* Why the column sums short. `orders.ts` computes this figure with a comment saying it
+			    exists to stop the column summing to less than the range's revenue with nothing to
+			    explain it — and then it was surfaced nowhere. */}
+			{finiteOrNull(data.unattributedRevenue) !== null && (data.unattributedRevenue as number) > 0 && (
+				<Text size={0} muted>
+					{formatMoney(data.unattributedRevenue as number, data.currency ?? null)} of this range&rsquo;s
+					takings is not in the column above — those orders name no family in this catalogue.
+				</Text>
+			)}
+			{/* And how much of the order book the column covers at all. The same money is reported as
+			    partial on Overview; this tab used to call it exact. */}
+			{finiteOrNull(data.ordersMissingTotal) !== null && (data.ordersMissingTotal as number) > 0 && (
+				<Text size={0} muted>
+					{formatCount(data.ordersMissingTotal as number)} order
+					{data.ordersMissingTotal === 1 ? '' : 's'} in this range carry no amount, so the revenue
+					column does not cover {data.ordersMissingTotal === 1 ? 'it' : 'them'}.
 				</Text>
 			)}
 		</Stack>

@@ -402,7 +402,12 @@ async function runReport(report: string, ctx: RunContext): Promise<unknown> {
 				: null
 			return acquisition({
 				config, range, ga4, notices,
-				actuals: counted ? { revenue: counted.revenue, orders: counted.total } : null,
+				// The gap travels with them. `revenue` sums only orders carrying an amount while
+				// `total` counts all of them, so the two describe different sets of orders and the
+				// panel joined them in one sentence as though they did not.
+				actuals: counted
+					? { revenue: counted.revenue, orders: counted.total, ordersMissingTotal: counted.ordersMissingTotal }
+					: null,
 			})
 		}
 

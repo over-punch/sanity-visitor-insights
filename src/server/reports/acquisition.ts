@@ -75,7 +75,7 @@ export interface AcquisitionInput {
 	 * GA4's split gives a figure that is right in scale and honest about its derivation, which is
 	 * the whole reason to hold both sources.
 	 */
-	actuals?: { revenue: number | null; orders: number | null } | null
+	actuals?: { revenue: number | null; orders: number | null; ordersMissingTotal?: number | null } | null
 	notices?: string[]
 }
 
@@ -376,6 +376,7 @@ export async function acquisition(input: AcquisitionInput): Promise<AcquisitionD
 		/** Sanity's exact figures for the same window, so the panel can say what it apportioned. */
 		actualRevenue: actuals?.revenue ?? null,
 		actualOrders: actuals?.orders ?? null,
+		ordersMissingTotal: actuals?.ordersMissingTotal ?? null,
 		currency: config.orders?.currency ?? null,
 		// Withheld, not approximated, when the denominator cannot be trusted. A share of an unknown
 		// whole is not a smaller truth, it is a different number wearing a percent sign.

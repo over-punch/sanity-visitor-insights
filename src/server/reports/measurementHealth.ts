@@ -19,13 +19,23 @@
  */
 
 import type { CrossSourceDay, EmailCampaign, MeasurementHealthData, TimelineEvent } from '../../reportData'
-import { SEND_WINDOW_DAYS, provisionalDates, shiftDays } from '../../core/ranges'
+import { SEND_WINDOW_DAYS, daysBetween, provisionalDates, shiftDays } from '../../core/ranges'
 import type { DateRange, MetricValue } from '../../types'
 import { partial, estimated, ok, unavailable } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
 import { coverageForAny } from '../../core/cutover'
 import { captureModel, fromEmail, fromOrders, fromPageviews, grossUp, type CaptureModel } from '../../core/capture'
 import type { MailchimpClient } from '../mailchimp'
+
+/**
+ * How long a send needs before its click total is comparable with a window of sessions.
+ *
+ * Mailchimp reports clicks for a campaign's whole life, not for a date range. Most land within about
+ * seventy-two hours of a send, so a campaign that went out at least this long before the range ends
+ * has substantially all of its clicks inside the same stretch the sessions were counted over. One
+ * that went out yesterday does not, and dividing the two produces a rate over neither.
+ */
+const EMAIL_SETTLE_DAYS = 3
 import { eventNamesFilter, sumFirstMetric, type Ga4Client } from '../ga4'
 import type { VercelClient } from '../vercel'
 import { zonedDay, countOrders, orderQueryOptions, type SanityQueryClient } from '../orders'
@@ -641,7 +651,20 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 
 			// The cohort for the third capture estimate: distinct people who clicked through, each
 			// of whom should have produced a GA4 session.
-			campaignClicks = sent.reduce((total, campaign) => total + campaign.uniqueClicks, 0)
+			//
+			// WITHHELD WHEN THE TWO SIDES COVER DIFFERENT SPANS. Mailchimp's `unique_subscriber_clicks`
+			// is a campaign's ALL-TIME report stat, while the GA4 sessions it is divided into are
+			// strictly inside this range. A send on the range's last day therefore contributes every
+			// click it will ever get against one day of sessions, which on a Week range can halve the
+			// apparent capture rate — and that rate is admissible in `grossUp` and drives a dated
+			// accusation about missing UTM tags. Same rule as the growth figure a few lines up: a
+			// number measured over a different window than the panel claims is worse than none.
+			const unsettled = sent.some(
+				(campaign) => campaign.sentAt !== '' && daysBetween(campaign.sentAt.slice(0, 10), range.end) < EMAIL_SETTLE_DAYS,
+			)
+			campaignClicks = unsettled
+				? null
+				: sent.reduce((total, campaign) => total + campaign.uniqueClicks, 0)
 		} catch (e) {
 			console.error('Visitor insights: Mailchimp query failed:', (e as Error).message)
 			audience = unavailable('source_error')

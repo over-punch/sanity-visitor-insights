@@ -16,7 +16,7 @@
 
 import type { TypefaceInterestData, TypefaceInterestRow } from '../../reportData'
 import type { DateRange, MetricValue } from '../../types'
-import { ok, unavailable } from '../../types'
+import { ok, partial, unavailable } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
 import { applyCoverage, coverageForAny } from '../../core/cutover'
 import { eventNamesFilter, type Ga4Client, type Ga4Report } from '../ga4'
@@ -168,6 +168,12 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 	 * same flag; this file was never given one.
 	 */
 	let ordersMeasured = false
+	// How many orders in this range carried no amount, and how much money could not be attributed to
+	// any family. Both were computed by `countOrdersByTypeface` and discarded — so this tab called a
+	// revenue column exact while Overview reported the SAME quantity as partial, and the column
+	// could sum to less than the range's revenue with nothing on screen to explain the difference.
+	let ordersMissingTotal = 0
+	let unattributedRevenue: number | null = null
 	if (sanity) {
 		try {
 			const counts = await countOrdersByTypeface(
@@ -179,6 +185,8 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 			if (counts) {
 				bought = new Map(Object.entries(counts.byTypeface))
 				if (counts.revenueByTypeface) revenue = new Map(Object.entries(counts.revenueByTypeface))
+				ordersMissingTotal = counts.ordersMissingTotal
+				unattributedRevenue = counts.unattributedRevenue
 			}
 		} catch (e) {
 			console.error('Visitor insights: per-typeface order count failed:', (e as Error).message)
@@ -296,7 +304,16 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 				: unavailable('source_error', 'Your orders could not be read for this range')
 			: familyRevenue === undefined
 				? unavailable('not_instrumented', 'No order for this family carried a total')
-				: ok(familyRevenue)
+				// Partial when the order book itself is partial. The same money is reported as partial
+				// on Overview; returning `ok` here made one quantity two different claims depending on
+				// which tab you were looking at, and the blurb above the column called it exact.
+				: ordersMissingTotal > 0
+					? partial(
+						familyRevenue,
+						'',
+						`Covers only the orders that carry an amount; ${ordersMissingTotal} in this range do not.`,
+					)
+					: ok(familyRevenue)
 
 		return {
 			typeface: family,
@@ -344,6 +361,11 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 		rowsWithheld: anyThresholded,
 		rowsTruncated: anyTruncated,
 		revenueIsApportioned: revenue !== null,
+		// Money from orders that resolve to no family in this catalogue. Without it the column sums
+		// to less than the range's revenue and nothing on screen says why — which `orders.ts` states
+		// as the reason it computes the figure at all.
+		unattributedRevenue,
+		ordersMissingTotal,
 		currency: config.orders.currency ?? null,
 	}
 }

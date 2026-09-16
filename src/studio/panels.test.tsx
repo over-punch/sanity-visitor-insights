@@ -4737,3 +4737,103 @@ describe('the sells-vs-catalogue cell names which absence it is', () => {
 		expect(html).toContain('too few views to compare')
 	})
 })
+
+describe('the split sentence names the orders the money covers', () => {
+	// `actualRevenue` sums only orders carrying an amount; `actualOrders` counts all of them. The
+	// sentence joined them with the word "from", so it read "Revenue is US$3,150 from 69 orders"
+	// where the money covered eleven.
+	const rows = [
+		{ source: 'google', channel: 'Organic Search', medium: 'organic', campaign: null, sessions: 151, engagedSessions: 96, engagementRate: 0.6, designIndustry: false, unattributed: false, revenueShare: 1, apportionedRevenue: 3150 },
+	]
+	const data = (ordersMissingTotal: number | null) => ({
+		totalSessions: 151, designIndustryShare: null, unattributedShare: null,
+		rowsWithheld: false, rowsTruncated: false, rows,
+		splitIsSound: true, actualRevenue: 3150, actualOrders: 69, ordersMissingTotal,
+		trackedPurchases: 7, shownPurchases: 7, currency: 'USD',
+	})
+
+	it('names the smaller denominator when orders carry no amount', () => {
+		const html = render(<AcquisitionPanel data={data(58) as never} />)
+		expect(html).toContain('the 11 of 69 orders that carry an amount')
+	})
+
+	it('says just the count when every order carries one', () => {
+		const html = render(<AcquisitionPanel data={data(0) as never} />)
+		expect(html).toContain('69 orders in Sanity')
+		expect(html).not.toContain('that carry an amount')
+	})
+})
+
+describe('the revenue rank agrees with the chart beneath it', () => {
+	// crossSource[].revenue is `revenueByDate[date] ?? 0`, so a day whose orders all lacked an
+	// amount is summed as a zero. The timeline refuses to draw that series for exactly this reason;
+	// the rank line ranked weeks off the same numbers four inches above it.
+	const days = Array.from({ length: 28 }, (_, i) => new Date(Date.UTC(2026, 7, 1 + i)).toISOString().slice(0, 10))
+	const base = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), vercelDailyUnavailable: false,
+		revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '',
+		audience: ok(4210), audienceGrowth: ok(108), timelineEvents: [], campaigns: [],
+		crossSource: days.map((date, i) => ({
+			date, vercelPageviews: 80, ga4Pageviews: 16, ga4Sessions: 12,
+			orders: i % 7 === 0 ? 1 : 0, revenue: i === 0 ? 400 : 0,
+		})),
+	}
+
+	// Scoped to the Revenue card. The Orders card carries its own rank line and keeps it — orders
+	// are exact — so matching the whole document would pass on the neighbour.
+	const revenueCard = (html: string) => {
+		// Anchored on the CARD label, not the first mention — the Verdict sentence above the cards
+		// also begins "Revenue", and slicing from there caught none of the card at all.
+		const ordersLabel = html.indexOf('>Orders<')
+		const revenueLabel = html.lastIndexOf('>Revenue<', ordersLabel)
+		return html.slice(revenueLabel, ordersLabel)
+	}
+
+	it('says nothing about best weeks when the money does not cover every order', () => {
+		const html = render(<OverviewPanel data={{ ...base, ordersWithTotal: 2 } as never} />)
+		expect(revenueCard(html)).not.toMatch(/of the last \d+ weeks/)
+	})
+
+	it('ranks the weeks when every order carries an amount', () => {
+		const html = render(<OverviewPanel data={{ ...base, ordersWithTotal: 7 } as never} />)
+		expect(revenueCard(html)).toMatch(/of the last \d+ weeks/)
+	})
+
+	it('leaves the orders rank alone either way, because orders are exact', () => {
+		const html = render(<OverviewPanel data={{ ...base, ordersWithTotal: 2 } as never} />)
+		expect(html).toMatch(/of the last \d+ weeks/)
+	})
+})
+
+describe('the typeface revenue column says what it misses', () => {
+	const row = { typeface: 'Freight', viewed: ok(400), tested: ok(0), bought: ok(2), revenue: ok(400), testRate: null, buyRate: 0.005 }
+
+	it('names the takings that reach no family', () => {
+		// orders.ts computes this with a comment saying it exists to stop the column summing short
+		// with nothing to explain it — and it was surfaced nowhere.
+		const html = render(<TypefaceInterestPanel data={{
+			rows: [row], interpretationNote: '', testerEventCount: 1,
+			revenueIsApportioned: true, unattributedRevenue: 250, currency: 'USD',
+		} as never} />)
+		expect(html).toContain('US$250')
+		expect(html).toContain('name no family in this catalogue')
+	})
+
+	it('names the orders with no amount at all', () => {
+		const html = render(<TypefaceInterestPanel data={{
+			rows: [row], interpretationNote: '', testerEventCount: 1,
+			revenueIsApportioned: true, ordersMissingTotal: 5, currency: 'USD',
+		} as never} />)
+		expect(html).toContain('5 orders in this range carry no amount')
+	})
+
+	it('no longer calls the column exact', () => {
+		// The same money is reported as partial on Overview.
+		const html = render(<TypefaceInterestPanel data={{
+			rows: [row], interpretationNote: '', testerEventCount: 1, currency: 'USD',
+		} as never} />)
+		expect(html).not.toContain('are exact — do not scale those up')
+	})
+})

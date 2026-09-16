@@ -13,6 +13,7 @@ import { alignBatch, type Ga4FunnelReport, type Ga4Report } from '../ga4'
 import { formatInTimeZone } from '../../core/ranges'
 import { countLicenceTiers } from '../orders'
 import { describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 
 // The GA4 client signs a service-account JWT before every call. These tests are about the request
 // BODY, not the credential, so the token exchange is stubbed rather than fed a fabricated RSA key.
@@ -2325,5 +2326,118 @@ describe('attributing orders to email sends', () => {
 		const [campaign] = attributeToSends([evening], week, 'America/Los_Angeles', '2026-08-26')
 		// 2026-08-23T03:00Z is 2026-08-22 20:00 in Los Angeles.
 		expect(campaign!.ordersAfter).toBe(4 + 8 + 16)
+	})
+})
+
+describe('figures that name a window must be measured over it', () => {
+	// range is 2026-08-20 to 2026-08-26.
+	const campaign = (sentAt: string, uniqueClicks: number) => ({
+		title: `send ${sentAt}`, subject: 's', sentAt: `${sentAt}T12:00:00+00:00`,
+		emailsSent: 2000, uniqueOpens: 800, uniqueClicks, unsubscribed: 2,
+	})
+
+	const withMailchimp = async (campaigns: ReturnType<typeof campaign>[]) => measurementHealth({
+		config: siteConfig({ mailchimp: { enabled: true } }),
+		range,
+		// Six reports, in the order the batch asks for them: views, sessions, consent, daily,
+		// purchases, and the email-sourced sessions the capture estimate divides into clicks.
+		ga4: createFakeGa4Client({
+			batch: () => [
+				makeGa4Total(800), makeGa4Total(300), makeGa4Total(0),
+				makeGa4Total(0), makeGa4Total(5), makeGa4Total(120),
+			],
+		}),
+		vercel: createFakeVercelClient(makeVercelPageviews({ '2026-08-20': 1000 })),
+		sanity: null,
+		mailchimp: createFakeMailchimpClient({ members: 4210, membersAtStart: 4102 }, campaigns),
+	} as never)
+
+	it('withholds the email capture estimate when a send has not settled', async () => {
+		// Mailchimp reports clicks for a campaign's whole life; the sessions they are divided into
+		// are strictly inside this range. A send on the last day contributes every click it will ever
+		// get against one day of sessions.
+		const data = await withMailchimp([campaign('2026-08-26', 400)])
+		expect(data.capture?.estimates.some((e) => e.basis === 'email')).toBe(false)
+	})
+
+	it('keeps it when every send had time to settle inside the range', async () => {
+		const data = await withMailchimp([campaign('2026-08-20', 400)])
+		expect(data.capture?.estimates.some((e) => e.basis === 'email')).toBe(true)
+	})
+
+	it('withholds it if ANY send is unsettled, not just the last one', async () => {
+		// One unsettled campaign contaminates the pooled click total, so the whole estimate goes.
+		const data = await withMailchimp([campaign('2026-08-20', 400), campaign('2026-08-25', 400)])
+		expect(data.capture?.estimates.some((e) => e.basis === 'email')).toBe(false)
+	})
+})
+
+describe('one quantity, one claim about it, across every tab', () => {
+	it('reports a family revenue as partial when the order book is', async () => {
+		// The SAME money is reported as partial on Overview. Returning `ok` here made one quantity
+		// two different claims depending on which tab you looked at, under a blurb calling it exact —
+		// and `ordersMissingTotal` was computed by countOrdersByTypeface and dropped on the way out.
+		const ga4 = createFakeGa4Client({
+			single: () => makeGa4Report([{ dimensions: ['Freight'], metrics: [400] }]),
+		})
+		const sanity = createFakeSanityClient(() => [
+			{ _createdAt: '2026-08-21T12:00:00Z', orderTotal: 300, typefaces: [{ title: 'Freight' }] },
+			// No total on this one: a real sale the money column cannot cover.
+			{ _createdAt: '2026-08-22T12:00:00Z', typefaces: [{ title: 'Freight' }] },
+		])
+
+		const data = await typefaceInterest({
+			config: siteConfig({ orders: { documentType: 'order', typefacesField: 'typefaces', totalField: 'total' } }),
+			range, ga4, sanity,
+		})
+
+		const row = data.rows.find((r) => r.typeface === 'Freight')
+		expect(row?.revenue.status).toBe('partial')
+		expect(data.ordersMissingTotal).toBe(1)
+	})
+
+	it('keeps it exact when every order carries an amount', async () => {
+		const ga4 = createFakeGa4Client({
+			single: () => makeGa4Report([{ dimensions: ['Freight'], metrics: [400] }]),
+		})
+		const sanity = createFakeSanityClient(() => [
+			{ _createdAt: '2026-08-21T12:00:00Z', orderTotal: 300, typefaces: [{ title: 'Freight' }] },
+		])
+
+		const data = await typefaceInterest({
+			config: siteConfig({ orders: { documentType: 'order', typefacesField: 'typefaces', totalField: 'total' } }),
+			range, ga4, sanity,
+		})
+
+		expect(data.rows.find((r) => r.typeface === 'Freight')?.revenue.status).toBe('ok')
+		expect(data.ordersMissingTotal).toBe(0)
+	})
+})
+
+describe('the revenue total and the order count describe the same orders', () => {
+	// `counted.revenue` sums only orders carrying an amount; `counted.total` counts all of them. The
+	// panel joined them in one sentence with the word "from", so it read "Revenue is US$3,150 from
+	// 69 orders" where the money covered eleven. `ordersMissingTotal` was computed all along.
+
+	it('carries the gap from the report input to its output', async () => {
+		const data = await acquisition({
+			config: siteConfig(),
+			range,
+			actuals: { revenue: 3150, orders: 69, ordersMissingTotal: 58 },
+			ga4: createFakeGa4Client({
+				single: () => makeGa4Report([{ dimensions: ['a.test', 'Referral', 'referral', '(not set)'], metrics: [300, 300] }]),
+			}),
+			notices: [],
+		})
+		expect(data.ordersMissingTotal).toBe(58)
+	})
+
+	it('wires the gap through the handler, which has no other reachable seam', () => {
+		// The handler needs live credentials to run a report, so the only way to pin this wiring is
+		// to read it. A mutation that dropped the field from the actuals object left every other test
+		// in this suite green.
+		const source = readFileSync(new URL('../createHandler.ts', import.meta.url), 'utf8')
+		const actuals = source.slice(source.indexOf('actuals:'), source.indexOf('actuals:') + 400)
+		expect(actuals).toContain('ordersMissingTotal: counted.ordersMissingTotal')
 	})
 })
