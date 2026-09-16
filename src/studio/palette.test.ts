@@ -186,7 +186,9 @@ describe('every mark clears contrast AS DRAWN, not as declared', () => {
 
 	it('draws every mark through the registry, so an alpha cannot be invented at the call site', () => {
 		expect(mark('bar.fill')).toBe(seriesFill('vercel', 1))
-		expect(mark('chart.region')).toBe(seriesFill('ga4Pageviews', 0.22))
+		// A mark whose alpha is NOT 1, so the assertion would catch a renderer that ignored the
+		// registry and drew at full strength.
+		expect(mark('estimate.interval')).toBe(seriesFill('ga4Pageviews', MARKS['estimate.interval']!.alpha))
 		expect(() => mark('nonexistent')).toThrow()
 	})
 

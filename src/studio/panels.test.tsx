@@ -927,16 +927,25 @@ describe('CrossSourceTimeline', () => {
 		expect(html).not.toContain('would invent a correlation')
 	})
 
-	it('draws the blind spot as a quantity, always visible, not behind a hover', () => {
-		// The 24 August collapse announced itself as this region widening. Putting it behind an
-		// interaction would switch the alarm off — so the fill is always drawn, and only the
-		// constituent LINES are revealed on demand.
+	it('keeps the blind spot visible without drawing it as an area', () => {
+		// The alarm must stay on — the founding incident announced itself here — but the filled
+		// region was the wrong mark for it. Its width is the ABSOLUTE gap, and under a roughly flat
+		// coverage rate that is the traffic curve scaled down: at 20% coverage the area is 0.8 times
+		// traffic and tracks it exactly, so every busy day drew a wider alarm with no change in the
+		// instrument at all. The coverage row makes precisely that argument in its own comment, to
+		// justify its own existence.
 		const html = render(<OverviewPanel data={base as never} />)
-		expect(html).toContain('what your analytics did not see')
-		expect(html).toContain('what your analytics did not see')
-		// A filled region, not an outline — and filled in the LOSSIER source's colour, because the
-		// area is what that source missed rather than a property of the complete line above it.
-		expect(html).toMatch(new RegExp(`<path d="M[^"]*" fill="rgba\\(${rgbOf(SERIES.ga4Pageviews)}`))
+		// The alarm, in the two places that state it without scaling with traffic.
+		expect(html).toContain('Share GA4 saw')
+		expect(html).toMatch(/GA4 missed [\d,]+ pageviews/)
+		// And the lossier source's own line is still drawn, which is what the detector reads.
+		expect(html).toContain('Seen by GA4')
+	})
+
+	it('draws no filled area between the two sources', () => {
+		const html = render(<OverviewPanel data={base as never} />)
+		// A <path> with a fill is the region; every remaining path is a stroked line.
+		expect(html).not.toMatch(/<path d="M[^"]*" fill="rgba\(/)
 	})
 
 	it('offers a non-pointer route to the per-source detail', () => {
@@ -3233,17 +3242,11 @@ describe('the drawing honours the mark registry', () => {
 		],
 	}
 
-	it('draws the boundary the registry promises for the shortfall region', () => {
-		// The region is allowed under 3:1 ONLY because MARKS names a boundary that is not. That
-		// boundary was declared and never drawn — a contract kept in the test and broken in the
-		// picture, which is the same defect the registry exists to prevent, one level up.
+	it('draws the lossier source\u2019s own line through the registry', () => {
+		// Formerly the region's boundary. The region is gone; this line is not, because the collapse
+		// detector and the spoken summary both read from it.
 		const html = render(<OverviewPanel data={data as never} />)
-		expect(html).toContain(mark('chart.regionEdge'))
-	})
-
-	it('fills the region at the registry alpha, not one chosen at the call site', () => {
-		const html = render(<OverviewPanel data={data as never} />)
-		expect(html).toContain(`rgba(221, 107, 63, ${MARKS['chart.region']!.alpha})`)
+		expect(html).toContain(mark('chart.lossy'))
 	})
 
 	it('draws data marks at full strength, with no opacity reducing them below the tested value', () => {
@@ -4151,11 +4154,10 @@ describe('a funnel rung measured over fewer days says so', () => {
 		expect(html).toContain('161')
 	})
 
-	it('draws the bar differently, so the picture carries the caveat too', () => {
-		// A solid bar beside other solid bars asserts they all cover the same days. The sentence
-		// alone leaves the drawing making a claim the text has just withdrawn.
+	it('draws no bar, so the picture makes no claim the text has withdrawn', () => {
 		const html = render(<FunnelChart stages={partialStages} measurement="independent-totals" />)
-		expect(html).toContain('repeating-linear-gradient')
+		const partialRung = html.split('<li').find((r) => r.includes('Viewed a typeface')) ?? ''
+		expect(partialRung).not.toMatch(/width:\s*\d/)
 	})
 
 	it('leaves a fully measured rung solid', () => {
@@ -4396,10 +4398,21 @@ describe('a part-window rung refuses the encoding, not just the number', () => {
 		expect(html).not.toMatch(/width:\s*33\.\d+%/)
 	})
 
-	it('draws the full rail instead, which cannot be mis-measured against the rung above', () => {
+	it('draws no bar at all, in either direction', () => {
+		// A short bar overstated nothing and understated the count; a FULL-WIDTH hatched rail — the
+		// first attempt at refusing — handed the least-measured rung the longest mark on a chart
+		// where length is the value. An empty slot cannot be mis-measured either way.
 		const html = render(<FunnelChart stages={stages} measurement="independent-totals" />)
-		expect(html).toContain('repeating-linear-gradient')
-		expect(html).toMatch(/repeating-linear-gradient[^"]*"/)
+		const rungs = html.split('<li')
+		const partialRung = rungs.find((r) => r.includes('Viewed a typeface')) ?? ''
+		expect(partialRung).not.toMatch(/width:\s*\d/)
+		expect(partialRung).not.toContain('repeating-linear-gradient')
+	})
+
+	it('keeps the rung in the column rather than collapsing it', () => {
+		const html = render(<FunnelChart stages={stages} measurement="independent-totals" />)
+		expect(html).toContain('Viewed a typeface')
+		expect(html).toContain('161')
 	})
 
 	it('still draws a proportional bar for a rung that covers the whole window', () => {
@@ -4410,18 +4423,16 @@ describe('a part-window rung refuses the encoding, not just the number', () => {
 		expect(html).toMatch(/width:\s*33\.\d+%/)
 	})
 
-	it('keys the hatch, since it is a mark like any other', () => {
-		// It shipped with nothing anywhere saying what a striped bar meant — in the same work whose
-		// subject was legends that do not match their graphs.
+	it('explains the absence, since an empty slot is a mark like any other', () => {
 		const html = render(<FunnelChart stages={stages} measurement="independent-totals" />)
-		expect(html).toContain('Striped: tracking started partway through this period')
+		expect(html).toContain('Steps with no bar were only tracked for part of this period')
 	})
 
-	it('says nothing about stripes when no rung is striped', () => {
+	it('says nothing about missing bars when every rung has one', () => {
 		const html = render(<FunnelChart stages={[
 			{ key: 'landed', label: 'Landed', value: 475, conversionFromPrevious: null },
 		]} measurement="independent-totals" />)
-		expect(html).not.toContain('Striped:')
+		expect(html).not.toContain('Steps with no bar')
 	})
 })
 
@@ -4835,5 +4846,64 @@ describe('the typeface revenue column says what it misses', () => {
 			rows: [row], interpretationNote: '', testerEventCount: 1, currency: 'USD',
 		} as never} />)
 		expect(html).not.toContain('are exact — do not scale those up')
+	})
+})
+
+describe('a week that sold nothing still shows the columns that say so', () => {
+	// `columnIsEmpty` folds any column whose every value is 0. The file deliberately exempts NULLS
+	// from folding — "a column of dashes is meant to be uncomfortable" — which is the same argument
+	// pointing the other way: a measured zero is a measurement. Without the exemption, a catalogue
+	// that sold nothing folded Bought and Revenue away behind "Show 2 empty columns", in a sales
+	// tool, in the week the owner most needs to see them.
+	const quiet = {
+		interpretationNote: '', testerEventCount: 1, currency: 'USD',
+		rows: [
+			{ typeface: 'Freight', viewed: ok(161), tested: ok(96), bought: ok(0), revenue: ok(0), testRate: 0.596, buyRate: 0 },
+			{ typeface: 'Omnes', viewed: ok(104), tested: ok(51), bought: ok(0), revenue: ok(0), testRate: 0.49, buyRate: 0 },
+		],
+	}
+
+	it('keeps Bought and Revenue on screen when every value is zero', () => {
+		const html = render(<TypefaceInterestPanel data={quiet as never} />)
+		expect(html).toContain('Bought (orders)')
+		expect(html).toContain('Revenue (orders)')
+	})
+
+	it('does not offer to reveal them as empty columns', () => {
+		const html = render(<TypefaceInterestPanel data={quiet as never} />)
+		expect(html).not.toContain('empty column')
+	})
+
+	it('still folds a column that genuinely has nothing in it', () => {
+		// The feature is right; the exemption is about which absences are measurements.
+		const noTester = {
+			...quiet,
+			rows: quiet.rows.map((r) => ({ ...r, tested: ok(0) })),
+		}
+		const html = render(<TypefaceInterestPanel data={noTester as never} />)
+		expect(html).toContain('empty column')
+	})
+})
+
+describe('each capture estimate says which way it is wrong', () => {
+	// The notes were written, made REQUIRED by EstimateForPlot, and rendered nowhere. Three dots
+	// share an axis so their disagreement is legible — but each is biased in a different direction,
+	// and that direction is the only thing telling a reader which dot to move toward.
+	const estimates = [
+		{ basis: 'pageviews', rate: 0.2, observed: 475, actual: 2356, note: 'Read it as a ceiling.' },
+		{ basis: 'orders', rate: 0.45, observed: 3, actual: 7, note: 'One more GA4 purchase moves this 14 points.' },
+	]
+
+	it('prints every estimate\'s own caveat', () => {
+		const html = render(<EstimateDotPlot estimates={estimates} labelFor={(basis) => basis} intervalFor={(e) => ({ low: e.rate - 0.05, high: e.rate + 0.05 })} />)
+		expect(html).toContain('Read it as a ceiling.')
+		expect(html).toContain('One more GA4 purchase moves this 14 points.')
+	})
+
+	it('drops the shared footer that those notes made redundant', () => {
+		const html = render(<EstimateDotPlot estimates={estimates} labelFor={(basis) => basis} intervalFor={(e) => ({ low: e.rate - 0.05, high: e.rate + 0.05 })} />)
+		expect(html).not.toContain('Each is a separate way of asking the same question')
+		// The one fact a per-estimate note cannot carry.
+		expect(html).toContain('The rule marks 100%')
 	})
 })

@@ -210,18 +210,14 @@ export const MARKS: Record<string, Mark> = {
 	'chart.coverage': { key: 'ga4Sessions', alpha: 1, role: 'data', note: 'Share one source saw of another' },
 	'chart.stem': { key: 'orders', alpha: 1, role: 'data', note: 'One day that had orders' },
 	'chart.zeroTick': { key: 'orders', alpha: 1, role: 'data', note: 'A day MEASURED at zero — the package\'s founding distinction' },
-	'chart.regionEdge': { key: 'ga4Pageviews', alpha: 1, role: 'data', note: 'The upper boundary of the shortfall region' },
-	'chart.region': {
-		key: 'ga4Pageviews', alpha: 0.22, role: 'fill', boundary: 'chart.regionEdge',
-		note: 'What the lossier source missed. Light on purpose — the line it covers must stay readable',
-	},
+	// Renamed from `chart.regionEdge`. It was the boundary of a filled region; the region is gone —
+	// its width was the absolute gap, which under a flat coverage rate is the traffic curve scaled
+	// down, so it widened on busy days with no change in the instrument. This is now simply the
+	// lossier source's own line, which is what the collapse detector and the spoken summary read.
+	'chart.lossy': { key: 'ga4Pageviews', alpha: 1, role: 'data', note: 'The lossier source\'s own level, dashed beneath the complete one' },
 	'chart.ghost': { key: 'comparison', alpha: 1, role: 'data', note: 'The same window last period, behind everything' },
 	'chart.grid': { key: 'neutral', alpha: 0.18, role: 'furniture', note: 'Grid rules' },
 	'bar.fill': { key: 'vercel', alpha: 1, role: 'data', note: 'Every proportion, comparison and funnel bar' },
-	// The hatch on a rung whose count covers fewer days than the rail it sits in. A `data` mark, not
-	// furniture: it is the only thing on that rung saying the figure is not comparable, so it has to
-	// be as visible as a bar would have been.
-	'bar.partial': { key: 'vercel', alpha: 1, role: 'data', note: 'A funnel rung measured over part of the window' },
 	'bar.track': { key: 'neutral', alpha: 0.12, role: 'furniture', note: 'The rail a bar sits in' },
 	// Neither a source nor money. It was drawn in the REVENUE hue, so a magenta bar between funnel
 	// rungs read as takings; GA4's hue was rejected for the opposite reason, since that hue means

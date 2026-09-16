@@ -259,7 +259,6 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 	/** Daily GA4 pageviews keyed by ISO date, for the trend. */
 	const ga4ByDate = new Map<string, number>()
 	/** Daily GA4 sessions, for the behavioural row of the cross-source timeline. */
-	const ga4SessionsByDate = new Map<string, number>()
 	/** Daily Vercel pageviews keyed by ISO date. Already fetched; previously discarded. */
 	let vercelByDate: Record<string, number> = {}
 	/** GA4's own purchase count, for the orders-based capture estimate. */
@@ -375,15 +374,6 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 
 			ga4Purchases = purchases ? sumFirstMetric(purchases) : null
 
-			// Daily sessions for the behavioural row. Read from the daily report that already
-			// carries pageviews, so it costs a metric rather than another request.
-			for (const row of daily?.rows ?? []) {
-				const date = row.dimensions[0]
-				const value = row.metrics[1]
-				if (date && date.length === 8 && value !== undefined && Number.isFinite(value)) {
-					ga4SessionsByDate.set(`${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`, value)
-				}
-			}
 			emailSessions = emailReport ? sumFirstMetric(emailReport) : null
 
 			const consentCoverage = coverageForAny(config.eventCutovers, consentEvents, range)
@@ -747,7 +737,6 @@ export async function measurementHealth(input: MeasurementHealthInput): Promise<
 		vercelPageviews: vercelIsDaily && typeof vercelByDate[date] === 'number' ? vercelByDate[date] : null,
 		// Pageviews, for the like-for-like comparison the chart draws as an area.
 		ga4Pageviews: ga4ByDate.has(date) ? (ga4ByDate.get(date) as number) : null,
-		ga4Sessions: ga4SessionsByDate.has(date) ? (ga4SessionsByDate.get(date) as number) : null,
 		// Zero only when Sanity actually answered. It is exact, so a day it reported nothing for
 		// really did have no orders — but when the query FAILED, `ordersByDate` is empty and every
 		// day got a confident zero, drawing a flat no-sales line across the whole chart while the

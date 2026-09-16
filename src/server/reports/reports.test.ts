@@ -1155,7 +1155,6 @@ describe('order figures', () => {
 		const counts = await countOrders(client, orderQueryOptions({ documentType: 'order' }, base))
 
 		expect(counts.total).toBe(3)
-		expect(counts.statusFiltered).toBe(false)
 		// The breakdown is always reported: an operator cannot configure countedStatuses without
 		// first seeing what their own orders actually say.
 		expect(counts.byStatus).toEqual({ complete: 1, test: 1, '(no status)': 1 })
@@ -1175,7 +1174,6 @@ describe('order figures', () => {
 
 		expect(counts.total).toBe(1)
 		expect(counts.excludedByStatus).toBe(2)
-		expect(counts.statusFiltered).toBe(true)
 	})
 
 	it('matches statuses case-insensitively', async () => {

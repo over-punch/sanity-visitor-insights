@@ -75,21 +75,8 @@ function metricOr(metric: MetricValue | undefined, detail: string): MetricValue 
 // between information and a task nobody in the room can do.
 const OLDER_ROUTE = 'This site\u2019s analytics route is older than this figure — it will appear after the site is next deployed.'
 
-/** Largest available value across metrics, for scaling bars. */
-function maxOf(metrics: Array<MetricValue | undefined>): number {
-	return metrics.reduce((max, metric) => (!metric || metric.status === 'unavailable' ? max : Math.max(max, metric.value)), 0)
-}
 
 
-/**
- * Section headings.
- *
- * The UI kit's Heading carries no margin of its own and relies on Stack spacing, which the compat
- * shim drops when it falls back — so headings sat directly on the section above and read as part
- * of it. An explicit top margin and a little breathing room below make each section legible as a
- * section regardless of what the shim resolves.
- */
-const sectionHeading: React.CSSProperties = { margin: '0 0 2px', lineHeight: 1.3 }
 
 /**
  * A usable number, or null.
@@ -116,8 +103,6 @@ const figureRow: React.CSSProperties = {
 }
 
 /** Referrer links, marked as links without shouting. */
-/** The segment control: one row of options, wrapping on a narrow pane. */
-const segmentRow: React.CSSProperties = { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }
 
 
 
@@ -884,7 +869,6 @@ function Verdict({ data, previous }: { data: MeasurementHealthData; previous?: M
  * separate tabs answering that question, which is one more than it deserves out of five.
  */
 export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealthData; diagnostics?: DiagnosticReport }): React.ReactElement {
-	const pageviewMax = maxOf([data.ga4Pageviews, data.vercelPageviews])
 	// Whether a part-inside-whole bar is honest here — see the comment at the render site.
 	const contained = isContainment(data.vercelPageviews, data.ga4Pageviews)
 
@@ -2055,6 +2039,8 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 						},
 						{
 							key: 'bought',
+							// Never folded. Zero sales is the finding, not an empty column.
+							alwaysShow: true,
 							label: 'Bought (orders)',
 							numeric: true,
 							sortValue: (row) => metricSortValue(row.bought),
@@ -2062,6 +2048,8 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 						},
 						{
 							key: 'revenue',
+							// Same reason as Bought: an exact zero from the order book is a measurement.
+							alwaysShow: true,
 							label: 'Revenue (orders)',
 							numeric: true,
 							sortValue: (row) => metricSortValue(row.revenue),

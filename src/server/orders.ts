@@ -121,7 +121,6 @@ export interface OrderCounts {
 	 */
 	ordersMissingTotal: number
 	/** Whether a status allow-list was applied at all. */
-	statusFiltered: boolean
 }
 
 /**
@@ -376,7 +375,6 @@ export async function countOrders(
 		byStatus,
 		excludedByStatus,
 		ordersMissingTotal: missingTotal,
-		statusFiltered: Boolean(options.countedStatuses && options.countedStatuses.length > 0),
 	}
 }
 

@@ -938,14 +938,6 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						// as this region widening, and putting that behind an interaction would
 						// switch the alarm off.
 						const shortfallPoints = row.shortfall?.points ?? []
-						const byDate = new Map(shortfallPoints.map((p) => [p.date, p.value]))
-						const gapGen = d3Area<SeriesPoint>()
-							.defined((p) => p.value !== null && byDate.get(p.date) != null)
-							.x(at)
-							.y0((p) => y(byDate.get(p.date) as number))
-							.y1((p) => y(p.value as number))
-							.curve(curveLinear)
-
 						const path = row.mark === 'events' ? '' : lineGen(row.points) ?? ''
 
 						// The previous window, positioned by offset: its own dates are meaningless here,
@@ -987,7 +979,6 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 						const zeroes = row.mark === 'events' && pitch >= 6
 							? row.points.filter((p) => p.value === 0)
 							: []
-						const gap = row.shortfall ? gapGen(row.points) ?? '' : ''
 						// The lossier source's own line, drawn always — it is named in the legend below.
 						// The SAME generator, nulls left in, so `.defined()` breaks the line where GA4
 						// reported nothing. Filtering them out first joined the surviving points into a
@@ -1091,19 +1082,19 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 										strokeDasharray="2 3"
 									/>
 								)}
-								{/* The region is what the LOSSIER source missed, so it carries that source's
-								    colour rather than the complete line's. Filled through `seriesFill` so
-								    the alpha is baked in and does not multiply with the group's own. */}
-								{gap && (
-									<path
-										d={gap}
-										fill={shortfallStroke
-											? seriesFill(colorFor(row.shortfall!.source, row.unit, row.shortfall!.color), MARKS['chart.region']!.alpha)
-											: 'currentColor'}
-										opacity={shortfallStroke ? 1 : 0.48}
-									/>
-								)}
-
+				{/* NO FILLED REGION. The two lines are enough.
+				
+				    The shaded area between them encoded the ABSOLUTE gap, and under a roughly flat
+				    coverage rate the absolute gap is just the traffic curve scaled down — at 20%
+				    coverage it is 0.8 times traffic and tracks it exactly. So every busy day drew a
+				    wider alarm than every quiet day with no change whatever in the instrument. The
+				    coverage row directly beneath this one already makes that argument, in its own
+				    comment, to justify its own existence; it convicts the region above it.
+				
+				    What the region uniquely showed — the SIZE of the loss — is stated at reading size
+				    in the caution card above the chart and is sortable in the table below it. The
+				    dashed line stays: it shows the lossier source's own level, and the collapse
+				    detector, the missed-pageviews sentence and the spoken summary all read from it. */}
 								{/* The region's BOUNDARY, drawn because the registry promises it.
 								
 								    A fill this light cannot carry 3:1 and is not supposed to — what it
@@ -1117,7 +1108,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 									<path
 										d={shortfallLine}
 										fill="none"
-										stroke={mark('chart.regionEdge')}
+										stroke={mark('chart.lossy')}
 										strokeWidth={1.5}
 										strokeDasharray="6 4"
 									/>
@@ -1364,10 +1355,7 @@ export function CrossSourceTimeline({ series, markers = [], currency, onBrush }:
 							swatch={<span style={legendDash(shortfallColour(series))} />}
 							label={`${shortfallLabel(series)} — the dashed line`}
 						/>
-						<LegendKey
-							swatch={<span style={legendBlock(seriesFill(shortfallKey(series), MARKS['chart.region']!.alpha), shortfallColour(series))} />}
-							label="Shaded: what your analytics did not see"
-						/>
+
 					</>
 				)}
 				{series.some((row) => (row.comparison?.length ?? 0) > 1) && (
@@ -1536,19 +1524,6 @@ const readoutRow: React.CSSProperties = {
 	minHeight: 54,
 }
 
-/** The explicit reveal control, so the detail is not pointer-only. */
-const revealButton: React.CSSProperties = {
-	appearance: 'none',
-	background: 'transparent',
-	border: '1px solid var(--card-border-color, rgba(128,128,128,0.3))',
-	borderRadius: 3,
-	color: 'inherit',
-	font: 'inherit',
-	fontSize: '0.8em',
-	padding: '3px 8px',
-	cursor: 'pointer',
-	whiteSpace: 'nowrap',
-}
 
 /** Legend, wrapping rather than overflowing. */
 const legendRow: React.CSSProperties = {

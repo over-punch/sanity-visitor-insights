@@ -183,8 +183,6 @@ export interface CrossSourceDay {
 	 * `measurementHealth`'s own test forbids for the scalar figure.
 	 */
 	ga4Pageviews: number | null
-	/** GA4 sessions. A different unit from pageviews, and never differenced against them. */
-	ga4Sessions: number | null
 	/** Orders placed. Exact. */
 	orders: number | null
 	/** Revenue taken, in major units. Exact where a total field is configured. */

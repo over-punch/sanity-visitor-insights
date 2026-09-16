@@ -796,26 +796,24 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
 								<Text size={1} weight="semibold">{formatCount(stage.value)}</Text>
 							</div>
 
-							<div aria-hidden="true" style={{ ...barTrack, height: 10 }}>
-								{/* A partial rung gets NO BAR — a full-width hatched rail instead.
-								
-								    Drawing it to its raw share was the half-fix: the sentence said "no share is
-								    shown" while the geometry went on showing one. A count over sixteen days
-								    against a denominator over thirty draws about half the length it should, and
-								    a reader measures bars against each other whatever the caption says. A rail
-								    with no fill cannot be mis-measured, which is the same refusal
-								    ContainmentBar makes rather than draw a containment that does not hold. */}
-								<div
-									style={stage.partial
-										? {
-											height: '100%',
-											width: '100%',
-											borderRadius: 3,
-											backgroundImage: `repeating-linear-gradient(135deg, ${mark('bar.partial')} 0 4px, transparent 4px 8px)`,
-										}
-										: { ...barFill, width: `${width}%` }}
-								/>
-							</div>
+							{/* A partial rung gets NO BAR AT ALL — not a short one, and not a long one.
+							
+							    Drawing it at its raw share was the first mistake: the sentence said "no share
+							    is shown" while the geometry went on showing one, about half the length it
+							    should be. Drawing it as a full-width hatched rail was the second, and it was
+							    worse: in a column where LENGTH IS THE VALUE, that handed the least-measured
+							    rung the longest mark on the chart — a refusal drawn with more authority than
+							    any measurement on the page.
+							
+							    An empty slot in a column of bars cannot be mis-measured in either direction,
+							    and the count in the header above keeps it from reading as a zero. */}
+							{stage.partial
+								? <div style={partialSlot} />
+								: (
+									<div aria-hidden="true" style={{ ...barTrack, height: 10 }}>
+										<div style={{ ...barFill, width: `${width}%` }} />
+									</div>
+								)}
 
 							{/* Both ratios where they differ — the panel used to print only the
 							    step-to-step one, and a reader comparing two adjacent small
@@ -846,13 +844,13 @@ export function FunnelChart({ stages, measurement }: FunnelChartProps): React.Re
 		    shipped with nothing anywhere saying what it meant — in the same work whose whole subject
 		    was legends that do not match their graphs. */}
 		{stages.some((stage) => stage.partial) && (
-			<div style={funnelKey}>
-				<span aria-hidden="true" style={funnelKeySwatch} />
-				<Text size={0} muted>
-					Striped: tracking started partway through this period, so the step covers fewer days than
-					the ones above it and cannot be compared with them.
-				</Text>
-			</div>
+			<Text size={0} muted>
+				{/* Explains the ABSENCE, now that there is no mark to key. A legend for a stripe that is
+				    no longer drawn would be the fault this work started from, in reverse. */}
+				Steps with no bar were only tracked for part of this period, so they cover fewer days than
+				the ones above and cannot be drawn against them. Their counts are exact for the days they
+				do cover.
+			</Text>
 		)}
 		{withheldAny && (
 			<Text size={0} muted>
@@ -899,18 +897,13 @@ function gapLabel(delta: number, measurement: 'sequence' | 'independent-totals',
 	return `${formatCount(-delta)} more — not a subset of the step above`
 }
 
-/** The hatch key, sat under the chart with the other things said once per funnel. */
-const funnelKey: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, paddingTop: 4 }
-
-/** The hatch itself, at legend size, drawn exactly as the rail draws it. */
-const funnelKeySwatch: React.CSSProperties = {
-	display: 'inline-block',
-	width: 24,
-	height: 10,
-	flex: '0 0 auto',
-	borderRadius: 3,
-	backgroundImage: `repeating-linear-gradient(135deg, ${mark('bar.partial')} 0 4px, transparent 4px 8px)`,
-}
+/**
+ * The space a bar would have occupied on a rung that has none.
+ *
+ * Reserved rather than collapsed, so the rungs keep their rhythm down the column and the missing
+ * mark reads as deliberate rather than as something that failed to render.
+ */
+const partialSlot: React.CSSProperties = { height: 10 }
 
 /** The funnel's list wrapper. Numbering is suppressed — the rungs are already in order visually. */
 const funnelList: React.CSSProperties = { listStyle: 'none', margin: 0, padding: 0 }
@@ -1399,6 +1392,17 @@ export function EstimateDotPlot<E extends EstimateForPlot>({
 							{/* Said in words as well as drawn, because the bar is aria-hidden and because
 							    "this one is too thin to lean on" is the conclusion, not the picture. */}
 							{wide && ' — too small a sample to lean on'}
+							{/* EACH ESTIMATE'S OWN BIAS, which was written, required by this component's
+							    props type, and rendered nowhere.
+							
+							    Three dots share an axis so their DISAGREEMENT is legible — but each is
+							    wrong in a different direction, and that direction is the only thing telling
+							    a reader which dot to move toward. Pageviews is a ceiling; orders moves ~14
+							    points on one more GA4 purchase; email measures tagging as much as capture.
+							    Without them a reader seeing 45% and 20% has a spread and no way to resolve
+							    it — and on a Week range there is often only ONE dot, no discrepancy card,
+							    and nothing at all saying what that dot means. */}
+							{estimate.note && <span style={estimateNote}>{estimate.note}</span>}
 							{/* The CAUSE, not just the fact. "Over 100%" states the reading; "usually a tag
 							    firing twice" is the half a reader can act on, and dropping it when this
 							    moved from cards to a plot would have been a quiet loss — caught by the
@@ -1408,10 +1412,10 @@ export function EstimateDotPlot<E extends EstimateForPlot>({
 					</Stack>
 				)
 			})}
-			<Text size={0} muted>
-				Each is a separate way of asking the same question. Where they disagree, the spread is the
-				answer&rsquo;s uncertainty — the rule marks 100%.
-			</Text>
+			{/* The shared footer is gone: three notes that each say what their own estimate is make a
+			    sentence saying "each is a separate way of asking the same question" redundant. The one
+			    fact the notes cannot carry is what the rule means, so that is all this says now. */}
+			<Text size={0} muted>The rule marks 100%.</Text>
 		</Stack>
 	)
 }
@@ -2218,6 +2222,9 @@ const estimateTrack: React.CSSProperties = {
 	borderRadius: 2,
 	background: mark('bar.track'),
 }
+
+/** One estimate's own caveat, on its own line beneath the counts it qualifies. */
+const estimateNote: React.CSSProperties = { display: 'block', marginTop: 2, opacity: 0.85 }
 
 /** The 100% reference. A capture rate means nothing without it. */
 const estimateRule: React.CSSProperties = {
