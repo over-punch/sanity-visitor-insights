@@ -143,6 +143,15 @@ export interface LicenceTier {
 	type: string
 	/** Tier label as shown at checkout, e.g. "1–5 users". Falls back to the numeric value. */
 	tier: string
+	/**
+	 * The tier's own position on the price ladder, from the order document.
+	 *
+	 * Tier is ORDINAL — "1–5 users" then "6–15" then "26–50" — and the one shape a foundry reads off
+	 * a ladder is whether the money sits at the bottom rung or the top. This integer was read here
+	 * to build a fallback label and then discarded, so the panel had nothing to order by and sorted
+	 * on value instead, which put "26–50 users" above "1–5" whenever it sold better.
+	 */
+	tierValue: number
 	/** Term label, e.g. "1 year" or "Perpetual". */
 	term: string
 	/** Orders containing this tier at this term. */
@@ -494,7 +503,7 @@ export async function countLicenceTiers(
 
 		// Collected before apportioning, so the order's total divides across the rows it actually
 		// produced rather than across the licence fields it might have had.
-		const keys: Array<{ key: string; type: string; tier: string; term: string }> = []
+		const keys: Array<{ key: string; type: string; tier: string; term: string; tierValue: number }> = []
 
 		for (const entry of order.licences ?? []) {
 			for (const field of fieldNames) {
@@ -505,7 +514,7 @@ export async function countLicenceTiers(
 				const type = licenceFields[field] as string
 				const tierLabel = tier.label?.trim() || `Tier ${tier.value}`
 				const term = tier.yearsLabel?.trim() || (tier.yearsValue ? `${tier.yearsValue} year` : 'unspecified')
-				keys.push({ key: `${type}\u0000${tierLabel}\u0000${term}`, type, tier: tierLabel, term })
+				keys.push({ key: `${type}\u0000${tierLabel}\u0000${term}`, type, tier: tierLabel, term, tierValue: Number(tier.value) })
 			}
 		}
 
@@ -516,8 +525,8 @@ export async function countLicenceTiers(
 
 		// Deduped per order: the same tier on two typefaces of one order is one order for that row.
 		const seen = new Set<string>()
-		for (const { key, type, tier, term } of keys) {
-			const existing = rows.get(key) ?? { type, tier, term, orders: 0, revenue: options.totalField ? 0 : null }
+		for (const { key, type, tier, term, tierValue } of keys) {
+			const existing = rows.get(key) ?? { type, tier, term, tierValue, orders: 0, revenue: options.totalField ? 0 : null }
 			if (!seen.has(key)) {
 				existing.orders += 1
 				seen.add(key)
@@ -527,5 +536,11 @@ export async function countLicenceTiers(
 		}
 	}
 
-	return [...rows.values()].sort((a, b) => (b.revenue ?? b.orders) - (a.revenue ?? a.orders))
+	// Structural order, not a ranking. Sorting by value shredded the ladder — tier is ordinal, and
+	// the panel facets on type and reads the rungs in order, so the shape it draws has to arrive in
+	// that shape. Ranking is the panel's business, and it ranks by ORDERS: a row's revenue is its
+	// share of orders split evenly across the licences on them, which is not its price.
+	return [...rows.values()].sort((a, b) =>
+		a.type.localeCompare(b.type) || a.tierValue - b.tierValue || a.term.localeCompare(b.term),
+	)
 }

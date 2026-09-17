@@ -15,7 +15,7 @@
 
 import React from 'react'
 import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ChartData, ContainmentBar, Delta, formatDay, EstimateDotPlot, RatioFigure, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
+import { ChartData, ContainmentBar, Delta, formatDay, LicenceLadder, EstimateDotPlot, RatioFigure, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import { SEND_WINDOW_DAYS } from '../core/ranges'
 import { describeRank, weeklyRank } from '../core/rank'
@@ -2056,25 +2056,24 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 				<Stack space={3}>
 					<SectionTitle title="How licences sell" />
 					<Text size={1} muted>
-						From your orders, so exact.
-						Tier and term are separate rows, because they are the two variables in the pricing
-						question and a tier that sells well at one year may not at perpetual.
+						From your orders, so exact. Bars are orders; the money beside them is that order
+						total split evenly across the licences on it, so it is a share rather than a price.
 					</Text>
-					<ProportionChart
-						bars={(data.licences ?? []).map((row) => ({
-							key: `${row.type}-${row.tier}-${row.term}`,
-							label: `${row.type} · ${row.tier}`,
-							sublabel: row.term,
-							// Ranked by revenue where it is known, by orders where it is not — a
-							// count would put a cheap tier above one worth ten times as much.
-							value: row.revenue ?? row.orders,
-						}))}
-						format={(value) => (data.licences ?? []).some((r) => r.revenue !== null)
-							? formatMoney(value, data.currency ?? null)
-							: `${formatCount(value)} orders`}
-						totalLabel={(data.licences ?? []).some((r) => r.revenue !== null) ? 'Total across licences' : 'Total licence lines'}
-					/>
-
+					{/* FACETED BY TYPE, RUNGS IN LADDER ORDER.
+					
+					    This was one ranked list of `type · tier` strings with term as a subtitle — which
+					    flattened a three-dimensional fact into one axis and then sorted that axis by
+					    VALUE, shredding the only ordering tier has. Tier is a price ladder; the shape a
+					    foundry reads off it is whether the money sits at the bottom rung or the top, and
+					    a sort by size cannot produce that shape at any zoom level.
+					
+					    Worse for the question the caption asks: "a tier that sells well at one year may
+					    not at perpetual" put the two rows for one tier as far apart as their values
+					    happened to fall. They are adjacent now, which is the comparison.
+					
+					    Bars share one scale across every facet, so a rung in Desktop is comparable with a
+					    rung in Web. */}
+					<LicenceLadder rows={data.licences ?? []} currency={data.currency ?? null} />
 				</Stack>
 			)}
 

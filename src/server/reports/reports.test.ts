@@ -2439,3 +2439,56 @@ describe('the revenue total and the order count describe the same orders', () =>
 		expect(actuals).toContain('ordersMissingTotal: counted.ordersMissingTotal')
 	})
 })
+
+describe('licence lines arrive in the shape a price ladder has', () => {
+	// Tier is ORDINAL, and the panel facets on type and reads the rungs in order — so the shape it
+	// draws has to arrive in that shape. Sorting by value here shredded it: "26–50 users" came back
+	// above "1–5" whenever it sold better, and no amount of work in the panel could recover the
+	// ladder from a list already sorted by size.
+	const order = (tiers: Array<{ value: number; label: string; years: string }>, total: number) => ({
+		_createdAt: '2026-08-21T12:00:00Z',
+		orderTotal: total,
+		licences: [Object.fromEntries(tiers.map((t, i) => [
+			i === 0 ? 'licenseDesktop' : 'licenseWeb',
+			{ value: t.value, label: t.label, yearsLabel: t.years },
+		]))],
+	})
+
+	// Local fake: the shared one lives inside another describe and is not in scope here.
+	const client = (docs: unknown[]) => ({ async fetch<T>(): Promise<T> { return docs as T } })
+	const window = { key: 'week' as const, start: '2026-08-20', end: '2026-08-26', timezone: 'UTC' }
+
+	const run = async (orders: unknown[]) => countLicenceTiers(
+		client(orders),
+		orderQueryOptions({ documentType: 'order', totalField: 'total' }, window),
+		'typefaces',
+		{ licenseDesktop: 'Desktop', licenseWeb: 'Web' },
+	)
+
+	it('orders the rungs by their place on the ladder, not by how well they sold', async () => {
+		const rows = await run([
+			// The top rung sells nine times better than the bottom one.
+			...Array.from({ length: 9 }, () => order([{ value: 3, label: '26–50 users', years: 'Perpetual' }], 400)),
+			order([{ value: 1, label: '1–5 users', years: 'Perpetual' }], 300),
+		])
+		const desktop = (rows ?? []).filter((r) => r.type === 'Desktop')
+		expect(desktop.map((r) => r.tier)).toEqual(['1–5 users', '26–50 users'])
+	})
+
+	it('carries each tier\'s rung, which the label alone cannot supply', async () => {
+		const rows = await run([order([{ value: 2, label: '6–15 users', years: '1 year' }], 300)])
+		expect((rows ?? [])[0]?.tierValue).toBe(2)
+	})
+
+	it('keeps the two terms of one tier together', async () => {
+		const rows = await run([
+			order([{ value: 1, label: '1–5 users', years: 'Perpetual' }], 300),
+			order([{ value: 3, label: '26–50 users', years: 'Perpetual' }], 900),
+			order([{ value: 1, label: '1–5 users', years: '1 year' }], 200),
+		])
+		const desktop = (rows ?? []).filter((r) => r.type === 'Desktop')
+		expect(desktop.map((r) => `${r.tier}/${r.term}`)).toEqual([
+			'1–5 users/1 year', '1–5 users/Perpetual', '26–50 users/Perpetual',
+		])
+	})
+})

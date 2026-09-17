@@ -399,6 +399,8 @@ export interface LicenceTierRow {
 	type: string
 	/** Tier label as shown at checkout, e.g. "1–5 users". */
 	tier: string
+	/** The tier's rung on the price ladder, so the panel can read them in order rather than by size. */
+	tierValue: number
 	/** Term label, e.g. "1 year" or "Perpetual". */
 	term: string
 	orders: number

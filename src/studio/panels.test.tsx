@@ -56,7 +56,7 @@ vi.mock('sanity', () => ({
 	definePlugin: (definition: unknown) => definition,
 }))
 import visitorInsights from '../index'
-import { ContainmentBar, Delta, EstimateDotPlot, FunnelChart, RatioFigure, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, isContainment, splitGrid } from './Figure'
+import { ContainmentBar, Delta, LicenceLadder, EstimateDotPlot, FunnelChart, RatioFigure, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, isContainment, splitGrid } from './Figure'
 import { holdsPreviousAnswer } from './useReport'
 import { ok, partial, unavailable } from '../types'
 import { UI } from '@liiift-studio/sanity-ui-compat'
@@ -4791,5 +4791,67 @@ describe('a split bar shows what its segments do not account for', () => {
 		// container also sets.
 		const html = render(<FunnelChart stages={[{ key: 'a', label: 'Landed', value: 475, conversionFromPrevious: null }]} measurement="independent-totals" />)
 		expect(funnelRung(html, 'Landed')).toContain(mark('bar.fill'))
+	})
+})
+
+describe('the licence ladder keeps the shape a price ladder has', () => {
+	// Tier is ORDINAL. The previous encoding flattened type, tier and term into one `type · tier`
+	// string on a single axis and sorted that axis by VALUE — so "26–50 users" rendered above "1–5"
+	// whenever it sold better, and the two term-rows of one tier landed as far apart as their values
+	// happened to fall. The caption above it asked whether a tier that sells at one year also sells
+	// at perpetual; the drawing separated exactly those two rows.
+	const rows = [
+		{ type: 'Desktop', tier: '1–5 users', tierValue: 1, term: 'Perpetual', orders: 4, revenue: 1180 },
+		{ type: 'Desktop', tier: '1–5 users', tierValue: 1, term: '1 year', orders: 2, revenue: 340 },
+		{ type: 'Desktop', tier: '26–50 users', tierValue: 3, term: 'Perpetual', orders: 9, revenue: 4000 },
+		{ type: 'Web', tier: 'up to 50k views', tierValue: 1, term: '1 year', orders: 3, revenue: 420 },
+	]
+
+	it('reads the rungs in ladder order even when a higher one sells more', () => {
+		// 26–50 outsells 1–5 four to nine here. A value sort would put it first; the ladder must not.
+		const html = render(<LicenceLadder rows={rows} currency="USD" />)
+		expect(html.indexOf('1–5 users')).toBeLessThan(html.indexOf('26–50 users'))
+	})
+
+	it('puts the two terms of one tier next to each other', () => {
+		const html = render(<LicenceLadder rows={rows} currency="USD" />)
+		const perpetual = html.indexOf('Perpetual')
+		const year = html.indexOf('1 year')
+		const nextTier = html.indexOf('26–50 users')
+		expect(perpetual).toBeLessThan(nextTier)
+		expect(year).toBeLessThan(nextTier)
+	})
+
+	it('names each tier once, so a repeat reads as the same rung', () => {
+		const html = render(<LicenceLadder rows={rows} currency="USD" />)
+		expect(html.match(/1–5 users/g)).toHaveLength(1)
+	})
+
+	it('facets by licence type', () => {
+		const html = render(<LicenceLadder rows={rows} currency="USD" />)
+		expect(html).toContain('Desktop')
+		expect(html).toContain('Web')
+		expect(html.indexOf('Desktop')).toBeLessThan(html.indexOf('Web'))
+	})
+
+	it('scales every bar against one peak, so facets are comparable', () => {
+		// Per-facet scaling would make a one-order type look as busy as the type carrying the
+		// business. The largest rung here is 9 orders and takes the full rail.
+		const html = render(<LicenceLadder rows={rows} currency="USD" />)
+		expect(html).toMatch(/width:100%/)
+		// 3 of 9 is a third, not a full Web rail.
+		expect(html).toMatch(/width:33\.3/)
+	})
+
+	it('bars the exact order count, with the apportioned money beside it', () => {
+		// Revenue is the order total split evenly across the licences on it — a share, not a price —
+		// so it is stated but never drawn.
+		const html = render(<LicenceLadder rows={rows} currency="USD" />)
+		expect(html).toContain('US$1,180')
+		expect(html).toContain('>4<')
+	})
+
+	it('draws nothing when there are no licence lines', () => {
+		expect(renderToStaticMarkup(<ThemeProvider theme={theme}><LicenceLadder rows={[]} currency="USD" /></ThemeProvider>)).toBe('')
 	})
 })

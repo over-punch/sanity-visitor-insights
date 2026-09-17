@@ -1017,6 +1017,29 @@ const partialSlot: React.CSSProperties = { height: 10 }
 /** The segment key, sat under the funnel with the other things said once per chart. */
 const funnelSegmentKey: React.CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap', paddingTop: 4 }
 
+/** One rung: tier, term, bar, figures. */
+const ladderRow: React.CSSProperties = {
+	display: 'grid',
+	gridTemplateColumns: 'minmax(80px, 1.1fr) minmax(60px, 0.8fr) minmax(60px, 2fr) auto',
+	gap: 10,
+	alignItems: 'center',
+}
+
+/** The rail a rung's bar sits in. */
+const ladderTrack: React.CSSProperties = {
+	position: 'relative',
+	height: 8,
+	borderRadius: 4,
+	overflow: 'hidden',
+	background: mark('bar.track'),
+}
+
+/** Orders and money, right-aligned and tabular so a column of them lines up. */
+const ladderValue: React.CSSProperties = { textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }
+
+/** The apportioned share, quieter than the exact count it follows. */
+const ladderMoney: React.CSSProperties = { opacity: 0.7 }
+
 /** The funnel's list wrapper. Numbering is suppressed — the rungs are already in order visually. */
 const funnelList: React.CSSProperties = { listStyle: 'none', margin: 0, padding: 0 }
 
@@ -1528,6 +1551,81 @@ export function EstimateDotPlot<E extends EstimateForPlot>({
 			    sentence saying "each is a separate way of asking the same question" redundant. The one
 			    fact the notes cannot carry is what the rule means, so that is all this says now. */}
 			<Text size={0} muted>The rule marks 100%.</Text>
+		</Stack>
+	)
+}
+
+/** One licence line, as the order book records it. */
+export interface LicenceLadderRow {
+	type: string
+	tier: string
+	/** The tier's rung on the price ladder. Rows are read in this order, never by size. */
+	tierValue: number
+	term: string
+	orders: number
+	/** The order total split evenly across the licences on it — a share, not a price. */
+	revenue: number | null
+}
+
+/**
+ * Licence sales, faceted by type, with each type's tiers in ladder order.
+ *
+ * Three dimensions, three channels: type is a facet, tier is vertical position within it, term is a
+ * sub-row. The previous encoding flattened all three into one `type · tier` string on a single axis
+ * and then sorted that axis by value — which is the one thing an ordinal ladder cannot survive, and
+ * which put the two term-rows of a single tier as far apart as their values happened to fall. The
+ * caption above it asked whether a tier that sells at one year also sells at perpetual; the drawing
+ * separated exactly those two rows.
+ *
+ * Bars are ORDERS and share one scale across every facet, so a rung in Desktop is comparable with a
+ * rung in Web. Orders because they are exact and unapportioned: a row's revenue is its order's total
+ * divided evenly by the licences on that order, which is a share rather than a price, and ranking a
+ * ladder by it ranks the split as much as the sales.
+ */
+export function LicenceLadder({ rows, currency }: {
+	rows: readonly LicenceLadderRow[]
+	currency: string | null
+}): React.ReactElement | null {
+	if (rows.length === 0) return null
+
+	// One scale for the whole chart. Per-facet scaling would make a one-order type look as busy as
+	// the type carrying the business.
+	const peak = Math.max(1, ...rows.map((row) => row.orders))
+
+	const types: Array<{ type: string; rungs: LicenceLadderRow[] }> = []
+	for (const row of rows) {
+		const facet = types.find((t) => t.type === row.type)
+		if (facet) facet.rungs.push(row)
+		else types.push({ type: row.type, rungs: [row] })
+	}
+
+	return (
+		<Stack space={4}>
+			{types.map((facet) => (
+				<Stack key={facet.type} space={2}>
+					<Text size={1} weight="semibold">{facet.type}</Text>
+					{facet.rungs.map((row, index) => {
+						// The tier name prints once per rung; a term sharing the tier above it is
+						// indented under it, which is what makes the two terms of one tier read as a pair.
+						const sameTierAsAbove = index > 0 && facet.rungs[index - 1]?.tier === row.tier
+						return (
+							<div key={`${row.tier}\u0000${row.term}`} style={ladderRow}>
+								<Text size={0} muted>{sameTierAsAbove ? '' : row.tier}</Text>
+								<Text size={0} muted>{row.term}</Text>
+								<div aria-hidden="true" style={ladderTrack}>
+									<div style={{ ...barFill, width: `${Math.max(2, (row.orders / peak) * 100)}%` }} />
+								</div>
+								<Text size={0} style={ladderValue}>
+									{formatCount(row.orders)}
+									{row.revenue !== null && (
+										<span style={ladderMoney}> · {formatMoney(row.revenue, currency)}</span>
+									)}
+								</Text>
+							</div>
+						)
+					})}
+				</Stack>
+			))}
 		</Stack>
 	)
 }
