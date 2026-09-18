@@ -4855,3 +4855,32 @@ describe('the licence ladder keeps the shape a price ladder has', () => {
 		expect(renderToStaticMarkup(<ThemeProvider theme={theme}><LicenceLadder rows={[]} currency="USD" /></ThemeProvider>)).toBe('')
 	})
 })
+
+describe('the comparison basis actually reaches the fetch', () => {
+	// The effect reads `compare` — it goes into the query string and into the cache key — and it was
+	// missing from the dependency array. So choosing "Last year" selected the button and fetched
+	// nothing: every delta on screen stayed measured against the previous period until some other
+	// dependency happened to change. Not an inert control but a LYING one, which is worse, and the
+	// whole point of giving the basis toggle its own colour was to tell the reader which window they
+	// were looking at.
+	//
+	// Asserted against the source: the effect needs a DOM to run and this suite has no jsdom, so
+	// there is no reachable seam. Same technique the handler's `actuals` wiring uses.
+	const source = readFileSync(new URL('./useReport.ts', import.meta.url), 'utf8')
+
+	it('lists compare among the effect dependencies', () => {
+		const deps = source.slice(source.lastIndexOf('}, ['), source.lastIndexOf('])') + 2)
+		expect(deps).toContain('compare')
+	})
+
+	it('still reads compare when building the request', () => {
+		// If this stops being true the dependency above is pointless, and vice versa — the pair is
+		// what makes the toggle work.
+		expect(source).toContain("query.set('compare', compare)")
+	})
+
+	it('keeps the basis in the cache key, so two baselines cannot share an answer', () => {
+		const key = readFileSync(new URL('./useReport.ts', import.meta.url), 'utf8')
+		expect(key).toContain('compare')
+	})
+})

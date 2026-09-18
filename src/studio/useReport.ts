@@ -259,7 +259,14 @@ export function useReport<T>({ apiBaseUrl, report, range, custom, compare, enabl
 		return () => controller.abort()
 	// custom.start/end by value rather than the object: the caller builds a fresh object on every
 	// render, and depending on its identity would refetch on each keystroke in the date fields.
-	}, [client, apiBaseUrl, report, range, custom?.start, custom?.end, nonce, enabled])
+	//
+	// `compare` belongs here and was missing. The effect READS it — it goes into the query string and
+	// into the cache key — so leaving it out meant choosing "Last year" selected the button and
+	// fetched nothing: every delta on screen stayed measured against the previous period until some
+	// other dependency happened to change. Not an inert control but a lying one, and the whole point
+	// of giving the basis toggle its own colour was to tell the reader which window they were
+	// looking at.
+	}, [client, apiBaseUrl, report, range, custom?.start, custom?.end, compare, nonce, enabled])
 
 	return { state, reload }
 }
