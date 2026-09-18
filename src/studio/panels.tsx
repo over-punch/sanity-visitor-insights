@@ -600,9 +600,31 @@ export function OverviewPanel({ data, previous, onBrush }: {
 			)}
 
 
+			{/* STAYS HERE, open, and a real Section.
+			
+			    A review argued this belongs on Acquisition — an email send is a channel with a date
+			    and a click count, sitting on the default tab only because Mailchimp arrives in this
+			    report's envelope. Two things say otherwise.
+			
+			    The valuable half cannot travel. `attributeToSends` computes "Orders after" and
+			    "Per 1,000 sent" from `crossSource`, the daily order series assembled on THIS report,
+			    and `timelineEvents` derives its markers from these same campaigns — so moving the
+			    table would make Acquisition fetch Mailchimp and the order series independently while
+			    this report kept fetching Mailchimp anyway. Two duplicated upstream calls to relocate
+			    a table.
+			
+			    And it must not fold. "Did that send sell anything" is asked within hours of every
+			    send, two to four times a month; this is the one email question Google Analytics
+			    cannot answer, because both the send times and the order times here are exact. The
+			    band below folds material that is CONSULTED. This is read.
+			
+			    What it gains is the subtitle, which carries the one claim these columns do not
+			    make — the half a reader who takes "after" for "because of" will otherwise miss. */}
 			{(data.campaigns?.length ?? 0) > 0 && (
-				<div style={stackBlock}>
-					<SectionTitle title="Email campaigns" />
+				<Section
+					title="Email campaigns"
+					subtitle="What your order book recorded after each send — what happened next, not what the send caused."
+				>
 					<Text size={1} muted>
 						Clicks are distinct subscribers. Opens are not shown: Apple Mail fetches images on
 						the recipient&rsquo;s behalf, so an open is often the mail client rather than a person.
@@ -701,7 +723,7 @@ export function OverviewPanel({ data, previous, onBrush }: {
 							},
 						]}
 					/>
-				</div>
+				</Section>
 			)}
 
 		</div>
@@ -1108,8 +1130,6 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 
 /** Acquisition — where visitors came from, with design-industry referrers called out. */
 export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; previous?: AcquisitionData }): React.ReactElement {
-	const designShare = finiteOrNull(data.designIndustryShare)
-	const unattributedShare = finiteOrNull(data.unattributedShare)
 	const sessions = finiteOrNull(data.totalSessions)
 
 	return (
@@ -1124,58 +1144,6 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 						</div>
 					</div>
 				</Card>
-				{designShare !== null && (
-					<Card padding={3} radius={2} tone="transparent">
-						<div style={stackBlock}>
-							<Label size={1} muted>From design-industry referrers</Label>
-							<div style={figureRow}>
-								{/* "At least", when the row list is truncated. The numerator counts only the
-								    rows GA4 returned while the denominator spans every row it held, and
-								    design-press referrers are low-volume by nature — the population most
-								    likely to sit outside the cap. The figure is a genuine floor, so it is
-								    worth showing; printing it as a measurement was not. */}
-								<Text size={4}>
-									{data.rowsTruncated ? 'at least ' : ''}{formatPercent(designShare, 1)}
-								</Text>
-								{/* No delta on a floor. Two floors computed from differently truncated lists
-								    are not comparable, and a percentage-point arrow between them moves when
-								    a referrer crosses the row cap rather than when anything happened. */}
-								{!data.rowsTruncated && (
-									<Delta
-										current={designShare * 100}
-										previous={finiteOrNull(previous?.designIndustryShare) !== null ? (previous!.designIndustryShare as number) * 100 : null}
-										unit="percent"
-									/>
-								)}
-							</div>
-							{/* Named as list-dependent. Printed bare, this figure was read as a verdict
-							    on the design press when it reports the coverage of a short list. */}
-							<Text size={0} muted>
-								Share of sessions from a known design-press referrer.
-								{data.rowsTruncated && ' GA4 held more sources than are listed here, so the real share is higher.'}
-							</Text>
-						</div>
-					</Card>
-				)}
-				{unattributedShare !== null && (
-					<Card padding={3} radius={2} tone="transparent">
-						<div style={stackBlock}>
-							<Label size={1} muted>No source</Label>
-							<div style={figureRow}>
-								<Text size={4}>{formatPercent(unattributedShare, 1)}</Text>
-								<Delta
-									current={unattributedShare * 100}
-									previous={finiteOrNull(previous?.unattributedShare) !== null ? (previous!.unattributedShare as number) * 100 : null}
-									riseIsGood={false}
-									unit="percent"
-								/>
-							</div>
-							{/* Two unlike failures used to be fused into one number. Direct traffic is
-							    partly recoverable with tagging; (not set) is GA4 losing the row. */}
-							<Text size={0} muted>Direct visits plus rows GA4 could not attribute.</Text>
-						</div>
-					</Card>
-				)}
 			</div>
 
 			<div style={stackBlock}>
@@ -1366,6 +1334,25 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 				)}
 			</div>
 
+
+			{/* WHERE THEY ARRIVED, beside where they came from.
+			
+			    Moved from the Journey tab, where it sat only because GA4 returns it on the funnel's
+			    query. A landing page is the same grain as a referrer — one row per entry point, ranked
+			    by sessions, with the identical engagement column — so this panel now answers "from
+			    where, and onto what" on one screen, and the funnel tab is the funnel and its outcomes.
+			
+			    Entries, not exits: GA4 exposes landingPage and has never had an exits metric. A
+			    previous version of this table queried one and rendered nothing, ever. */}
+			{(data.topLandingPages?.length ?? 0) > 0 && (
+				<Section
+					title="Where sessions began"
+					tone="secondary"
+					subtitle="The page a visit started on, busiest first."
+				>
+					<LandingPagesTable rows={data.topLandingPages ?? []} />
+				</Section>
+			)}
 		</div>
 	)
 }
@@ -1628,11 +1615,6 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 
 			<FunnelChart stages={stages} measurement={data.measurement ?? 'independent-totals'} />
 
-			{/* Side by side on a wide pane. Both blocks are narrow — a few cards and a two-column
-			    table — and stacked full width they pushed the funnel a screen and a half up, so the
-			    thing the tab is named for scrolled out of view before the supporting evidence
-			    started. The grid stacks them again the moment there is not room for both. */}
-			<div style={splitGrid}>
 			{(data.outcomes?.length ?? 0) > 0 && (
 				<Section
 					title="Other outcomes"
@@ -1654,15 +1636,6 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 					</div>
 				</Section>
 			)}
-
-			{/* Entries, not exits. GA4 exposes landingPage and has never had an exits metric; the
-			    previous version of this table queried one and rendered nothing, ever. */}
-			{(data.topLandingPages?.length ?? 0) > 0 && (
-				<Section title="Where sessions began" subtitle="The page a visit started on, busiest first.">
-					<LandingPagesTable rows={data.topLandingPages ?? []} />
-				</Section>
-			)}
-			</div>
 
 			{hiddenSteps.length > 0 && (
 				<Text size={1} muted>

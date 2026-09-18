@@ -323,7 +323,11 @@ describe('AcquisitionPanel', () => {
 			/>,
 		)
 		expect(html).toContain('fontsinuse.com')
-		expect(html).toContain('design-industry')
+		// Flagged on the ROW, which is where it is actionable. The two summary cards that restated
+		// these as panel-level shares are gone: they were not peers of the Sessions count beside
+		// them — both were shares OF it — and the table already carries both flags per row, so a
+		// reader could see which sources they were without doing the arithmetic in reverse.
+		expect(html).toContain('Design')
 		expect(html).toContain('No source')
 		// Withheld rows must be admitted, or the list reads as exhaustive.
 		expect(html).toContain('withheld')
@@ -1791,7 +1795,10 @@ describe('every tab renders its own panel', () => {
 		['acquisition', 'acquisition', 'Sessions'],
 		['journey', 'journey', 'Not a tracked path'],
 		['typeface-interest', 'typeface-interest', 'Sort by any column'],
-		['data-health', 'measurement-health', 'Vercel'],
+		// No data-health row: that tab is gone. Its content is a folded band on Overview, which
+		// reads the same report and already resolved to the same cache key — so the split was never
+		// a fetch boundary, only a business/instrument distinction the code held and the reader did
+		// not. A link naming the old tab falls back to Overview, which is where the content now is.
 	] as const) {
 		it(`draws content on the ${tabId} tab`, () => {
 			const html = render(
@@ -5022,5 +5029,108 @@ describe('caveats about one column read as one block', () => {
 		expect(tail).toContain('name no family in this catalogue')
 		expect(tail).toContain('carry no amount')
 		expect(tail).not.toMatch(new RegExp(`gap:${SPACE.section}px`))
+	})
+})
+
+describe('the instrument is a band on Overview, not a tab of its own', () => {
+	// Overview and Data health read the same report and resolved to the SAME cache key, so the split
+	// was never a fetch boundary — switching between them was already a cache hit. It was two tabs
+	// because the code held a business/instrument distinction the reader does not: a foundry owner
+	// asks "is the number in front of me real", and asks it AT the number. Both halves leaked
+	// anyway — Overview carried the coverage row, Data health carried the order-status vocabulary
+	// that governs every order figure on Overview.
+
+	const envelope = () => ({
+		report: 'measurement-health',
+		range: { start: '2026-08-14', end: '2026-09-13', timezone: 'UTC' },
+		sources: {}, notices: [],
+		data: {
+			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+			vercelVisitors: ok(1580), ordersWithTotal: 7, revenue: ok(910), currency: 'USD',
+			orderStatuses: {}, interpretation: 'Sources differ.',
+			audience: ok(4210), audienceGrowth: ok(108), crossSource: [], timelineEvents: [], campaigns: [],
+		},
+	})
+
+	const overview = () => render(
+		<ReadyReport
+			envelope={envelope() as never}
+			tabId="overview"
+			apiBaseUrl="https://x.test"
+			range="month"
+			custom={{ start: '2026-08-14', end: '2026-09-13' }}
+			revalidationError={null}
+			diagnostics={{ status: 'idle' } as never}
+		/>,
+	)
+
+	it('carries the trust band on the default tab', () => {
+		expect(overview()).toContain('Can I trust these figures')
+	})
+
+	it('states the coverage reading while the band is folded', () => {
+		// The one fact a reader wants before trusting anything above it. Section renders a subtitle
+		// outside the fold, which is what makes folding legal here at all.
+		const html = overview()
+		expect(html).toContain('seeing about 20% of your traffic')
+		// The BODY is genuinely absent, not merely hidden. Asserting `aria-expanded="false"` alone
+		// passed either way: the panel inside the band has folded sections of its own, so that
+		// attribute appears in the markup whether this band is open or shut.
+		expect(html).not.toContain('Pageviews, source against source')
+	})
+
+	it('keeps the instrument out of the navigation', () => {
+		const source = readFileSync(new URL('./VisitorInsightsTool.tsx', import.meta.url), 'utf8')
+		expect(source).not.toContain("id: 'data-health'")
+	})
+
+	it('still runs the configuration checks, which were keyed to the retired tab', () => {
+		// The checks that explain why Overview reads "Revenue nothing" were fetched only on
+		// data-health, so they were unreachable from the panel whose figures they explain.
+		const source = readFileSync(new URL('./VisitorInsightsTool.tsx', import.meta.url), 'utf8')
+		expect(source).toContain("enabled: tabId === 'overview'")
+	})
+})
+
+describe('the acquisition panel answers from where, and onto what', () => {
+	// The landing-pages table moved here from Journey, where it sat only because GA4 returns it on
+	// the funnel's query. Same grain as the source table beside it — one row per entry point, ranked
+	// by sessions, identical engagement column — so the two halves of one question are now on one
+	// screen and the funnel tab is the funnel and its outcomes.
+	const rows = [
+		{ source: 'google', channel: 'Organic Search', medium: 'organic', campaign: null, sessions: 151, engagedSessions: 96, engagementRate: 0.636, designIndustry: false, unattributed: false },
+	]
+
+	it('draws where sessions began beside where they came from', () => {
+		const html = render(<AcquisitionPanel data={{
+			totalSessions: 151, designIndustryShare: null, unattributedShare: null,
+			rowsWithheld: false, rowsTruncated: false, rows,
+			topLandingPages: [{ path: '/typefaces/freight', sessions: 61, engagedSessions: 48, engagementRate: 0.787 }],
+		} as never} />)
+		expect(html).toContain('Where sessions began')
+		expect(html).toContain('/typefaces/freight')
+		// Below the sources it entered through, not above them.
+		expect(html.indexOf('Traffic sources')).toBeLessThan(html.indexOf('Where sessions began'))
+	})
+
+	it('says nothing when GA4 returned no entry pages', () => {
+		const html = render(<AcquisitionPanel data={{
+			totalSessions: 151, designIndustryShare: null, unattributedShare: null,
+			rowsWithheld: false, rowsTruncated: false, rows, topLandingPages: [],
+		} as never} />)
+		expect(html).not.toContain('Where sessions began')
+	})
+
+	it('no longer restates the two row flags as panel-level cards', () => {
+		// Sessions is a count; the design-industry and no-source figures were both shares OF it, so
+		// in an auto-fit grid a share could render before its own denominator — and the table
+		// already carries both flags per row, where they name which sources they are.
+		const html = render(<AcquisitionPanel data={{
+			totalSessions: 151, designIndustryShare: 0.087, unattributedShare: 0.269,
+			rowsWithheld: false, rowsTruncated: false, rows, topLandingPages: [],
+		} as never} />)
+		expect(html).not.toContain('From design-industry referrers')
+		expect(html).toContain('Sessions')
 	})
 })

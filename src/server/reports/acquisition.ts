@@ -11,7 +11,7 @@
  * table look more complete than it is.
  */
 
-import type { AcquisitionData, SourceRow } from '../../reportData'
+import type { AcquisitionData, LandingPage, SourceRow } from '../../reportData'
 import type { DateRange } from '../../types'
 import { sumFirstMetric, type Ga4Client } from '../ga4'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
@@ -367,9 +367,48 @@ export async function acquisition(input: AcquisitionInput): Promise<AcquisitionD
 	// rather than left to assume the arithmetic is broken.
 	const shownPurchases = rows.reduce((total, row) => total + (row.purchases ?? 0), 0)
 
+	// Where those sessions ARRIVED. Moved here from the journey report: a landing page is the same
+	// question as a referrer at the same grain — one row per entry point, ranked by sessions, with
+	// the identical engagement column — and it sat on the funnel's report only because GA4 happened
+	// to return it on that query. Quota is unchanged: one request leaves journey and arrives here.
+	let topLandingPages: LandingPage[] = []
+	try {
+		const landings = await ga4.runReport({
+			// landingPagePlusQueryString, not landingPage. The bare dimension strips the query, so
+			// every paid landing page collapsed into its organic twin and no utm_ or gclid survived
+			// — which made the one table that could have distinguished an ad landing page from the
+			// page it copies unable to tell them apart.
+			dimensions: [{ name: 'landingPagePlusQueryString' }],
+			// Engagement alongside volume. Ranked by sessions alone, a page delivering 200 arrivals
+			// that leave immediately looks identical to one that feeds the shop, so the table listed
+			// the busiest pages rather than the ones worth doing something about.
+			metrics: [{ name: 'sessions' }, { name: 'engagedSessions' }],
+			dateRanges: [{ startDate: range.start, endDate: range.end }],
+			orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
+			limit: 25,
+		})
+
+		topLandingPages = landings.rows.map((row) => {
+			const sessions = Number.isFinite(row.metrics[0]) ? (row.metrics[0] as number) : 0
+			const engaged = Number.isFinite(row.metrics[1]) ? (row.metrics[1] as number) : null
+			return {
+				path: row.dimensions[0] ?? '(unknown)',
+				sessions,
+				engagedSessions: engaged,
+				// Withheld rather than shown as 0% when there are no sessions to divide by.
+				engagementRate: engaged !== null && sessions > 0 ? engaged / sessions : null,
+			}
+		})
+	} catch (e) {
+		// Supplementary; losing it must not cost the funnel. Logged loudly rather than swallowed,
+		// which is how the previous version of this block stayed broken indefinitely.
+		console.error('Visitor insights: landing-page query failed:', (e as Error).message)
+	}
+
 	return {
 		rows,
 		totalSessions,
+		topLandingPages,
 		trackedPurchases,
 		shownPurchases,
 		splitIsSound,

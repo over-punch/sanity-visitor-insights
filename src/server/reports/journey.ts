@@ -258,39 +258,6 @@ export async function journey(config: SiteAnalyticsConfig, ga4: Ga4Client, range
 		}
 	}
 
-	let topLandingPages: LandingPage[] = []
-	try {
-		const landings = await ga4.runReport({
-			// landingPagePlusQueryString, not landingPage. The bare dimension strips the query, so
-			// every paid landing page collapsed into its organic twin and no utm_ or gclid survived
-			// — which made the one table that could have distinguished an ad landing page from the
-			// page it copies unable to tell them apart.
-			dimensions: [{ name: 'landingPagePlusQueryString' }],
-			// Engagement alongside volume. Ranked by sessions alone, a page delivering 200 arrivals
-			// that leave immediately looks identical to one that feeds the shop, so the table listed
-			// the busiest pages rather than the ones worth doing something about.
-			metrics: [{ name: 'sessions' }, { name: 'engagedSessions' }],
-			dateRanges: [{ startDate: range.start, endDate: range.end }],
-			orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
-			limit: 25,
-		})
-
-		topLandingPages = landings.rows.map((row) => {
-			const sessions = Number.isFinite(row.metrics[0]) ? (row.metrics[0] as number) : 0
-			const engaged = Number.isFinite(row.metrics[1]) ? (row.metrics[1] as number) : null
-			return {
-				path: row.dimensions[0] ?? '(unknown)',
-				sessions,
-				engagedSessions: engaged,
-				// Withheld rather than shown as 0% when there are no sessions to divide by.
-				engagementRate: engaged !== null && sessions > 0 ? engaged / sessions : null,
-			}
-		})
-	} catch (e) {
-		// Supplementary; losing it must not cost the funnel. Logged loudly rather than swallowed,
-		// which is how the previous version of this block stayed broken indefinitely.
-		console.error('Visitor insights: landing-page query failed:', (e as Error).message)
-	}
 
 	return {
 		steps: sequencedSteps ?? steps,
@@ -299,7 +266,6 @@ export async function journey(config: SiteAnalyticsConfig, ga4: Ga4Client, range
 		// from that same response — then describe a funnel the panel is not showing.
 		segments: sequencedSteps ? segments : [],
 		segmentDimension: 'device',
-		topLandingPages,
 		outcomes: await otherOutcomes(config, ga4, range),
 		measurement: sequencedSteps ? 'sequence' : 'independent-totals',
 		approximate: !sequencedSteps,

@@ -286,6 +286,15 @@ export interface AcquisitionData {
 	 * computed in `orders.ts` and dropped on the way out.
 	 */
 	ordersMissingTotal?: number | null
+	/**
+	 * Where sessions began, busiest first.
+	 *
+	 * Moved from the journey report. GA4 exposes entries but not exits — the previous `topExitPages`
+	 * queried a metric GA4 has never had and was permanently empty — and the entry page answers the
+	 * more useful half anyway: paired with a referrer it says which page a source actually delivers
+	 * people to, which is a question only this panel can ask.
+	 */
+	topLandingPages?: LandingPage[]
 	/** ISO currency for the apportioned figures, from site config. Null when the site names none. */
 	currency?: string | null
 }
@@ -366,11 +375,10 @@ export interface JourneyData {
 	segments?: JourneySegment[]
 	/** What the segments are split by, in words the panel can print. */
 	segmentDimension?: string
-	/**
-	 * Where sessions began, busiest first. GA4 exposes entries but not exits — the previous
-	 * `topExitPages` queried a metric GA4 has never had and was permanently empty.
-	 */
-	topLandingPages: LandingPage[]
+	// `topLandingPages` moved to AcquisitionData. A landing page is where a visitor ARRIVED, which
+	// is the same question as where they came from and the same grain as the traffic-sources table
+	// — one row per entry point, ranked by sessions, with the identical engagement column. It sat
+	// here only because GA4 returned it on the journey query.
 	/** Conversions that are not a sale — enquiries, subscribes, trial downloads. */
 	outcomes: JourneyOutcome[]
 	/**

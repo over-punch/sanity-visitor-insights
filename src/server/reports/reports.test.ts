@@ -340,14 +340,15 @@ describe('journey', () => {
 		const ga4: ReturnType<typeof createFakeGa4Client> = createFakeGa4Client({
 			batch: (requests) => requests.map(() => makeGa4Total(10)),
 		})
-		// Make only runReport fail, which is what the exit-page query uses.
+		// The landing-page query moved to the acquisition report, so journey no longer calls
+		// runReport at all. What this still guards is that the funnel survives a failure in a
+		// supplementary call rather than losing the whole panel with it.
 		ga4.runReport = async () => {
-			throw new Error('exits unavailable')
+			throw new Error('supplementary query unavailable')
 		}
 
 		const data = await journey(siteConfig(), ga4, range)
 		expect(data.steps.length).toBeGreaterThan(0)
-		expect(data.topLandingPages).toEqual([])
 	})
 })
 
@@ -2490,5 +2491,46 @@ describe('licence lines arrive in the shape a price ladder has', () => {
 		expect(desktop.map((r) => `${r.tier}/${r.term}`)).toEqual([
 			'1–5 users/1 year', '1–5 users/Perpetual', '26–50 users/Perpetual',
 		])
+	})
+})
+
+describe('where visitors arrived sits with where they came from', () => {
+	// A landing page is the same grain as a referrer — one row per entry point, ranked by sessions,
+	// with the identical engagement column. It was on the journey report only because GA4 returns it
+	// on that query, which put "from where" and "onto what" on two different tabs. Quota is
+	// unchanged: one request left journey and arrived here.
+	it('returns landing pages from the acquisition report', async () => {
+		const ga4 = createFakeGa4Client({
+			single: (request) => (request.dimensions?.some((d) => d.name === 'landingPagePlusQueryString')
+				? makeGa4Report([{ dimensions: ['/typefaces/freight'], metrics: [61, 48] }])
+				: makeGa4Report([{ dimensions: ['google', 'Organic Search', 'organic', '(not set)'], metrics: [151, 96] }])),
+		})
+
+		const data = await acquisition({ config: siteConfig(), range, ga4, notices: [] })
+		expect(data.topLandingPages?.[0]).toMatchObject({ path: '/typefaces/freight', sessions: 61, engagedSessions: 48 })
+	})
+
+	it('withholds an engagement rate rather than dividing by no sessions', async () => {
+		const ga4 = createFakeGa4Client({
+			single: (request) => (request.dimensions?.some((d) => d.name === 'landingPagePlusQueryString')
+				? makeGa4Report([{ dimensions: ['/quiet'], metrics: [0, 0] }])
+				: makeGa4Report([])),
+		})
+		const data = await acquisition({ config: siteConfig(), range, ga4, notices: [] })
+		expect(data.topLandingPages?.[0]?.engagementRate).toBeNull()
+	})
+
+	it('keeps the source table when the landing-page query fails', async () => {
+		// Supplementary. Losing it must not cost the panel the thing it is named for.
+		let first = true
+		const ga4 = createFakeGa4Client({
+			single: () => {
+				if (first) { first = false; return makeGa4Report([{ dimensions: ['google', 'Organic Search', 'organic', '(not set)'], metrics: [151, 96] }]) }
+				throw new Error('landing pages unavailable')
+			},
+		})
+		const data = await acquisition({ config: siteConfig(), range, ga4, notices: [] })
+		expect(data.rows.length).toBeGreaterThan(0)
+		expect(data.topLandingPages).toEqual([])
 	})
 })

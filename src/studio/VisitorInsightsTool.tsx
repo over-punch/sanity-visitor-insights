@@ -13,7 +13,7 @@ import { knownShortfall, useReport, type ReportState } from './useReport'
 import { decodeView, mergeIntoHash, type ViewState } from './urlState'
 import type { ReportEnvelope } from '../types'
 import { daysBetween, shiftDays } from '../core/ranges'
-import { NoticeList } from './Figure'
+import { NoticeList, Section, panelStack } from './Figure'
 import { COMPARISON, COMPARISON_STYLE, COMPARISON_TEXT, withAlpha } from './palette'
 import { Badge } from '@liiift-studio/sanity-ui-compat'
 import { AcquisitionPanel, DataHealthPanel, JourneyPanel, OverviewPanel, TypefaceInterestPanel } from './panels'
@@ -212,9 +212,8 @@ const GA4_ONLY_TABS = ['acquisition', 'journey', 'typeface-interest']
 const PANELS: Array<{ id: string; report: ReportName; label: string }> = [
 	{ id: 'overview', report: 'measurement-health', label: 'Overview' },
 	{ id: 'acquisition', report: 'acquisition', label: 'Acquisition' },
-	{ id: 'journey', report: 'journey', label: 'Journey' },
 	{ id: 'typeface-interest', report: 'typeface-interest', label: 'Typeface interest' },
-	{ id: 'data-health', report: 'measurement-health', label: 'Data health' },
+	{ id: 'journey', report: 'journey', label: 'Journey' },
 ]
 
 /** Options supplied by the plugin config, carried on the Sanity tool definition. */
@@ -625,23 +624,38 @@ export function ReadyReport({
 						<CoverageRibbon ratio={knownShortfall(apiBaseUrl, range, range === 'custom' ? custom : undefined)} />
 					)}
 
-					{tabId === 'overview' && <OverviewPanel data={envelope.data as never} previous={envelope.comparison?.data as never} onBrush={onBrush} />}
-					{tabId === 'data-health' && (
-						<Stack space={4}>
-							<DataHealthPanel
-								data={envelope.data as never}
-								diagnostics={diagnostics.status === 'ready' ? (diagnostics.envelope.data as never) : undefined}
-							/>
-							{/* Said, not silently absent. The configuration block rendered only on
-							    `ready`, so an in-flight fetch or a 500 showed nothing at all and the
-							    section popped in later with no explanation of where it had been. */}
-							{diagnostics.status === 'loading' && <Text size={1} muted>Checking configuration…</Text>}
-							{diagnostics.status === 'error' && (
-								<Card padding={3} radius={2} tone="caution" border>
-									<Text size={1}>Configuration checks could not run: {diagnostics.message}</Text>
-								</Card>
-							)}
-						</Stack>
+					{tabId === 'overview' && (
+						<div style={panelStack}>
+							<OverviewPanel data={envelope.data as never} previous={envelope.comparison?.data as never} onBrush={onBrush} />
+							{/* The instrument, on the same page as the figures it qualifies, folded.
+							
+							    The containment bar states one total and the timeline's coverage row states
+							    the same quantity daily; dating a collapse means reading the shape and the
+							    total together, and a tab forbade exactly that. Folded because it is
+							    consulted rather than read — and safe to fold because Section keeps its
+							    subtitle outside the fold, so the reading itself stays on screen. */}
+							<Section
+								title="Can I trust these figures"
+								tone="secondary"
+								subtitle={trustSubtitle(envelope.data as never)}
+								collapsible
+								defaultOpen={false}
+							>
+								<DataHealthPanel
+									data={envelope.data as never}
+									diagnostics={diagnostics.status === 'ready' ? (diagnostics.envelope.data as never) : undefined}
+								/>
+								{/* Said, not silently absent. The configuration block rendered only on
+								    `ready`, so an in-flight fetch or a 500 showed nothing at all and the
+								    section popped in later with no explanation of where it had been. */}
+								{diagnostics.status === 'loading' && <Text size={1} muted>Checking configuration…</Text>}
+								{diagnostics.status === 'error' && (
+									<Card padding={3} radius={2} tone="caution" border>
+										<Text size={1}>Configuration checks could not run: {diagnostics.message}</Text>
+									</Card>
+								)}
+							</Section>
+						</div>
 					)}
 					{tabId === 'acquisition' && <AcquisitionPanel data={envelope.data as never} previous={envelope.comparison?.data as never} />}
 					{tabId === 'journey' && <JourneyPanel data={envelope.data as never} />}
@@ -705,6 +719,27 @@ function BasisSelector({
 	)
 }
 
+/**
+ * The one-line answer that stands in for the trust band while it is folded.
+ *
+ * `Section` renders a subtitle outside the fold, which is the mechanism that makes folding legal in
+ * a package whose founding rule is that a caveat sits beside its figure. So the coverage reading —
+ * the single fact a reader wants before trusting anything above — is what goes here, rather than a
+ * description of what is inside.
+ *
+ * @param data - the measurement-health envelope
+ */
+function trustSubtitle(data: { shortfallRatio?: number | null } | undefined): string {
+	const shortfall = data?.shortfallRatio
+	if (shortfall === null || shortfall === undefined || !Number.isFinite(shortfall)) {
+		return 'How much of your traffic Google Analytics is seeing, and what it is missing.'
+	}
+	const seeing = Math.round((1 - shortfall) * 100)
+	return shortfall >= 0
+		? `Google Analytics is seeing about ${seeing}% of your traffic. Open for how that was measured.`
+		: 'Google Analytics is counting more than your server does. Open for how that was measured.'
+}
+
 /** Renders one report panel, including its loading, error and empty states. */
 function ReportPanel({
 	tabId,
@@ -734,7 +769,7 @@ function ReportPanel({
 		apiBaseUrl,
 		report: 'diagnostics',
 		range: 'week',
-		enabled: tabId === 'data-health',
+		enabled: tabId === 'overview',
 	}).state
 
 	// Announced to screen readers when figures change, so a range switch is perceivable without
