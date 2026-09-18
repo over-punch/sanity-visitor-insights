@@ -1611,9 +1611,11 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 			/>
 			)}
 
-			{spread(segments) && <Text size={1}>{spread(segments)}</Text>}
-
 			<FunnelChart stages={stages} measurement={data.measurement ?? 'independent-totals'} />
+
+			{/* BELOW the funnel, because its own sentence ends "the combined funnel above averages the
+			    two and describes neither" — and it rendered above, so the copy pointed at nothing. */}
+			{spread(segments) && <Text size={1}>{spread(segments)}</Text>}
 
 			{(data.outcomes?.length ?? 0) > 0 && (
 				<Section

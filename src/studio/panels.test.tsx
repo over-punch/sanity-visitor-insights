@@ -5134,3 +5134,47 @@ describe('the acquisition panel answers from where, and onto what', () => {
 		expect(html).toContain('Sessions')
 	})
 })
+
+describe('the tool does not say things that are not true', () => {
+	it('does not claim every figure on Typeface interest comes from GA4', () => {
+		// Bought, Revenue, the licence ladder, the unattributed takings and the orders carrying no
+		// amount are all read from the order book — and that panel explicitly tells the reader not to
+		// scale them. The ribbon's own known branch already said "anything marked (orders) is exact",
+		// so the two branches contradicted each other.
+		const source = readFileSync(new URL('./VisitorInsightsTool.tsx', import.meta.url), 'utf8')
+		expect(source).not.toContain('Every figure on this tab comes from Google Analytics')
+	})
+
+	it('does not send the reader to a tab that no longer exists', () => {
+		const source = readFileSync(new URL('./VisitorInsightsTool.tsx', import.meta.url), 'utf8')
+		expect(source).not.toContain('open Overview or Data health')
+	})
+
+	it('puts the segment sentence under the funnel it calls "above"', () => {
+		// spread() ends "the combined funnel above averages the two and describes neither", and it
+		// rendered above the funnel, so the copy pointed at nothing.
+		const data = {
+			approximate: true, approximationNote: 'Each step is counted on its own, not as a tracked journey.',
+			measurement: 'independent-totals', outcomes: [], segmentDimension: 'device',
+			steps: [
+				{ key: 'landed', label: 'Landed', event: 'page_view', count: ok(1000), conversionFromPrevious: null },
+				{ key: 'cart', label: 'Added to cart', event: 'add_to_cart', count: ok(60), conversionFromPrevious: 0.06 },
+			],
+			segments: [
+				{ key: 'desktop', label: 'Desktop', steps: [
+					{ key: 'landed', label: 'Landed', event: 'page_view', count: ok(500), conversionFromPrevious: null },
+					{ key: 'cart', label: 'Added to cart', event: 'add_to_cart', count: ok(50), conversionFromPrevious: 0.1 },
+				] },
+				{ key: 'mobile', label: 'Mobile', steps: [
+					{ key: 'landed', label: 'Landed', event: 'page_view', count: ok(500), conversionFromPrevious: null },
+					{ key: 'cart', label: 'Added to cart', event: 'add_to_cart', count: ok(10), conversionFromPrevious: 0.02 },
+				] },
+			],
+		}
+		const html = render(<JourneyPanel data={data as never} />)
+		const sentence = html.indexOf('describes neither')
+		if (sentence === -1) return
+		// The funnel's first rung renders before the sentence that refers back to it.
+		expect(html.indexOf('>Landed<')).toBeLessThan(sentence)
+	})
+})

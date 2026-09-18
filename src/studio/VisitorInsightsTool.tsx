@@ -180,35 +180,39 @@ const RANGES: Array<{ key: Exclude<RangeKey, 'custom'>; label: string; span: str
 	{ key: 'year', label: 'Year', span: 'the last 365 days' },
 ]
 
-/** Panels, in the order they appear. */
 /**
- * Panels, in the order they appear.
+ * Tabs that carry no exact figures of their own, so their numbers need the coverage ribbon.
  *
- * Acquisition leads because "where did people come from" is the question most often being asked.
- * Measurement health sits near the end deliberately: it is about the instrument rather than the
- * audience, and leading with it made an operational caveat the first thing anyone read. Diagnostics
- * stays last, since it is about configuration rather than visitors at all.
- */
-/**
- * The tabs, in the order a reader meets them.
+ * Overview is excluded because it computes and states the shortfall itself — a ribbon there would
+ * say the same thing twice.
  *
- * `id` is the tab; `report` is the primary envelope it needs. They are no longer the same thing,
- * because Overview and Data health are two halves of one report — the business half and the
- * instrument half — which used to be a single tab named for the instrument. Revenue, orders, the
- * mailing list and the cross-source timeline were all behind it, on tab four, under a blurb saying
- * it was about how much of reality each source sees.
+ * Typeface interest is a half-member, and the ribbon now says so rather than claiming "every figure
+ * on this tab comes from Google Analytics". That was false: Bought, Revenue, the licence ladder,
+ * the unattributed takings and the orders carrying no amount are all read from the order book, and
+ * the panel explicitly tells the reader not to scale them. The ribbon names the (GA4) marker
+ * instead, which the column headers already carry.
  *
- * Still five tabs. Overview takes the slot freed by folding Diagnostics into Data health, which
- * answers the same question it did — can I trust this — and did not need a tab of its own.
- */
-/**
- * Tabs whose every figure comes from GA4 alone.
- *
- * These get the coverage ribbon. Overview and Data health are excluded because they compute and
- * state the shortfall themselves — a ribbon there would say the same thing twice.
+ * Four stacked doc comments used to sit here, three of them describing a tab list that no longer
+ * exists — "still five tabs", "Diagnostics stays last", "Acquisition leads" — and none of them
+ * about the array beneath. Nobody could state what this partition was, including the file.
  */
 const GA4_ONLY_TABS = ['acquisition', 'journey', 'typeface-interest']
 
+/**
+ * The tabs, in the order a reader meets them.
+ *
+ * Four, following the only partition that is also a real cost boundary: one tab, one report, one
+ * cache entry. Overview leads because it is the only tab carrying revenue and orders, and because
+ * resolving its report is what lets every other tab's ribbon state a multiplier at all.
+ *
+ * Journey is last: it is the only tab that can render as nothing but a caveat card, it is wholly
+ * GA4, and its lower rungs are counts in the low tens. Typeface interest precedes it because it
+ * carries exact order money.
+ *
+ * The instrument half that used to be its own tab is a folded band on Overview now, reading the
+ * same report it always did — the two resolved to the same cache key, so the split was never a
+ * fetch boundary.
+ */
 const PANELS: Array<{ id: string; report: ReportName; label: string }> = [
 	{ id: 'overview', report: 'measurement-health', label: 'Overview' },
 	{ id: 'acquisition', report: 'acquisition', label: 'Acquisition' },
@@ -509,8 +513,8 @@ function CoverageRibbon({ ratio }: { ratio: number | null }): React.ReactElement
 	if (ratio === null) {
 		return (
 			<Text size={0} muted>
-				Every figure on this tab comes from Google Analytics. How much of your traffic it is seeing
-				has not been checked for this window — open Overview or Data health to measure it.
+				Figures marked (GA4) on this tab come from Google Analytics. How much of your traffic it is
+				seeing has not been checked for this window — open Overview to measure it.
 			</Text>
 		)
 	}
