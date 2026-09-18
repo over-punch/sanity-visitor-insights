@@ -15,6 +15,48 @@ import { COMPARISON_TEXT, SERIES, mark } from './palette'
 import type { MetricValue, UnavailableReason } from '../types'
 import { valueOrNull } from '../types'
 
+/**
+ * The four levels of vertical break, in pixels.
+ *
+ * Sanity's own scale is [0, 4, 8, 12, 20, 32, …] and this tool used one value from it — `space={3}`,
+ * twelve pixels — for sixty-four per cent of all vertical spacing, with `space={4}` at twenty for
+ * everything structural. So the largest break in the tool was 1.67 times an ordinary gap between
+ * two lines inside a card, and a section boundary looked the same as the next line of a caption.
+ * That is what "under-designed" meant here: not too little air, too EVEN air.
+ *
+ * Every step is at LEAST double the one below — 4, 8, 20, 40, so ×2, ×2.5, ×2. That is the property
+ * that matters: a level has to be readable at a glance rather than measurable with a ruler, and
+ * anything under about ×2 reads as the same level. Twenty rather than sixteen because a card gutter
+ * wants the extra room and it is a real token; forty has no token at all — Sanity's scale jumps 32
+ * to 52 — which is one more reason these are plain pixels.
+ *
+ * Plain pixels in `style` rather than `space` props for a second reason: the compat shim's DOM
+ * fallback passes `style` through and drops `space`, `padding`, `tone`, `radius` and `border`
+ * entirely. On the versions this package supports every primitive resolves, so that is a latent
+ * fragility rather than a live fault — but four constants in this file already sidestep it for
+ * exactly this reason, and the skeleton was the one part that never did.
+ */
+export const SPACE = { pair: 4, block: 8, group: 20, section: 40 } as const
+
+/**
+ * A stack at each level.
+ *
+ * `display: grid` rather than a column flexbox: identical on one axis, but grid children do not
+ * shrink, so a wide table cannot squash the block beside it. The convention is already in this file
+ * — `funnelItem` and NoticeList's list both do it.
+ */
+export const stackPair: React.CSSProperties = { display: 'grid', gap: SPACE.pair }
+
+/** Label to figure to note, inside one card. */
+export const stackBlock: React.CSSProperties = { display: 'grid', gap: SPACE.block }
+
+/** Card to card, check to check, a heading to its own body. */
+export const stackGroup: React.CSSProperties = { display: 'grid', gap: SPACE.group }
+
+/** One titled region to the next. The only level above twenty. */
+export const panelStack: React.CSSProperties = { display: 'grid', gap: SPACE.section }
+
+
 /** Human-readable explanation for each unavailable reason. */
 const REASON_TEXT: Record<UnavailableReason, string> = {
 	not_instrumented: 'Not tracked on this site',
@@ -1015,13 +1057,13 @@ function gapLabel(delta: number, measurement: 'sequence' | 'independent-totals',
 const partialSlot: React.CSSProperties = { height: 10 }
 
 /** The segment key, sat under the funnel with the other things said once per chart. */
-const funnelSegmentKey: React.CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap', paddingTop: 4 }
+const funnelSegmentKey: React.CSSProperties = { display: 'flex', gap: SPACE.group, flexWrap: 'wrap', paddingTop: SPACE.pair }
 
 /** One rung: tier, term, bar, figures. */
 const ladderRow: React.CSSProperties = {
 	display: 'grid',
 	gridTemplateColumns: 'minmax(80px, 1.1fr) minmax(60px, 0.8fr) minmax(60px, 2fr) auto',
-	gap: 10,
+	gap: SPACE.block,
 	alignItems: 'center',
 }
 
@@ -1311,8 +1353,7 @@ export function Section({
 	const shown = !collapsible || open
 
 	return (
-		<section>
-			<Stack space={3}>
+		<section style={sectionBox}>
 			<div style={sectionHeader}>
 				<Stack space={1}>
 					<Heading size={tone === 'primary' ? 1 : 0} style={tone === 'primary' ? primaryTitle : secondaryTitle}>
@@ -1332,8 +1373,8 @@ export function Section({
 					</button>
 				)}
 			</div>
-			{shown && <div id={bodyId}>{children}</div>}
-			</Stack>
+			{/* A Stack, not a bare div. See the note on sectionBox. */}
+			{shown && <div id={bodyId} style={sectionBody}>{children}</div>}
 		</section>
 	)
 }
@@ -1928,7 +1969,7 @@ export function SortableTable<Row>({
 				</div>
 			)}
 
-		<Card radius={2} tone="transparent" border style={tableWrapper}>
+		<Card radius={2} tone="transparent" style={tableWrapper}>
 			<table style={tableBase}>
 				<caption style={visuallyHidden}>{caption}</caption>
 				<thead>
@@ -2036,9 +2077,19 @@ function csvCell(cell: string): string {
 const tableControls: React.CSSProperties = {
 	display: 'flex',
 	alignItems: 'center',
-	gap: 10,
+	gap: SPACE.block,
 	flexWrap: 'wrap',
 }
+
+/** A section: its heading, then its body, at group spacing. */
+const sectionBox: React.CSSProperties = { display: 'grid', gap: SPACE.group }
+
+/**
+ * A section's body, which owns the rhythm between its own children.
+ *
+ * This is the line that had `Section` used four times against `SectionTitle`'s eight.
+ */
+const sectionBody: React.CSSProperties = { display: 'grid', gap: SPACE.group }
 
 /** Title and its control on one line, the control pushed to the trailing edge. */
 const sectionHeader: React.CSSProperties = {
@@ -2046,7 +2097,10 @@ const sectionHeader: React.CSSProperties = {
 	alignItems: 'flex-start',
 	justifyContent: 'space-between',
 	gap: 12,
-	borderBottom: '1px solid var(--card-border-color, rgba(128,128,128,0.22))',
+	// 0.35, not 0.22. This rule was the faintest line in the file and the only thing separating one
+	// section from the next — while every button drew at 0.30. A "Hide" control outranking the
+	// boundary between two regions of the panel is the hierarchy upside down.
+	borderBottom: '1px solid var(--card-border-color, rgba(128,128,128,0.35))',
 	paddingBottom: 6,
 }
 
@@ -2071,7 +2125,7 @@ const secondaryTitle: React.CSSProperties = {
 const sectionToggle: React.CSSProperties = {
 	appearance: 'none',
 	background: 'transparent',
-	border: '1px solid var(--card-border-color, rgba(128,128,128,0.3))',
+	border: '1px solid var(--card-border-color, rgba(128,128,128,0.22))',
 	borderRadius: 3,
 	color: 'inherit',
 	font: 'inherit',
@@ -2149,7 +2203,7 @@ const estimateDot: React.CSSProperties = {
 const ratioRow: React.CSSProperties = {
 	display: 'flex',
 	alignItems: 'baseline',
-	gap: 10,
+	gap: SPACE.block,
 	flexWrap: 'wrap',
 }
 
@@ -2157,7 +2211,7 @@ const ratioRow: React.CSSProperties = {
 const ratioToggle: React.CSSProperties = {
 	appearance: 'none',
 	background: 'transparent',
-	border: '1px solid var(--card-border-color, rgba(128,128,128,0.3))',
+	border: '1px solid var(--card-border-color, rgba(128,128,128,0.22))',
 	borderRadius: 3,
 	color: 'inherit',
 	font: 'inherit',
@@ -2173,7 +2227,7 @@ const filterInput: React.CSSProperties = {
 	fontSize: '0.85em',
 	padding: '4px 8px',
 	borderRadius: 3,
-	border: '1px solid var(--card-border-color, rgba(128,128,128,0.3))',
+	border: '1px solid var(--card-border-color, rgba(128,128,128,0.22))',
 	background: 'transparent',
 	color: 'inherit',
 	minWidth: 160,
@@ -2183,7 +2237,7 @@ const filterInput: React.CSSProperties = {
 const tableControlButton: React.CSSProperties = {
 	appearance: 'none',
 	background: 'transparent',
-	border: '1px solid var(--card-border-color, rgba(128,128,128,0.3))',
+	border: '1px solid var(--card-border-color, rgba(128,128,128,0.22))',
 	borderRadius: 3,
 	color: 'inherit',
 	font: 'inherit',
@@ -2240,7 +2294,7 @@ const tableBase: React.CSSProperties = { width: '100%', borderCollapse: 'collaps
 const headCell: React.CSSProperties = {
 	padding: 0,
 	textAlign: 'left',
-	borderBottom: '1px solid var(--card-border-color, rgba(128,128,128,0.3))',
+	borderBottom: '1px solid var(--card-border-color, rgba(128,128,128,0.22))',
 	whiteSpace: 'nowrap',
 }
 

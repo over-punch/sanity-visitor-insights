@@ -15,7 +15,7 @@
 
 import React from 'react'
 import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ChartData, ContainmentBar, Delta, formatDay, LicenceLadder, EstimateDotPlot, RatioFigure, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
+import { ChartData, ContainmentBar, Delta, SPACE, panelStack, stackBlock, stackGroup, formatDay, LicenceLadder, EstimateDotPlot, RatioFigure, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import { SEND_WINDOW_DAYS } from '../core/ranges'
 import { describeRank, weeklyRank } from '../core/rank'
@@ -98,7 +98,7 @@ function acquisitionRowKey(row: SourceRow): string {
 const figureRow: React.CSSProperties = {
 	display: 'flex',
 	alignItems: 'baseline',
-	gap: 10,
+	gap: SPACE.block,
 	flexWrap: 'wrap',
 }
 
@@ -135,7 +135,7 @@ function isLinkableHost(source: string): boolean {
 const cardGrid: React.CSSProperties = {
 	display: 'grid',
 	gridTemplateColumns: 'repeat(auto-fit, minmax(min(14rem, 100%), 1fr))',
-	gap: 16,
+	gap: SPACE.group,
 }
 
 /**
@@ -182,12 +182,12 @@ export function OverviewPanel({ data, previous, onBrush }: {
 	onBrush?: (start: string, end: string) => void
 }): React.ReactElement {
 	return (
-		<Stack space={4}>
+		<div style={panelStack}>
 			<Verdict data={data} previous={previous} />
 
 			<div style={cardGrid}>
-				<Card padding={3} radius={2} tone="transparent" border>
-					<Stack space={3}>
+				<Card padding={3} radius={2} tone="transparent">
+					<div style={stackBlock}>
 						<Label size={1} muted>Revenue</Label>
 						<div style={figureRow}>
 							{/* One render path, told what the number is. The card used to take the currency
@@ -222,10 +222,10 @@ export function OverviewPanel({ data, previous, onBrush }: {
 						{revenueCoversEveryOrder(data) && rankLine(data.crossSource, (d) => d.revenue) && (
 							<Text size={0} muted>{rankLine(data.crossSource, (d) => d.revenue)}</Text>
 						)}
-					</Stack>
+					</div>
 				</Card>
-				<Card padding={3} radius={2} tone="transparent" border>
-					<Stack space={3}>
+				<Card padding={3} radius={2} tone="transparent">
+					<div style={stackBlock}>
 						<Label size={1} muted>Orders</Label>
 						<div style={figureRow}>
 							<MetricFigure metric={metricOr(data.orders, OLDER_ROUTE)} label="Orders" />
@@ -234,10 +234,10 @@ export function OverviewPanel({ data, previous, onBrush }: {
 						{rankLine(data.crossSource, (d) => d.orders) && (
 							<Text size={0} muted>{rankLine(data.crossSource, (d) => d.orders)}</Text>
 						)}
-					</Stack>
+					</div>
 				</Card>
-				<Card padding={3} radius={2} tone="transparent" border>
-					<Stack space={3}>
+				<Card padding={3} radius={2} tone="transparent">
+					<div style={stackBlock}>
 						<Label size={1} muted>Traffic</Label>
 						{/* The verdict asserts a traffic move; without this card the reader was told a
 						    number changed and shown no number. Vercel's, because it is the complete
@@ -249,10 +249,10 @@ export function OverviewPanel({ data, previous, onBrush }: {
 						{data.vercelPageviews && data.vercelPageviews.status !== 'unavailable' && (
 							<Text size={0} muted>Pageviews, from Vercel’s own counter.</Text>
 						)}
-					</Stack>
+					</div>
 				</Card>
-				<Card padding={3} radius={2} tone="transparent" border>
-					<Stack space={3}>
+				<Card padding={3} radius={2} tone="transparent">
+					<div style={stackBlock}>
 						{/* "Total", in the label, because this card sits in a row with Revenue, Orders and
 						    Traffic — all scoped to the selected range — while it alone is Mailchimp's
 						    current all-time count. On a Week range the growth line beneath is withheld
@@ -304,7 +304,7 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								not consent-gated or blockable.
 							</Text>
 						)}
-					</Stack>
+					</div>
 				</Card>
 			</div>
 
@@ -314,8 +314,8 @@ export function OverviewPanel({ data, previous, onBrush }: {
 			  * tabs. Derived here, so neither costs a query.
 			  */}
 			<div style={cardGrid}>
-				<Card padding={3} radius={2} tone="transparent" border>
-					<Stack space={3}>
+				<Card padding={3} radius={2} tone="transparent">
+					<div style={stackBlock}>
 						<Label size={1} muted>Average order</Label>
 						{/* The same treatment as visitors per order: the denominator is the whole
 						    story here, since at Darden only 2 of 7 orders carry an amount. */}
@@ -339,11 +339,11 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								From your orders, so exact.
 							</Text>
 						)}
-					</Stack>
+					</div>
 				</Card>
 
-				<Card padding={3} radius={2} tone="transparent" border>
-					<Stack space={3}>
+				<Card padding={3} radius={2} tone="transparent">
+					<div style={stackBlock}>
 						<Label size={1} muted>Visitors per order</Label>
 						{/* Turn it over to see what it is made of.
 						
@@ -367,12 +367,12 @@ export function OverviewPanel({ data, previous, onBrush }: {
 								Vercel&rsquo;s visitor count. A ceiling — some are bots or the same person twice.
 							</Text>
 						)}
-					</Stack>
+					</div>
 				</Card>
 			</div>
 
 			{(data.crossSource?.length ?? 0) >= 3 && (
-				<Stack space={3}>
+				<div style={stackBlock}>
 					<SectionTitle title="Everything, on one time axis" />
 					{/* Forty words defending a design decision to a reader who never proposed the
 					    alternative had escaped from a code comment into the UI. What the reader needs
@@ -596,12 +596,12 @@ export function OverviewPanel({ data, previous, onBrush }: {
 							},
 						]}
 					/>
-				</Stack>
+				</div>
 			)}
 
 
 			{(data.campaigns?.length ?? 0) > 0 && (
-				<Stack space={3}>
+				<div style={stackBlock}>
 					<SectionTitle title="Email campaigns" />
 					<Text size={1} muted>
 						Clicks are distinct subscribers. Opens are not shown: Apple Mail fetches images on
@@ -701,10 +701,10 @@ export function OverviewPanel({ data, previous, onBrush }: {
 							},
 						]}
 					/>
-				</Stack>
+				</div>
 			)}
 
-		</Stack>
+		</div>
 	)
 }
 
@@ -819,7 +819,7 @@ function Verdict({ data, previous }: { data: MeasurementHealthData; previous?: M
 	// only thing worth saying, would render "No figures arrived".
 	if (parts.length === 0 && !broken) {
 		return (
-			<Card padding={3} radius={2} tone="transparent" border style={{ borderLeftWidth: 3, borderLeftStyle: 'solid' }}>
+			<Card padding={3} radius={2} tone="transparent" style={{ borderLeftWidth: 3, borderLeftStyle: 'solid' }}>
 				<Text size={4}>No figures arrived for this window.</Text>
 			</Card>
 		)
@@ -849,10 +849,14 @@ function Verdict({ data, previous }: { data: MeasurementHealthData; previous?: M
 			style={broken ? { borderLeftWidth: 3, borderLeftStyle: 'solid' } : undefined}
 		>
 			<Stack space={2}>
-				{/* size={3}, not size={2}. It was set one step above body and SMALLER than the figures
-				    beneath it, so the panel's thesis read as a caption for the cards. */}
+				{/* size={4} — 21px, the same as the figures beneath it.
+				
+				    An earlier pass moved this 15 -> 18px with a comment claiming it had been fixed,
+				    but `MetricFigure` defaults to size={4} = 21px, so the panel's one sentence was
+				    still smaller than the cards it summarises and still read as their caption. Parity
+				    is the floor here: this is the only line the tool exists to say. */}
 				{parts.length > 0 && (
-					<Text size={3} weight={broken ? 'semibold' : 'medium'}>{parts.join(' \u00b7 ')}{closing}</Text>
+					<Text size={4} weight={broken ? 'semibold' : 'medium'}>{parts.join(' \u00b7 ')}{closing}</Text>
 				)}
 				{/* The instrument, beneath and quieter. It is a real qualifier on the traffic figure
 				    and it stays on the alarm card — it is simply no longer the first thing read. */}
@@ -873,11 +877,11 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 	const contained = isContainment(data.vercelPageviews, data.ga4Pageviews)
 
 	return (
-		<Stack space={4}>
+		<div style={panelStack}>
 			{/* The reading is always shown. It used to be nested inside the shortfall block, so a
 			    range where only one source answered rendered bare numbers and no explanation of why
 			    there was nothing to compare — the state where the explanation matters most. */}
-			<Card padding={3} radius={2} tone="transparent" border>
+			<Card padding={3} radius={2} tone="transparent">
 				<Stack space={2}>
 					{data.shortfallRatio !== null && (
 						<Text size={1} weight="semibold">
@@ -900,7 +904,7 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 			    This tab exists to answer one question — can I trust the other tabs — and it opened
 			    with a section title, an explanatory line and a bar, then stated the answer fourth.
 			    A reader with five minutes met the working before the conclusion. */}
-			<Stack space={3}>
+			<div style={stackBlock}>
 				<SectionTitle title="Pageviews, source against source" />
 				<Text size={1} muted>
 					Both counting pageviews. Google Analytics is blockable, so seeing fewer is normal.
@@ -951,7 +955,7 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 					   return null and the section rendered NOTHING — not even the figure Vercel did
 					   report. That is the state where the reader most needs to see what survived, and
 					   it is the one the card below spends a comment explaining. */
-					<Stack space={3}>
+					<div style={stackBlock}>
 						<div style={figureRow}>
 							<Label size={1} muted>Pageviews Vercel counted</Label>
 							<MetricFigure metric={metricOr(data.vercelPageviews, OLDER_ROUTE)} label="Vercel pageviews" size={3} />
@@ -963,9 +967,9 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 						<Text size={0} muted>
 							Only one source answered for this range, so there is nothing to compare.
 						</Text>
-					</Stack>
+					</div>
 				)}
-			</Stack>
+			</div>
 
 
 			{/* Moved up from the bottom of the tab.
@@ -991,7 +995,7 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 			)}
 
 			{((data.capture?.estimates?.length ?? 0) > 0 || data.estimatedSessions?.status === 'estimated') && (
-				<Stack space={3}>
+				<div style={stackBlock}>
 					<SectionTitle title="How much GA4 is seeing" />
 					{/* One axis, not three cards.
 					
@@ -1019,27 +1023,34 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 					)}
 
 					{data.estimatedSessions && data.estimatedSessions.status === 'estimated' && (
-						<Card padding={3} radius={2} tone="transparent" border>
-							<Stack space={3}>
+						<Card padding={3} radius={2} tone="transparent">
+							<div style={stackBlock}>
 								<Label size={1} muted>Sessions, corrected for what GA4 misses</Label>
 								<MetricFigure metric={metricOr(data.estimatedSessions, OLDER_ROUTE)} label="Estimated sessions" />
-							</Stack>
+							</div>
 						</Card>
 					)}
-				</Stack>
+				</div>
 			)}
 
 
+			{/* A real Section now, not a bare title — so it can carry its own tone, fold, and keep its
+			    instruction visible while folded. The instruction moved into the subtitle for exactly
+			    that reason: it is the one sentence a reader needs before they go looking, and Section
+			    renders a subtitle outside the fold.
+			
+			    Consulted once ever, when configuring which statuses count as a sale. */}
 			{Object.keys(data.orderStatuses ?? {}).length > 0 && (
-				<Stack space={3}>
-					<SectionTitle title="Order statuses in this range" tone="secondary" />
-					{/* The only place a site's own status vocabulary is visible. Without it nobody can
-					    configure which statuses count as a sale — and getting that wrong zeroes every
-					    order-derived figure in the tool with nothing on screen to explain it. */}
-					<Text size={1} muted>
-						What the orders actually say, before any filtering. Use these values to set which
-						statuses count as a sale.
-					</Text>
+				<Section
+					title="Order statuses in this range"
+					tone="secondary"
+					subtitle="What the orders actually say, before any filtering. Use these values to set which statuses count as a sale."
+					collapsible
+					defaultOpen={false}
+				>
+					{/* Without this nobody can configure which statuses count as a sale — and getting
+					    that wrong zeroes every order-derived figure in the tool with nothing on screen
+					    to explain it. */}
 					{/* A proportion, not a row of peer cards.
 					
 					    The reader's question is what SHARE of the order book is the status configured
@@ -1056,7 +1067,7 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 						format={(n) => formatCount(n)}
 						totalLabel="Orders in this range"
 					/>
-				</Stack>
+				</Section>
 			)}
 
 			<Section
@@ -1064,33 +1075,34 @@ export function DataHealthPanel({ data, diagnostics }: { data: MeasurementHealth
 				tone="secondary"
 				subtitle="Different units to the figures above, and to each other."
 				collapsible
+				defaultOpen={false}
 			>
 				<div style={cardGrid}>
-					<Card padding={3} radius={2} tone="transparent" border>
-						<Stack space={3}>
+					<Card padding={3} radius={2} tone="transparent">
+						<div style={stackBlock}>
 							<Label size={1} muted>Vercel visitors</Label>
 							<MetricFigure metric={metricOr(data.vercelVisitors, OLDER_ROUTE)} label="Vercel visitors" />
 							{/* Not "server-side". Vercel Web Analytics is the @vercel/analytics client script
 							    on a first-party path — blocked by fewer lists than GA4, and blocked. */}
 							<Text size={0} muted>Vercel&rsquo;s own counter. Blocked far less often than Google Analytics, but not never — so read it as a floor on your real traffic.</Text>
-						</Stack>
+						</div>
 					</Card>
-					<Card padding={3} radius={2} tone="transparent" border>
-						<Stack space={3}>
+					<Card padding={3} radius={2} tone="transparent">
+						<div style={stackBlock}>
 							<Label size={1} muted>GA4 sessions</Label>
 							<MetricFigure metric={metricOr(data.ga4Sessions, OLDER_ROUTE)} label="GA4 sessions" />
-						</Stack>
+						</div>
 					</Card>
-					<Card padding={3} radius={2} tone="transparent" border>
-						<Stack space={3}>
+					<Card padding={3} radius={2} tone="transparent">
+						<div style={stackBlock}>
 							<Label size={1} muted>Consent granted</Label>
 							<MetricFigure metric={metricOr(data.consentRate, OLDER_ROUTE)} label="Consent granted, share of visitors GA4 saw" unit="percent" />
-						</Stack>
+						</div>
 					</Card>
 				</div>
 			</Section>
 
-		</Stack>
+		</div>
 	)
 }
 
@@ -1101,20 +1113,20 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 	const sessions = finiteOrNull(data.totalSessions)
 
 	return (
-		<Stack space={4}>
+		<div style={panelStack}>
 			<div style={cardGrid}>
-				<Card padding={3} radius={2} tone="transparent" border>
-					<Stack space={3}>
+				<Card padding={3} radius={2} tone="transparent">
+					<div style={stackBlock}>
 						<Label size={1} muted>Sessions</Label>
 						<div style={figureRow}>
 							<Text size={4}>{sessions === null ? '\u2014' : formatCount(sessions)}</Text>
 							<Delta current={sessions} previous={finiteOrNull(previous?.totalSessions)} />
 						</div>
-					</Stack>
+					</div>
 				</Card>
 				{designShare !== null && (
-					<Card padding={3} radius={2} tone="transparent" border>
-						<Stack space={3}>
+					<Card padding={3} radius={2} tone="transparent">
+						<div style={stackBlock}>
 							<Label size={1} muted>From design-industry referrers</Label>
 							<div style={figureRow}>
 								{/* "At least", when the row list is truncated. The numerator counts only the
@@ -1142,12 +1154,12 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 								Share of sessions from a known design-press referrer.
 								{data.rowsTruncated && ' GA4 held more sources than are listed here, so the real share is higher.'}
 							</Text>
-						</Stack>
+						</div>
 					</Card>
 				)}
 				{unattributedShare !== null && (
-					<Card padding={3} radius={2} tone="transparent" border>
-						<Stack space={3}>
+					<Card padding={3} radius={2} tone="transparent">
+						<div style={stackBlock}>
 							<Label size={1} muted>No source</Label>
 							<div style={figureRow}>
 								<Text size={4}>{formatPercent(unattributedShare, 1)}</Text>
@@ -1161,12 +1173,12 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 							{/* Two unlike failures used to be fused into one number. Direct traffic is
 							    partly recoverable with tagging; (not set) is GA4 losing the row. */}
 							<Text size={0} muted>Direct visits plus rows GA4 could not attribute.</Text>
-						</Stack>
+						</div>
 					</Card>
 				)}
 			</div>
 
-			<Stack space={3}>
+			<div style={stackBlock}>
 				<SectionTitle title="Traffic sources" />
 				<Text size={1} muted>Sort or filter to find a source. Excluding a row hides it from this table.</Text>
 				<SortableTable<SourceRow>
@@ -1352,9 +1364,9 @@ export function AcquisitionPanel({ data, previous }: { data: AcquisitionData; pr
 						)}
 					</Text>
 				)}
-			</Stack>
+			</div>
 
-		</Stack>
+		</div>
 	)
 }
 
@@ -1538,7 +1550,7 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 	const tracked = data.measurement === 'sequence'
 
 	return (
-		<Stack space={4}>
+		<div style={panelStack}>
 			{/* A tracked funnel is not a caveat, so it is not drawn as one. The fallback still is:
 			    independent totals invite exactly the reading — "this many people dropped out here"
 			    — that they cannot support. */}
@@ -1631,12 +1643,12 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 				>
 					<div style={cardGrid}>
 						{(data.outcomes ?? []).map((outcome) => (
-							<Card key={outcome.key} padding={3} radius={2} tone="transparent" border>
-								<Stack space={3}>
+							<Card key={outcome.key} padding={3} radius={2} tone="transparent">
+								<div style={stackBlock}>
 									<Label size={1} muted>{outcome.label}</Label>
 									<MetricFigure metric={outcome.count} label={outcome.label} size={4} />
 									<Text size={0} muted>{outcome.note}</Text>
-								</Stack>
+								</div>
 							</Card>
 						))}
 					</div>
@@ -1659,7 +1671,7 @@ export function JourneyPanel({ data }: { data: JourneyData }): React.ReactElemen
 				</Text>
 			)}
 
-		</Stack>
+		</div>
 	)
 }
 
@@ -1889,12 +1901,12 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 	const benchmark = catalogueRate(data.rows ?? [])
 
 	return (
-		<Stack space={4}>
-			<Card padding={3} radius={2} tone="transparent" border>
+		<div style={panelStack}>
+			<Card padding={3} radius={2} tone="transparent">
 				<Text size={1} muted>{data.interpretationNote}</Text>
 			</Card>
 
-			<Stack space={3}>
+			<div style={stackBlock}>
 				<SectionTitle title="Engagement by typeface" />
 				<Text size={1} muted>
 					Sort by any column. &ldquo;Sells vs catalogue&rdquo; compares each family&rsquo;s sales-per-view
@@ -2050,10 +2062,10 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 						// interest. A reader who wants it can see both terms side by side.
 					]}
 				/>
-			</Stack>
+			</div>
 
 			{(data.licences?.length ?? 0) > 0 && (
-				<Stack space={3}>
+				<div style={stackBlock}>
 					<SectionTitle title="How licences sell" />
 					<Text size={1} muted>
 						From your orders, so exact. Bars are orders; the money beside them is that order
@@ -2074,7 +2086,7 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 					    Bars share one scale across every facet, so a rung in Desktop is comparable with a
 					    rung in Web. */}
 					<LicenceLadder rows={data.licences ?? []} currency={data.currency ?? null} />
-				</Stack>
+				</div>
 			)}
 
 			{/* Both completeness flags were computed by the server and drawn nowhere, so a table
@@ -2083,34 +2095,40 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 			{/* One apportionment note for the panel, not one per section. The licence table and the
 			    family table were each printing a near-identical sentence about even splitting,
 			    ~28 words apart, which read as a stutter and made the other notes look cheaper. */}
-			{data.revenueIsApportioned && (
-				<Text size={0} muted>
-					{/* "Apportioned" was the stall, and it was not even the risk — EVENLY is. A foundry
-					    that sold two weights on one invoice sees half the money against each, which is
-					    not how they booked it. */}
-					An order covering several families is split evenly between them, because the order
-					documents carry no per-line value.
-				</Text>
-			)}
-			{/* Why the column sums short. `orders.ts` computes this figure with a comment saying it
-			    exists to stop the column summing to less than the range's revenue with nothing to
-			    explain it — and then it was surfaced nowhere. */}
-			{finiteOrNull(data.unattributedRevenue) !== null && (data.unattributedRevenue as number) > 0 && (
-				<Text size={0} muted>
-					{formatMoney(data.unattributedRevenue as number, data.currency ?? null)} of this range&rsquo;s
-					takings is not in the column above — those orders name no family in this catalogue.
-				</Text>
-			)}
-			{/* And how much of the order book the column covers at all. The same money is reported as
-			    partial on Overview; this tab used to call it exact. */}
-			{finiteOrNull(data.ordersMissingTotal) !== null && (data.ordersMissingTotal as number) > 0 && (
-				<Text size={0} muted>
-					{formatCount(data.ordersMissingTotal as number)} order
-					{data.ordersMissingTotal === 1 ? '' : 's'} in this range carry no amount, so the revenue
-					column does not cover {data.ordersMissingTotal === 1 ? 'it' : 'them'}.
-				</Text>
-			)}
-		</Stack>
+			{/* One block, not three sections. These are three caveats about the same revenue
+			    column; as direct children of the panel root each was separated by a full section
+			    break, so thirty pixels of type occupied a third of a screen and read as three
+			    regions. */}
+			<div style={stackBlock}>
+				{data.revenueIsApportioned && (
+					<Text size={0} muted>
+						{/* "Apportioned" was the stall, and it was not even the risk — EVENLY is. A foundry
+						    that sold two weights on one invoice sees half the money against each, which is
+						    not how they booked it. */}
+						An order covering several families is split evenly between them, because the order
+						documents carry no per-line value.
+					</Text>
+				)}
+				{/* Why the column sums short. `orders.ts` computes this figure with a comment saying it
+				    exists to stop the column summing to less than the range's revenue with nothing to
+				    explain it — and then it was surfaced nowhere. */}
+				{finiteOrNull(data.unattributedRevenue) !== null && (data.unattributedRevenue as number) > 0 && (
+					<Text size={0} muted>
+						{formatMoney(data.unattributedRevenue as number, data.currency ?? null)} of this range&rsquo;s
+						takings is not in the column above — those orders name no family in this catalogue.
+					</Text>
+				)}
+				{/* And how much of the order book the column covers at all. The same money is reported as
+				    partial on Overview; this tab used to call it exact. */}
+				{finiteOrNull(data.ordersMissingTotal) !== null && (data.ordersMissingTotal as number) > 0 && (
+					<Text size={0} muted>
+						{formatCount(data.ordersMissingTotal as number)} order
+						{data.ordersMissingTotal === 1 ? '' : 's'} in this range carry no amount, so the revenue
+						column does not cover {data.ordersMissingTotal === 1 ? 'it' : 'them'}.
+					</Text>
+				)}
+			</div>
+		</div>
 	)
 }
 
@@ -2164,25 +2182,25 @@ export function DiagnosticsPanel({ data }: { data: DiagnosticReport }): React.Re
 					: `${failing} failing, ${warning} worth a look. Panels depending on these will be wrong or incomplete until they are resolved.`
 
 	return (
-		<Stack space={4}>
+		<div style={panelStack}>
 			<Card padding={3} radius={2} tone={CHECK_TONE[data.verdict] ?? 'default'} border>
 				<Text size={1}>{summary}</Text>
 			</Card>
 
-			<Stack space={3}>
+			<div style={stackBlock}>
 				{checks.map((item) => (
-					<Card key={item.id} padding={3} radius={2} tone="transparent" border>
-						<Stack space={3}>
+					<Card key={item.id} padding={3} radius={2} tone="transparent">
+						<div style={stackBlock}>
 							<Flex align="center" justify="space-between" gap={3}>
 								<Text size={1} weight="semibold">{item.label}</Text>
 								<Badge tone={CHECK_TONE[item.status] ?? 'default'} fontSize={0}>{CHECK_WORD[item.status] ?? item.status}</Badge>
 							</Flex>
 							<Text size={1} muted>{item.detail}</Text>
 							{item.remedy && <Text size={1}>{item.remedy}</Text>}
-						</Stack>
+						</div>
 					</Card>
 				))}
-			</Stack>
-		</Stack>
+			</div>
+		</div>
 	)
 }

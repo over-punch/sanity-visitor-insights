@@ -56,7 +56,7 @@ vi.mock('sanity', () => ({
 	definePlugin: (definition: unknown) => definition,
 }))
 import visitorInsights from '../index'
-import { ContainmentBar, Delta, LicenceLadder, EstimateDotPlot, FunnelChart, RatioFigure, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, isContainment, splitGrid } from './Figure'
+import { ContainmentBar, Delta, LicenceLadder, SPACE, EstimateDotPlot, FunnelChart, RatioFigure, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, isContainment, splitGrid } from './Figure'
 import { holdsPreviousAnswer } from './useReport'
 import { ok, partial, unavailable } from '../types'
 import { UI } from '@liiift-studio/sanity-ui-compat'
@@ -599,7 +599,21 @@ describe('layout does not depend on design tokens resolving', () => {
 		)
 		// A Studio panel is a resizable pane, sometimes inside an iframe; its width is unrelated
 		// to the viewport, so breakpoint columns answered the wrong question.
-		expect(html).toContain('auto-fit')
+		//
+		// The claim is about the CONSTANT — how a card grid lays out — not about which panel hosts
+		// one. Data health's Context cards now start folded, so this reads the constant directly
+		// rather than hunting for a grid in rendered markup.
+		// Overview, whose card grids are not folded. Data health's Context cards now start folded,
+		// and the claim here is about how a card grid lays out, not about which panel hosts one.
+		void html
+		const overview = render(<OverviewPanel data={{
+			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+			ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+			vercelVisitors: ok(1580), ordersWithTotal: 7, vercelDailyUnavailable: false,
+			revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '',
+			audience: ok(4210), audienceGrowth: ok(108), crossSource: [], timelineEvents: [], campaigns: [],
+		} as never} />)
+		expect(overview).toContain('auto-fit')
 	})
 })
 
@@ -3464,8 +3478,27 @@ describe('the shortfall drawn as containment', () => {
 		// that zeroes every order-derived figure stays arithmetic rather than becoming visible.
 		const withStatuses = { ...health(2356, 475), orderStatuses: { paid: 7, refunded: 2, draft: 1 } }
 		const html = render(<DataHealthPanel data={withStatuses as never} />)
+		// Folded by default — consulted once ever, when configuring which statuses count as a sale.
+		// What must stay on screen is the INSTRUCTION, which the section carries in its subtitle
+		// outside the fold: that is what makes folding legal in a package whose founding rule is
+		// that a caveat sits beside its figure.
+		expect(html).toContain('Order statuses in this range')
+		expect(html).toContain('Use these values to set which statuses count as a sale')
+		expect(html).toContain('aria-expanded="false"')
+		// And the chart itself is genuinely absent rather than merely hidden.
+		expect(html).not.toContain('Orders in this range')
+	})
+
+	it('draws them as shares of a stated total once opened', () => {
+		// The reader's question is what SHARE of the order book is the status configured as a sale.
+		// A card each, sorted by count, makes that a sum done by eye. Rendered directly, since the
+		// fold needs a click this environment has no DOM for.
+		const html = render(<ProportionChart
+			bars={[{ key: 'paid', label: 'paid', value: 7 }, { key: 'refunded', label: 'refunded', value: 2 }, { key: 'draft', label: 'draft', value: 1 }]}
+			format={(n) => formatCount(n)}
+			totalLabel="Orders in this range"
+		/>)
 		expect(html).toContain('Orders in this range')
-		// A share is printed beside each status, which the card grid never did.
 		expect(html).toMatch(/70%|70\.0%/)
 	})
 
@@ -4882,5 +4915,112 @@ describe('the comparison basis actually reaches the fetch', () => {
 	it('keeps the basis in the cache key, so two baselines cannot share an answer', () => {
 		const key = readFileSync(new URL('./useReport.ts', import.meta.url), 'utf8')
 		expect(key).toContain('compare')
+	})
+})
+
+describe('the panel has more than one level of break', () => {
+	// The measured fault: every vertical value lived in a 4-20px band, `space={3}` (12px) carried
+	// 64% of all spacing, and the largest structural break in the tool was 20px — 1.67 times an
+	// ordinary gap between two lines inside a card. A section boundary looked the same as the next
+	// line of a caption. Not too little air; too EVEN air.
+	const overview = {
+		ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+		ga4Sessions: ok(357), orders: ok(7), consentRate: unavailable('not_instrumented'),
+		vercelVisitors: ok(1580), ordersWithTotal: 7, vercelDailyUnavailable: false,
+		revenue: ok(910), currency: 'USD', orderStatuses: {}, interpretation: '',
+		audience: ok(4210), audienceGrowth: ok(108), crossSource: [], timelineEvents: [], campaigns: [],
+	}
+
+	it('separates sections by far more than it separates lines in a card', () => {
+		const html = render(<OverviewPanel data={overview as never} />)
+		expect(html).toContain(`gap:${SPACE.section}px`)
+		expect(html).toContain(`gap:${SPACE.block}px`)
+		// Five times, not 1.67. A level has to double to be readable at a glance.
+		expect(SPACE.section / SPACE.block).toBe(5)
+	})
+
+	it('at least doubles at every step, so each level is a level', () => {
+		// Not uniform doubling — 4, 8, 20, 40 steps by x2, x2.5, x2. The property that matters is
+		// that nothing steps by less than two, because under about that a level reads as the same
+		// level, which is the fault being fixed.
+		const steps = [SPACE.pair, SPACE.block, SPACE.group, SPACE.section]
+		for (let i = 1; i < steps.length; i++) {
+			expect(steps[i]! / steps[i - 1]!).toBeGreaterThanOrEqual(2)
+		}
+	})
+
+	it('carries the scale in CSS, which the compat shim cannot drop', () => {
+		// The shim's DOM fallback passes `style` through and drops `space`, `padding`, `tone`,
+		// `radius` and `border`. Every primitive resolves on the versions this package supports, so
+		// that is latent rather than live — but the skeleton was the one part never written for it.
+		const html = render(<OverviewPanel data={overview as never} />)
+		expect(html).toMatch(/style="[^"]*gap:40px/)
+	})
+
+	it('draws no outline around a plain metric tile', () => {
+		// Eighteen identical 1px outlines at one weight ranked nothing above anything — lots of
+		// lines, no hierarchy, which is what reads as busy AND flat at once. A tile in a grid with
+		// 20px gutters is already unambiguously a tile.
+		//
+		// Asserted against the source: Sanity's `border` prop shows up only as a different
+		// styled-component class hash, which is build-dependent and says nothing. The tone-carrying
+		// cards keep their edge and are matched separately below.
+		const source = readFileSync(new URL('./panels.tsx', import.meta.url), 'utf8')
+		expect(source).not.toContain('tone="transparent" border')
+	})
+
+	it('keeps the edge on the cards that carry a tone', () => {
+		// The alarm and the caution cards are the exception the outline exists for, and the Verdict
+		// additionally spells its rail out in CSS so the signal survives the shim dropping `tone`.
+		const source = readFileSync(new URL('./panels.tsx', import.meta.url), 'utf8')
+		expect(source).toContain('tone="caution" border')
+		expect(source).toContain('borderLeftWidth: 3')
+	})
+
+	it('gives a section body its own rhythm, which is why Section went unused', () => {
+		// The body was a bare div, so any region with more than one child lost all internal spacing
+		// and the caller had to re-add a Stack inside — making Section strictly MORE markup than a
+		// bare heading for every multi-child region, which is all of them.
+		const html = render(
+			<Section title="Two children">
+				<span>first</span>
+				<span>second</span>
+			</Section>,
+		)
+		// Scoped to the BODY element, which carries the generated id. The section WRAPPER also has a
+		// 20px gap, so matching the bare value passed with the body's style deleted.
+		expect(html).toMatch(new RegExp(`<div id="[^"]+" style="[^"]*gap:${SPACE.group}px`))
+	})
+
+	it('starts the reference sections folded', () => {
+		// `defaultOpen` was declared, typed and documented — "start folded, for material that is
+		// worth having and not worth reading every time" — and used zero times, while the reader
+		// asked repeatedly for unimportant material to be hidden.
+		const html = render(<DataHealthPanel data={{
+			ga4Pageviews: ok(475), vercelPageviews: ok(2356), shortfallRatio: 0.798,
+			ga4Sessions: ok(357), vercelVisitors: ok(1580), consentRate: unavailable('not_instrumented'),
+			orderStatuses: { paid: 7 }, interpretation: 'Sources differ.', crossSource: [], timelineEvents: [],
+		} as never} />)
+		// Context and Order statuses, both folded, both still announcing themselves.
+		expect(html.match(/aria-expanded="false"/g)?.length).toBeGreaterThanOrEqual(2)
+		expect(html).toContain('Different units to the figures above')
+	})
+})
+
+describe('caveats about one column read as one block', () => {
+	// Raising the section break to 40px made this worse before it made it better: three 10px grey
+	// lines sat as direct children of the panel root, so each was separated by a full section break
+	// and thirty pixels of type occupied a third of a screen as three apparent regions.
+	it('groups the revenue caveats rather than spacing them as sections', () => {
+		const html = render(<TypefaceInterestPanel data={{
+			rows: [{ typeface: 'Freight', viewed: ok(400), tested: ok(0), bought: ok(2), revenue: ok(400), testRate: null, buyRate: 0.005 }],
+			interpretationNote: '', testerEventCount: 1, currency: 'USD',
+			revenueIsApportioned: true, unattributedRevenue: 250, ordersMissingTotal: 5,
+		} as never} />)
+		// All three sentences sit inside one 8px block.
+		const tail = html.slice(html.indexOf('split evenly between them'))
+		expect(tail).toContain('name no family in this catalogue')
+		expect(tail).toContain('carry no amount')
+		expect(tail).not.toMatch(new RegExp(`gap:${SPACE.section}px`))
 	})
 })

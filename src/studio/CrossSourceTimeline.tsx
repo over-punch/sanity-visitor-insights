@@ -26,7 +26,7 @@ import { Card, Stack, Text } from '@liiift-studio/sanity-ui-compat'
 import { scaleUtc, scaleLinear } from 'd3-scale'
 import { line as d3Line, area as d3Area, curveLinear } from 'd3-shape'
 import { max as d3Max } from 'd3-array'
-import { HoverCard, formatCount, formatMoney, formatPercent } from './Figure'
+import { HoverCard, SPACE, formatCount, formatMoney, formatPercent } from './Figure'
 // Lives in Figure.tsx, which is where the shared drawing components belong, and is re-exported
 // here because this is where it was born and where its tests still import it from.
 export { HoverCard } from './Figure'
@@ -1518,7 +1518,7 @@ const frameStyle: React.CSSProperties = { width: '100%', overflow: 'hidden', pos
  */
 const readoutRow: React.CSSProperties = {
 	display: 'flex',
-	gap: 14,
+	gap: SPACE.block,
 	flexWrap: 'wrap',
 	alignItems: 'baseline',
 	minHeight: 54,
@@ -1528,7 +1528,7 @@ const readoutRow: React.CSSProperties = {
 /** Legend, wrapping rather than overflowing. */
 const legendRow: React.CSSProperties = {
 	display: 'flex',
-	gap: 14,
+	gap: SPACE.block,
 	flexWrap: 'wrap',
 	alignItems: 'center',
 }
