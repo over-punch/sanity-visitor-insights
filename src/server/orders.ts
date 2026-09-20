@@ -201,8 +201,13 @@ export interface SanityQueryClient {
  *
  * `excludeFilter` lets a site drop non-typeface orders, e.g. merch-only orders on Darden, which
  * would otherwise inflate a family's apparent purchase count.
+ *
+ * `dated` is true for every figure that belongs to the range picker. The style-demand readers pass
+ * false: they answer a question about the catalogue rather than about a month, and they bind no
+ * `$start`/`$end` — a query referencing an unbound parameter is rejected by Sanity outright, so this
+ * flag is not a nicety.
  */
-function orderFilter(documentType: string, excludeFilter?: string): string {
+function orderFilter(documentType: string, excludeFilter?: string, dated = true): string {
 	const clauses = [
 		`_type == $documentType`,
 		/*
@@ -220,9 +225,8 @@ function orderFilter(documentType: string, excludeFilter?: string): string {
 		 * consumer is a site that has no reason to know this report depends on it.
 		 */
 		`!(_id in path("drafts.**"))`,
-		`_createdAt >= $start`,
-		`_createdAt < $end`,
 	]
+	if (dated) clauses.push(`_createdAt >= $start`, `_createdAt < $end`)
 	if (excludeFilter) clauses.push(`(${excludeFilter})`)
 	return clauses.join(' && ')
 }
@@ -395,6 +399,210 @@ export async function countOrders(
  *
  * @param typefacesField - the order field holding typeface references, or null when absent
  */
+/**
+ * Weight names, normalised.
+ *
+ * The library spells the same weight two ways — `SemiBold` and `Semibold`, `ExtraLight` and
+ * `Extralight` — which on Darden's order history splits one weight into two rows of 852 and 368,
+ * and 99 and 162. Any ranking built on the raw field is wrong before it starts, and the error is
+ * invisible: both spellings look like real weights.
+ *
+ * Case and spacing only. Nothing here maps one weight onto another — "Book" and "Regular" stay
+ * distinct, because a foundry means different things by them.
+ *
+ * @param name - the weightName as the font document spells it
+ */
+/** The library measured against the order book. */
+export interface LibraryCoverage {
+	/** Styles the library holds. */
+	styles: number
+	/** Styles licensed at least once, ever. */
+	everLicensed: number
+	/**
+	 * Families that have sold NOTHING.
+	 *
+	 * Reported apart from the gaps because they are not evidence about demand — a family nobody has
+	 * bought a single style from is far more likely to be unreleased than unwanted, and folding it
+	 * into one "never licensed" number makes a new release read as dead stock.
+	 */
+	unreleased: Array<{ family: string; styles: number }>
+	/** Styles never licensed, in families that do sell. The real question. */
+	gaps: Array<{ family: string; styles: number }>
+}
+
+/** What the order book says about the catalogue's styles, pooled across the whole history. */
+export interface StyleDemand {
+	/** Every weight licensed, busiest first. */
+	weights: Array<{ weight: string; licences: number; families: number }>
+	/** Style licences per family, so one family carrying the catalogue is visible. */
+	familyLicences: Record<string, number>
+	/** Orders counted. One order can license many styles, so this is not the licence total. */
+	orders: number
+	/** Orders that licensed exactly one style — the pick-one buyer. */
+	singleStyleOrders: number
+	/** Total style licences. */
+	licences: number
+}
+
+export function normaliseWeight(name: string): string {
+	const key = name.replace(/[\s_-]+/g, '').toLowerCase()
+	const canonical: Record<string, string> = {
+		extralight: 'ExtraLight', ultralight: 'UltraLight', semibold: 'SemiBold',
+		demibold: 'DemiBold', extrabold: 'ExtraBold', ultrabold: 'UltraBold',
+		semilight: 'SemiLight', extrablack: 'ExtraBlack',
+	}
+	if (canonical[key]) return canonical[key] as string
+	return name.trim()
+}
+
+/**
+ * Which STYLES a foundry's orders actually licensed, and what the library holds against them.
+ *
+ * Every order records the individual fonts it licensed — `typefaces[].fonts[]` references the font
+ * documents — and nothing has ever read them. Orders were aggregated to the family and the styles
+ * discarded, so the one question a foundry asks about its own drawing work ("which weights do
+ * people actually buy") had no answer in a tool built on its order book.
+ *
+ * Asked at the LIBRARY grain, not the family grain. Per family per style the counts are single
+ * digits and this package would rightly refuse them; pooled across the catalogue and across the
+ * whole order history they run to thousands, because a style licence is not an order — one order
+ * can license a hundred of them.
+ *
+ * @param client - a Sanity client
+ * @param options - the order query options; the RANGE IS IGNORED, see below
+ * @param typefacesField - the field holding the order's typeface lines
+ */
+export async function countStyleDemand(
+	client: SanityQueryClient,
+	options: OrderQueryOptions,
+	typefacesField: string | null,
+): Promise<StyleDemand | null> {
+	if (!typefacesField) return null
+
+	// DELIBERATELY UNBOUNDED BY DATE, which is the opposite of every other query in this file.
+	//
+	// The question is what the catalogue's drawing work is worth, and that does not belong to a
+	// month. At seven orders a month a ranged style query returns single digits per weight and says
+	// nothing; over the whole book it is thousands. The panel says so where it draws this, because a
+	// figure that ignores the range picker above it has to admit that plainly.
+	const query = `*[${orderFilter(options.documentType, options.excludeFilter, false)}]{
+		"status": ${options.statusField ?? DEFAULT_STATUS_FIELD},
+		"styles": ${typefacesField}[].fonts[]->{ weightName, style, "family": typefaceName }
+	}`
+
+	const orders = await client.fetch<Array<{
+		status?: string | null
+		styles?: Array<{ weightName?: string | null; style?: string | null; family?: string | null } | null> | null
+	}>>(query, { documentType: options.documentType })
+
+	const byWeight = new Map<string, { licences: number; families: Set<string> }>()
+	const byFamily = new Map<string, number>()
+	let counted = 0
+	let singleStyle = 0
+	let licences = 0
+
+	for (const order of orders) {
+		if (!isCounted(statusKey(order.status), options.countedStatuses)) continue
+		counted += 1
+
+		const styles = (order.styles ?? []).filter((s): s is NonNullable<typeof s> => Boolean(s))
+		if (styles.length === 1) singleStyle += 1
+		licences += styles.length
+
+		for (const font of styles) {
+			const family = font.family?.trim() || '(no family)'
+			byFamily.set(family, (byFamily.get(family) ?? 0) + 1)
+			const weight = normaliseWeight(font.weightName?.trim() || '(unnamed)')
+			const entry = byWeight.get(weight) ?? { licences: 0, families: new Set<string>() }
+			entry.licences += 1
+			entry.families.add(family)
+			byWeight.set(weight, entry)
+		}
+	}
+
+	return {
+		weights: [...byWeight]
+			.map(([weight, e]) => ({ weight, licences: e.licences, families: e.families.size }))
+			.sort((a, b) => b.licences - a.licences),
+		familyLicences: Object.fromEntries(byFamily),
+		orders: counted,
+		singleStyleOrders: singleStyle,
+		licences,
+	}
+}
+
+/**
+ * The library against the order book: what is drawn, and what has ever been licensed.
+ *
+ * The obvious reading of "styles never licensed" is dead stock, and on a real catalogue that reading
+ * is usually wrong. Darden's library has 453 styles and 94 have never sold — but 82 of those are one
+ * family that has sold NOTHING AT ALL, which means it is unreleased rather than unwanted. Reported
+ * as one number, "21% of your library has never sold" is true and badly misleading.
+ *
+ * So a family with no sales at all is not evidence about style demand and is reported separately.
+ * What is left — twelve styles, on Darden — is the real question: a style drawn, released, sitting
+ * beside siblings that sell, and never once licensed.
+ *
+ * @param client - a Sanity client
+ * @param options - order query options; the range is ignored, as in countStyleDemand
+ * @param typefacesField - the field holding the order's typeface lines
+ * @param fontType - the document type describing one style
+ */
+export async function countLibraryCoverage(
+	client: SanityQueryClient,
+	options: OrderQueryOptions,
+	typefacesField: string | null,
+	fontType: string,
+): Promise<LibraryCoverage | null> {
+	if (!typefacesField) return null
+
+	const [library, orders] = await Promise.all([
+		client.fetch<Array<{ _id: string; family?: string | null }>>(
+			`*[_type == $fontType && !(_id in path("drafts.**"))]{ _id, "family": typefaceName }`,
+			{ fontType },
+		),
+		client.fetch<Array<{ status?: string | null; ids?: Array<string | null> | null }>>(
+			`*[${orderFilter(options.documentType, options.excludeFilter, false)}]{
+				"status": ${options.statusField ?? DEFAULT_STATUS_FIELD},
+				"ids": ${typefacesField}[].fonts[]._ref
+			}`,
+			{ documentType: options.documentType },
+		),
+	])
+
+	if (library.length === 0) return null
+
+	const licensed = new Set<string>()
+	for (const order of orders) {
+		if (!isCounted(statusKey(order.status), options.countedStatuses)) continue
+		for (const id of order.ids ?? []) if (id) licensed.add(id)
+	}
+
+	// Per family: how many styles exist, and how many of them have ever been licensed.
+	const families = new Map<string, { styles: number; sold: number }>()
+	for (const font of library) {
+		const family = font.family?.trim() || '(no family)'
+		const entry = families.get(family) ?? { styles: 0, sold: 0 }
+		entry.styles += 1
+		if (licensed.has(font._id)) entry.sold += 1
+		families.set(family, entry)
+	}
+
+	const unreleased: Array<{ family: string; styles: number }> = []
+	const gaps: Array<{ family: string; styles: number }> = []
+	for (const [family, entry] of families) {
+		if (entry.sold === 0) unreleased.push({ family, styles: entry.styles })
+		else if (entry.styles > entry.sold) gaps.push({ family, styles: entry.styles - entry.sold })
+	}
+
+	return {
+		styles: library.length,
+		everLicensed: library.filter((f) => licensed.has(f._id)).length,
+		unreleased: unreleased.sort((a, b) => b.styles - a.styles),
+		gaps: gaps.sort((a, b) => b.styles - a.styles),
+	}
+}
+
 export async function countOrdersByTypeface(
 	client: SanityQueryClient,
 	options: OrderQueryOptions,

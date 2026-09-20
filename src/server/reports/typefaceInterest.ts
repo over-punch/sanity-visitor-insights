@@ -14,13 +14,13 @@
  *      test and make the ratio meaningless.
  */
 
-import type { TypefaceInterestData, TypefaceInterestRow } from '../../reportData'
+import type { LibraryCoverageData, StyleDemandData, TypefaceInterestData, TypefaceInterestRow } from '../../reportData'
 import type { DateRange, MetricValue } from '../../types'
 import { ok, partial, unavailable } from '../../types'
 import type { SiteAnalyticsConfig } from '../../core/siteConfig'
 import { applyCoverage, coverageForAny } from '../../core/cutover'
 import { eventNamesFilter, type Ga4Client, type Ga4Report } from '../ga4'
-import { countLicenceTiers, countOrdersByTypeface, orderQueryOptions, type LicenceTier, type SanityQueryClient } from '../orders'
+import { countLibraryCoverage, countLicenceTiers, countOrdersByTypeface, countStyleDemand, orderQueryOptions, type LicenceTier, type SanityQueryClient } from '../orders'
 
 /** GA4 event evidencing a typeface page view. */
 const VIEW_EVENT = 'view_item'
@@ -174,6 +174,10 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 	// could sum to less than the range's revenue with nothing on screen to explain the difference.
 	let ordersMissingTotal = 0
 	let unattributedRevenue: number | null = null
+	// Style-level demand and library coverage, both pooled across the whole order history rather
+	// than this range — see countStyleDemand for why the range is deliberately ignored.
+	let styleDemand: StyleDemandData | null = null
+	let libraryCoverage: LibraryCoverageData | null = null
 	if (sanity) {
 		try {
 			const counts = await countOrdersByTypeface(
@@ -187,6 +191,21 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 				if (counts.revenueByTypeface) revenue = new Map(Object.entries(counts.revenueByTypeface))
 				ordersMissingTotal = counts.ordersMissingTotal
 				unattributedRevenue = counts.unattributedRevenue
+			}
+
+			// Opt-in, and a failure here must not cost the panel its table. Every order already
+			// records the styles it licensed; this is the first thing to read them.
+			if (config.orders.fontType) {
+				try {
+					const [demand, coverage] = await Promise.all([
+						countStyleDemand(sanity, orderQueryOptions(config.orders, range), config.orders.typefacesField),
+						countLibraryCoverage(sanity, orderQueryOptions(config.orders, range), config.orders.typefacesField, config.orders.fontType),
+					])
+					styleDemand = demand
+					libraryCoverage = coverage
+				} catch (e) {
+					console.error('Visitor insights: style demand query failed:', (e as Error).message)
+				}
 			}
 		} catch (e) {
 			console.error('Visitor insights: per-typeface order count failed:', (e as Error).message)
@@ -366,6 +385,8 @@ export async function typefaceInterest(input: TypefaceInterestInput): Promise<Ty
 		// as the reason it computes the figure at all.
 		unattributedRevenue,
 		ordersMissingTotal,
+		styleDemand,
+		libraryCoverage,
 		currency: config.orders.currency ?? null,
 	}
 }

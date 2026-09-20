@@ -46,6 +46,14 @@ export interface OrdersConfig {
 	 */
 	typefacesField: string | null
 	/**
+	 * Document type describing ONE STYLE — a weight, a width, an italic.
+	 *
+	 * Opt-in, and absent means the style section simply does not draw. Every order already records
+	 * the individual styles it licensed under `typefaces[].fonts[]`; this names the document those
+	 * references point at, so the library can be measured against them.
+	 */
+	fontType?: string | null
+	/**
 	 * GROQ filter appended to exclude non-typeface orders, e.g. merch-only orders on Darden.
 	 * Merch inflates a family's apparent purchase count if not excluded.
 	 */

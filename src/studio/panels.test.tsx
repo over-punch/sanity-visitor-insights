@@ -26,6 +26,7 @@ import { forgetShortfalls, knownShortfall, rememberShortfall } from './useReport
 import { CrossSourceTimeline, HoverCard, colorFor, dayIndexAt, findCoverageIncident } from './CrossSourceTimeline'
 import { COMPARISON, COMPARISON_TEXT, MARKS, SERIES, mark, seriesFill } from './palette'
 import React from 'react'
+import type { LibraryCoverageData, StyleDemandData } from '../reportData'
 import {
 	AcquisitionPanel,
 	DiagnosticsPanel,
@@ -390,6 +391,136 @@ describe('TypefaceInterestPanel', () => {
 		expect(html).toContain('Gamay')
 		expect(html).toContain('3,792')
 		expect(html).toContain('not individual journeys')
+	})
+})
+
+describe('the style demand section — the styles inside an order', () => {
+	/**
+	 * Render the panel carrying style demand and nothing else that matters.
+	 *
+	 * @param styleDemand - the pooled demand, partially specified
+	 */
+	const withDemand = (styleDemand: Partial<StyleDemandData>) => render(
+		<TypefaceInterestPanel
+			data={{
+				rowsWithheld: false, rowsTruncated: false, revenueIsApportioned: false, currency: 'USD', interpretationNote: '',
+				licences: [], rows: [],
+				styleDemand: {
+					weights: [{ weight: 'Bold', licences: 40, families: 2 }],
+					familyLicences: { Gamay: 30, Omnes: 10 },
+					orders: 10, singleStyleOrders: 4, licences: 40,
+					...styleDemand,
+				},
+			}}
+		/>,
+	)
+
+	it('says the figure ignores the range picker directly above it', () => {
+		// The one sentence that keeps this section honest. Without it a reader who has just set the
+		// range to "this week" reads thousands of licences as this week's.
+		expect(withDemand({})).toContain('not the range above')
+	})
+
+	it('labels the total as licences, not as orders', () => {
+		// One order can license a hundred styles. Calling 40 licences "40 orders" on a ten-order book
+		// is not an approximation, it is a different number.
+		const html = withDemand({})
+		expect(html).toContain('40 style licences across 10 orders')
+	})
+
+	it('names the family carrying the catalogue, with its share', () => {
+		// 30 of 40 licences. The ranged family table above, built on a handful of orders, cannot show
+		// this — and on a real book it is often the most consequential number on the panel.
+		const html = withDemand({})
+		expect(html).toContain('Gamay accounts for 75%')
+	})
+
+	it('does not claim a leading family when nothing has been licensed', () => {
+		// A share of an empty book is unanswerable, not zero — there is no family to name.
+		const html = withDemand({ weights: [], familyLicences: {}, licences: 0, orders: 0, singleStyleOrders: 0 })
+		expect(html).not.toContain('accounts for')
+	})
+
+	it('withholds the share rather than dividing by a licence total of zero', () => {
+		// The guard that matters. An empty `familyLicences` is caught by having no family to rank, but a
+		// family tally standing against a zero total is not — and that path prints `NaN%` or `Infinity%`
+		// straight onto the panel.
+		const html = withDemand({ familyLicences: { Gamay: 30 }, licences: 0 })
+		expect(html).not.toContain('accounts for')
+		expect(html).not.toContain('NaN')
+		expect(html).not.toContain('Infinity')
+	})
+
+	it('reports the pick-one buyer as a share of orders', () => {
+		expect(withDemand({})).toContain('40% of orders licensed exactly one style')
+	})
+
+	it('says how many weights it left out rather than showing a silent top twelve', () => {
+		// A capped list with no note reads as the whole list, which would make a long tail of quiet
+		// weights look like weights that do not exist.
+		const weights = Array.from({ length: 15 }, (_, i) => ({
+			weight: `W${i}`, licences: 100 - i, families: 1,
+		}))
+		const html = withDemand({ weights, licences: weights.reduce((n, w) => n + w.licences, 0) })
+		expect(html).toContain('3 quieter')
+		expect(html).toContain('weights are not shown')
+		expect(html).toContain('W11')
+		expect(html).not.toContain('>W12<')
+	})
+
+	it('draws nothing at all when the site has not configured the style reader', () => {
+		const html = render(
+			<TypefaceInterestPanel
+				data={{
+					rowsWithheld: false, rowsTruncated: false, revenueIsApportioned: false, currency: 'USD', interpretationNote: '',
+					licences: [], rows: [],
+				}}
+			/>,
+		)
+		expect(html).not.toContain('Which weights sell')
+	})
+})
+
+describe('the library coverage section', () => {
+	/**
+	 * Render the panel carrying library coverage.
+	 *
+	 * @param coverage - the library measured against the order book
+	 */
+	const withCoverage = (coverage: LibraryCoverageData) => render(
+		<TypefaceInterestPanel
+			data={{
+				rowsWithheld: false, rowsTruncated: false, revenueIsApportioned: false, currency: 'USD', interpretationNote: '',
+				licences: [], rows: [], libraryCoverage: coverage,
+			}}
+		/>,
+	)
+
+	it('measures coverage against released styles, not the whole library', () => {
+		// 453 styles of which 82 belong to an unreleased family: the honest denominator is 371, and
+		// using 453 understates coverage by a fifth while blaming the drawing.
+		const html = withCoverage({
+			styles: 100, everLicensed: 60,
+			unreleased: [{ family: 'Daith', styles: 30 }], gaps: [{ family: 'Gamay', styles: 10 }],
+		})
+		expect(html).toContain('60 of 70 released styles')
+	})
+
+	it('holds a zero-sales family apart from the gaps and says why', () => {
+		// The finding that started this: folding them together turns a new release into dead stock.
+		const html = withCoverage({
+			styles: 100, everLicensed: 60,
+			unreleased: [{ family: 'Daith', styles: 30 }], gaps: [{ family: 'Gamay', styles: 10 }],
+		})
+		expect(html).toContain('Never licensed, in families that sell: Gamay (10)')
+		expect(html).toContain('Daith (30 styles)')
+		expect(html).toContain('unreleased rather than unwanted')
+	})
+
+	it('says so plainly when there is no gap at all', () => {
+		const html = withCoverage({ styles: 10, everLicensed: 10, unreleased: [], gaps: [] })
+		expect(html).toContain('licensed at least once')
+		expect(html).not.toContain('Never licensed, in families that sell')
 	})
 })
 

@@ -416,6 +416,28 @@ export interface LicenceTierRow {
 	revenue: number | null
 }
 
+/** What the order book says about the catalogue's styles. */
+export interface StyleDemandData {
+	/** Every weight licensed, busiest first. */
+	weights: Array<{ weight: string; licences: number; families: number }>
+	/** Style licences per family, so one family carrying the catalogue is visible. */
+	familyLicences: Record<string, number>
+	orders: number
+	/** Orders licensing exactly one style — the pick-one buyer. */
+	singleStyleOrders: number
+	licences: number
+}
+
+/** The library measured against the order book. */
+export interface LibraryCoverageData {
+	styles: number
+	everLicensed: number
+	/** Families that have sold nothing: unreleased rather than unwanted, and not evidence. */
+	unreleased: Array<{ family: string; styles: number }>
+	/** Styles never licensed in families that DO sell. */
+	gaps: Array<{ family: string; styles: number }>
+}
+
 export interface TypefaceInterestRow {
 	typeface: string
 	viewed: MetricValue
@@ -463,6 +485,14 @@ export interface TypefaceInterestData {
 	unattributedRevenue?: number | null
 	/** Orders in this range carrying no amount, so the revenue column does not cover them. */
 	ordersMissingTotal?: number | null
+	/**
+	 * Which styles the order book licensed, pooled across the WHOLE history rather than this range.
+	 *
+	 * Absent where the site does not name a font type, or where orders do not resolve to styles.
+	 */
+	styleDemand?: StyleDemandData | null
+	/** The library measured against that history. Absent for the same reasons. */
+	libraryCoverage?: LibraryCoverageData | null
 	/** ISO 4217 code for the revenue column, or null when revenue is unavailable. */
 	currency: string | null
 }

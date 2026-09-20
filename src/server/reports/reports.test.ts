@@ -11,7 +11,7 @@
 import { fetchWithTimeout } from '../fetchWithTimeout'
 import { alignBatch, type Ga4FunnelReport, type Ga4Report } from '../ga4'
 import { formatInTimeZone } from '../../core/ranges'
-import { countLicenceTiers } from '../orders'
+import { countLicenceTiers, countLibraryCoverage, countStyleDemand } from '../orders'
 import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 
@@ -2532,5 +2532,188 @@ describe('where visitors arrived sits with where they came from', () => {
 		const data = await acquisition({ config: siteConfig(), range, ga4, notices: [] })
 		expect(data.rows.length).toBeGreaterThan(0)
 		expect(data.topLandingPages).toEqual([])
+	})
+})
+
+describe('style demand — the styles inside an order, which nothing read for three years', () => {
+	// Orders have always recorded `typefaces[].fonts[]`. Every counter in this package aggregated
+	// them to the family and discarded the styles, so the one question a foundry asks about its own
+	// drawing — which weights earn their keep — had no answer in a tool built on its order book.
+	const order = (styles: Array<{ weightName: string; family: string }>, status = 'complete') => ({
+		status,
+		styles,
+	})
+
+	const client = (docs: unknown[]) => ({ async fetch<T>(): Promise<T> { return docs as T } })
+	const window = { key: 'week' as const, start: '2026-08-20', end: '2026-08-26', timezone: 'UTC' }
+	const run = async (orders: unknown[]) => countStyleDemand(
+		client(orders),
+		// `countedStatuses` set, because unset means count everything and the exclusion test would pass
+		// against a filter that does nothing.
+		orderQueryOptions({ documentType: 'order', totalField: 'total', countedStatuses: ['complete'] }, window),
+		'typefaces',
+	)
+
+	it('counts one licence per style, not one per order', async () => {
+		// The distinction the whole feature rests on: a single order can license a hundred styles, and
+		// a weight ranking built on order counts would rank every weight in that order equally.
+		const demand = await run([order([
+			{ weightName: 'Bold', family: 'Gamay' },
+			{ weightName: 'Bold', family: 'Freight' },
+			{ weightName: 'Light', family: 'Gamay' },
+		])])
+		expect(demand?.orders).toBe(1)
+		expect(demand?.licences).toBe(3)
+		expect(demand?.weights.find((w) => w.weight === 'Bold')?.licences).toBe(2)
+	})
+
+	it('ranks the busiest weight first', async () => {
+		const demand = await run([
+			order([{ weightName: 'Light', family: 'Gamay' }]),
+			order([{ weightName: 'Bold', family: 'Gamay' }, { weightName: 'Bold', family: 'Gamay' }]),
+		])
+		expect(demand?.weights[0]?.weight).toBe('Bold')
+	})
+
+	it('folds the foundry\'s two spellings of one weight together', async () => {
+		// Darden's library holds both `SemiBold` and `Semibold`, and both `ExtraLight` and
+		// `Extralight`. Left alone they split one weight into two half-height bars and the ranking is
+		// wrong in the middle of the chart, where it is least likely to be questioned.
+		const demand = await run([order([
+			{ weightName: 'SemiBold', family: 'Gamay' },
+			{ weightName: 'Semibold', family: 'Freight' },
+			{ weightName: 'Semi Bold', family: 'Omnes' },
+		])])
+		expect(demand?.weights).toHaveLength(1)
+		expect(demand?.weights[0]).toMatchObject({ weight: 'SemiBold', licences: 3, families: 3 })
+	})
+
+	it('counts the families a weight spans, not the licences again', async () => {
+		const demand = await run([order([
+			{ weightName: 'Bold', family: 'Gamay' },
+			{ weightName: 'Bold', family: 'Gamay' },
+		])])
+		expect(demand?.weights[0]?.families).toBe(1)
+	})
+
+	it('counts the pick-one buyer, who a family-level view cannot see', async () => {
+		const demand = await run([
+			order([{ weightName: 'Bold', family: 'Gamay' }]),
+			order([{ weightName: 'Bold', family: 'Gamay' }, { weightName: 'Light', family: 'Gamay' }]),
+		])
+		expect(demand?.singleStyleOrders).toBe(1)
+		expect(demand?.orders).toBe(2)
+	})
+
+	it('ignores an order the status filter excludes', async () => {
+		const demand = await run([
+			order([{ weightName: 'Bold', family: 'Gamay' }]),
+			order([{ weightName: 'Light', family: 'Gamay' }], 'cancelled'),
+		])
+		expect(demand?.licences).toBe(1)
+		expect(demand?.weights.map((w) => w.weight)).toEqual(['Bold'])
+	})
+
+	it('survives an order whose styles array is absent', async () => {
+		// 11 of Darden's 1,134 orders carry no fonts at all.
+		const demand = await run([{ status: 'complete' }, order([{ weightName: 'Bold', family: 'Gamay' }])])
+		expect(demand?.orders).toBe(2)
+		expect(demand?.licences).toBe(1)
+		// An order with no styles is not a one-style order.
+		expect(demand?.singleStyleOrders).toBe(1)
+	})
+
+	it('does not ask Sanity for a date-bounded window', async () => {
+		// Deliberate, and the panel says so: per-weight counts inside one month are single digits.
+		const spy = createFakeSanityClient(() => [])
+		await countStyleDemand(spy, orderQueryOptions({ documentType: 'order', totalField: 'total' }, window), 'typefaces')
+		expect(spy.queries[0]?.query).not.toContain('_createdAt')
+	})
+
+	it('returns nothing rather than guessing when the site names no typefaces field', async () => {
+		expect(await countStyleDemand(client([]), orderQueryOptions({ documentType: 'order' }, window), null)).toBeNull()
+	})
+})
+
+describe('library coverage — the styles nobody has bought', () => {
+	const window = { key: 'week' as const, start: '2026-08-20', end: '2026-08-26', timezone: 'UTC' }
+	const options = orderQueryOptions(
+		{ documentType: 'order', totalField: 'total', countedStatuses: ['complete'] }, window,
+	)
+
+	/**
+	 * Answer the library query and the order query from one fake.
+	 *
+	 * @param library - font documents with their family
+	 * @param orders - orders with the font ids they licensed
+	 */
+	const run = async (
+		library: Array<{ _id: string; family: string }>,
+		orders: Array<{ status?: string; ids: string[] }>,
+	) => countLibraryCoverage(
+		{
+			async fetch<T>(query: string): Promise<T> {
+				if (query.includes('$fontType')) return library as T
+				return orders.map((o) => ({ status: o.status ?? 'complete', ids: o.ids })) as T
+			},
+		},
+		options, 'typefaces', 'font',
+	)
+
+	it('reports a zero-sales family apart from the gaps, not folded into them', async () => {
+		// This is the whole point of the split. On Darden 82 of the 94 never-licensed styles belong to
+		// Daith, which has sold nothing at all — so it is unreleased, not unwanted. One combined
+		// "21% of your styles never sell" makes a new release read as dead stock.
+		const coverage = await run(
+			[
+				{ _id: 'g1', family: 'Gamay' }, { _id: 'g2', family: 'Gamay' },
+				{ _id: 'd1', family: 'Daith' }, { _id: 'd2', family: 'Daith' },
+			],
+			[{ ids: ['g1'] }],
+		)
+		expect(coverage?.unreleased).toEqual([{ family: 'Daith', styles: 2 }])
+		expect(coverage?.gaps).toEqual([{ family: 'Gamay', styles: 1 }])
+	})
+
+	it('counts the gap as styles unsold, not styles held', async () => {
+		const coverage = await run(
+			[{ _id: 'g1', family: 'Gamay' }, { _id: 'g2', family: 'Gamay' }, { _id: 'g3', family: 'Gamay' }],
+			[{ ids: ['g1'] }],
+		)
+		expect(coverage?.gaps).toEqual([{ family: 'Gamay', styles: 2 }])
+	})
+
+	it('reports nothing for a family that sells every style it holds', async () => {
+		const coverage = await run([{ _id: 'g1', family: 'Gamay' }], [{ ids: ['g1'] }])
+		expect(coverage?.gaps).toEqual([])
+		expect(coverage?.unreleased).toEqual([])
+		expect(coverage?.everLicensed).toBe(1)
+	})
+
+	it('does not credit a style to an order the status filter excludes', async () => {
+		const coverage = await run(
+			[{ _id: 'g1', family: 'Gamay' }, { _id: 'g2', family: 'Gamay' }],
+			[{ ids: ['g1'] }, { status: 'cancelled', ids: ['g2'] }],
+		)
+		expect(coverage?.everLicensed).toBe(1)
+		expect(coverage?.gaps).toEqual([{ family: 'Gamay', styles: 1 }])
+	})
+
+	it('excludes drafted font documents from the library', async () => {
+		// The draft trap orderFilter documents, and likelier here: an editor opens a font document to
+		// check a name far more often than an order. A drafted font is counted as a second style nobody
+		// has licensed — a gap invented by the act of looking at the library.
+		const seen: string[] = []
+		await countLibraryCoverage(
+			{ async fetch<T>(query: string): Promise<T> { seen.push(query); return [{ _id: 'g1', family: 'Gamay' }] as T } },
+			options, 'typefaces', 'font',
+		)
+		expect(seen.find((q) => q.includes('$fontType'))).toContain('path("drafts.**")')
+	})
+
+	it('returns nothing rather than an empty library when the font type finds no documents', async () => {
+		// An empty library is not a library with no sales — it means the configured type is wrong, and
+		// reporting "0 of 0 styles licensed" would read as a finding.
+		expect(await run([], [{ ids: ['g1'] }])).toBeNull()
 	})
 })

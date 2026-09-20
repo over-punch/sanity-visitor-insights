@@ -15,7 +15,7 @@
 
 import React from 'react'
 import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
-import { ChartData, ContainmentBar, Delta, SPACE, panelStack, stackBlock, stackGroup, formatDay, LicenceLadder, EstimateDotPlot, RatioFigure, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
+import { ChartData, ContainmentBar, Delta, SPACE, panelStack, stackBlock, stackGroup, stackPair, formatDay, LicenceLadder, EstimateDotPlot, RatioFigure, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import { SEND_WINDOW_DAYS } from '../core/ranges'
 import { describeRank, weeklyRank } from '../core/rank'
@@ -32,7 +32,9 @@ import type {
 	JourneySegment,
 	JourneyStep,
 	LandingPage,
+	LibraryCoverageData,
 	MeasurementHealthData,
+	StyleDemandData,
 	TypefaceInterestData,
 } from '../reportData'
 import { ok, partial, unavailable, type MetricValue } from '../types'
@@ -1870,6 +1872,60 @@ export function visitorsPerOrder(data: MeasurementHealthData): MetricValue {
 	return ok(Math.round(visitors / orders))
 }
 
+/**
+ * How many weights the chart draws before it stops and says how many it left out.
+ *
+ * Twelve is the point at which near-equal bars stop being a ranking and become a wall. Foundry
+ * weight names run to fifteen or twenty once italics and optical sizes are counted separately.
+ */
+const WEIGHTS_SHOWN = 12
+
+/**
+ * The family carrying the most style licences, and its share of the whole book.
+ *
+ * Returns null when nothing is recorded — a share of an empty book is not zero, it is unanswerable.
+ *
+ * @param demand - the pooled style demand
+ */
+function leadingFamily(demand: StyleDemandData): { family: string; share: number } | null {
+	if (demand.licences <= 0) return null
+	const ranked = Object.entries(demand.familyLicences).sort((a, b) => b[1] - a[1])
+	const top = ranked[0]
+	if (!top) return null
+	return { family: top[0], share: top[1] / demand.licences }
+}
+
+/**
+ * What the weights chart is counting, said before a reader reads a bar.
+ *
+ * Two things have to be admitted up front. A style LICENCE is not an order — one order can license
+ * a hundred styles — so the total dwarfs the order count and would otherwise look wrong. And this
+ * figure ignores the range picker above it, deliberately: at a foundry's monthly volumes a ranged
+ * style query returns single digits per weight and says nothing, while the whole book runs to
+ * thousands. A figure that ignores a control on the same screen has to say so.
+ *
+ * @param demand - the pooled style demand
+ */
+function styleDemandSubtitle(demand: StyleDemandData): string {
+	return `${formatCount(demand.licences)} style licences across ${formatCount(demand.orders)} orders — `
+		+ 'your whole order history, not the range above, because a month of style-level counts is too thin to rank.'
+}
+
+/**
+ * The library's headline, which must not be "21% of your styles have never sold".
+ *
+ * That sentence is true on Darden and badly misleading: 82 of the 94 belong to one family that has
+ * sold nothing at all, which means unreleased rather than unwanted. The two are counted apart and
+ * the subtitle states the honest pair.
+ *
+ * @param coverage - the library measured against the order book
+ */
+function libraryCoverageSubtitle(coverage: LibraryCoverageData): string {
+	const unreleasedStyles = coverage.unreleased.reduce((sum, f) => sum + f.styles, 0)
+	const released = coverage.styles - unreleasedStyles
+	return `${formatCount(coverage.everLicensed)} of ${formatCount(released)} released styles have been licensed at least once.`
+}
+
 /** Typeface interest — viewed, tested and bought per family. */
 export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }): React.ReactElement {
 	// The whole catalogue's orders-per-view, which every family is measured against.
@@ -2038,6 +2094,88 @@ export function TypefaceInterestPanel({ data }: { data: TypefaceInterestData }):
 					]}
 				/>
 			</div>
+
+			{/* WHICH STYLES THE DRAWING WORK SELLS.
+			
+			    Every order has always recorded the individual styles it licensed — `typefaces[].fonts[]`
+			    — and nothing ever read them. Orders were aggregated to the family and the styles thrown
+			    away, so the one question a foundry asks about its own drawing had no answer in a tool
+			    built on its order book.
+			
+			    Asked at the LIBRARY grain deliberately. Per family per style the counts are single
+			    digits and this package would refuse them; pooled across the catalogue and the whole
+			    order history they run to thousands, because one order can license a hundred styles. */}
+			{(data.styleDemand?.weights.length ?? 0) > 0 && (
+				<Section
+					title="Which weights sell"
+					subtitle={styleDemandSubtitle(data.styleDemand as StyleDemandData)}
+				>
+					<ProportionChart
+						bars={(data.styleDemand?.weights ?? []).slice(0, WEIGHTS_SHOWN).map((row) => ({
+							key: row.weight,
+							label: row.weight,
+							sublabel: row.families === 1 ? 'one family only' : `across ${formatCount(row.families)} families`,
+							value: row.licences,
+						}))}
+						format={(value) => `${formatCount(value)} licences`}
+						totalLabel="Style licences in the weights shown"
+					/>
+					<div style={stackPair}>
+						{/* The cap, said out loud. A quiet top-12 reads as the whole list. */}
+						{(data.styleDemand?.weights.length ?? 0) > WEIGHTS_SHOWN && (
+							<Text size={0} muted>
+								{formatCount((data.styleDemand as StyleDemandData).weights.length - WEIGHTS_SHOWN)} quieter
+								{' '}weights are not shown.
+							</Text>
+						)}
+						{/* Which family's drawing actually does the work. Over a whole book this is often one
+						    family carrying most of the catalogue — a fact the ranged table above, built on a
+						    handful of orders, has no way to show. */}
+						{leadingFamily(data.styleDemand as StyleDemandData) && (
+							<Text size={1}>
+								{leadingFamily(data.styleDemand as StyleDemandData)?.family} accounts for{' '}
+								{formatPercent(leadingFamily(data.styleDemand as StyleDemandData)?.share ?? 0, 0)} of
+								every style ever licensed.
+							</Text>
+						)}
+						{/* The pick-one buyer, a third of the book and invisible in a family-level view. */}
+						{(data.styleDemand?.orders ?? 0) > 0 && (
+							<Text size={0} muted>
+								{formatPercent((data.styleDemand as StyleDemandData).singleStyleOrders / (data.styleDemand as StyleDemandData).orders, 0)}
+								{' '}of orders licensed exactly one style.
+							</Text>
+						)}
+					</div>
+				</Section>
+			)}
+
+			{data.libraryCoverage && (
+				<Section
+					title="What the library holds"
+					tone="secondary"
+					subtitle={libraryCoverageSubtitle(data.libraryCoverage)}
+				>
+					{/* The gap, in families that DO sell. Separated from the unreleased ones because a
+					    family nobody has bought a single style from is not evidence about demand — and
+					    folding the two together makes a new release read as dead stock. */}
+					{data.libraryCoverage.gaps.length > 0 ? (
+						<Text size={1}>
+							Never licensed, in families that sell:{' '}
+							{data.libraryCoverage.gaps.map((g) => `${g.family} (${formatCount(g.styles)})`).join(', ')}.
+						</Text>
+					) : (
+						<Text size={1}>Every style in every selling family has been licensed at least once.</Text>
+					)}
+					{data.libraryCoverage.unreleased.length > 0 && (
+						<Text size={0} muted>
+							Not counted above:{' '}
+							{data.libraryCoverage.unreleased.map((u) => `${u.family} (${formatCount(u.styles)} styles)`).join(', ')}
+							{' '}— no style from {data.libraryCoverage.unreleased.length === 1 ? 'it' : 'them'} has ever
+							sold, which reads as unreleased rather than unwanted.
+						</Text>
+					)}
+				</Section>
+			)}
 
 			{(data.licences?.length ?? 0) > 0 && (
 				<div style={stackBlock}>
