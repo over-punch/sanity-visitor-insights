@@ -46,7 +46,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Liiift-Studio/sanity-visitor-insights.git"
+    "url": "git+https://github.com/over-punch/sanity-visitor-insights.git"
   },
   "peerDependencies": {
     "@sanity/ui": ">=2 <5",
