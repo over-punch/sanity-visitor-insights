@@ -1,5 +1,5 @@
 {
-  "name": "@liiift-studio/sanity-visitor-insights",
+  "name": "@overpunch/sanity-visitor-insights",
   "version": "0.79.0",
   "description": "Visitor-behaviour analytics for type-foundry Sanity Studios — GA4, Vercel and order data reconciled honestly",
   "main": "dist/index.js",
@@ -59,7 +59,7 @@
     }
   },
   "dependencies": {
-    "@liiift-studio/sanity-ui-compat": "^0.1.4",
+    "@overpunch/sanity-ui-compat": "^0.1.4",
     "d3-array": "^3.2.4",
     "d3-scale": "^4.0.2",
     "d3-shape": "^3.2.0"

@@ -6,7 +6,7 @@
  * applied to one repo and forgotten in the other two. A consuming site's route is then:
  *
  *   // pages/api/visitor-insights/[report].js
- *   import { createVisitorInsightsHandler } from '@liiift-studio/sanity-visitor-insights/server'
+ *   import { createVisitorInsightsHandler } from '@overpunch/sanity-visitor-insights/server'
  *   export default createVisitorInsightsHandler({ config: mySiteConfig })
  *
  * Credentials are read from the environment inside this module and never leave the server.

@@ -1,4 +1,4 @@
-# @liiift-studio/sanity-visitor-insights
+# @overpunch/sanity-visitor-insights
 
 Visitor-**behaviour** analytics inside Sanity Studio, for Darden, TDF and MCKL.
 
@@ -106,7 +106,7 @@ It is also the one panel that still says something useful with nothing configure
 opening the moment credentials land. Available in the Studio, or headless:
 
 ```ts
-import { runDiagnostics } from '@liiift-studio/sanity-visitor-insights/server'
+import { runDiagnostics } from '@overpunch/sanity-visitor-insights/server'
 
 const report = await runDiagnostics({ config, ga4, vercel, sanity })
 console.log(report.verdict, report.checks)
@@ -120,7 +120,7 @@ Test doubles ship from a separate subpath, so a consuming site can exercise thes
 it has anything to point at:
 
 ```ts
-import { createFakeGa4Client, makeGa4Total } from '@liiift-studio/sanity-visitor-insights/testing'
+import { createFakeGa4Client, makeGa4Total } from '@overpunch/sanity-visitor-insights/testing'
 
 const ga4 = createFakeGa4Client({ batch: () => [makeGa4Total(800), makeGa4Total(300), makeGa4Total(0)] })
 const data = await measurementHealth({ config, range, ga4, vercel: null, sanity: null })
@@ -134,14 +134,14 @@ this package proves no customer field is ever projected.
 ## Installing
 
 ```bash
-npm install @liiift-studio/sanity-visitor-insights
+npm install @overpunch/sanity-visitor-insights
 ```
 
 ### 1. Studio
 
 ```ts
 // sanity.config.ts
-import { visitorInsights } from '@liiift-studio/sanity-visitor-insights'
+import { visitorInsights } from '@overpunch/sanity-visitor-insights'
 
 export default defineConfig({
   plugins: [
@@ -164,7 +164,7 @@ figures, so gating to administrators is usually right.
 
 ```js
 // pages/api/visitor-insights/[report].js
-import { createVisitorInsightsHandler } from '@liiift-studio/sanity-visitor-insights/server'
+import { createVisitorInsightsHandler } from '@overpunch/sanity-visitor-insights/server'
 import { client } from '../../../lib/sanityClient'
 
 export default createVisitorInsightsHandler({

@@ -22,7 +22,7 @@
  */
 
 import React, { useCallback, useMemo, useRef, useState } from 'react'
-import { Card, Stack, Text } from '@liiift-studio/sanity-ui-compat'
+import { Card, Stack, Text } from '@overpunch/sanity-ui-compat'
 import { scaleUtc, scaleLinear } from 'd3-scale'
 import { line as d3Line, area as d3Area, curveLinear } from 'd3-shape'
 import { max as d3Max } from 'd3-array'

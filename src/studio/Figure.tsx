@@ -10,7 +10,7 @@
  */
 
 import React, { useRef, useState } from 'react'
-import { Badge, Box, Card, Flex, Heading, Stack, Text, Tooltip } from '@liiift-studio/sanity-ui-compat'
+import { Badge, Box, Card, Flex, Heading, Stack, Text, Tooltip } from '@overpunch/sanity-ui-compat'
 import { COMPARISON_TEXT, SERIES, mark } from './palette'
 import type { MetricValue, UnavailableReason } from '../types'
 import { valueOrNull } from '../types'

@@ -6,7 +6,7 @@
  */
 
 import { definePlugin } from 'sanity'
-import { resolveIcon } from '@liiift-studio/sanity-ui-compat/icons'
+import { resolveIcon } from '@overpunch/sanity-ui-compat/icons'
 import { VisitorInsightsTool, type VisitorInsightsToolProps } from './studio/VisitorInsightsTool'
 
 /** Chart glyph, resolved against whichever @sanity/icons major the Studio has installed. */
@@ -51,7 +51,7 @@ export const visitorInsights = definePlugin<VisitorInsightsPluginOptions>((optio
 	const { apiBaseUrl, siteLabel, name = 'visitor-insights', title = 'Insights', roles } = options
 
 	return {
-		name: '@liiift-studio/sanity-visitor-insights',
+		name: '@overpunch/sanity-visitor-insights',
 		tools: (prev, { currentUser }) => {
 			if (roles && roles.length > 0) {
 				const userRoles = currentUser?.roles?.map((role) => role.name) ?? []

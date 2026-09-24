@@ -7,7 +7,7 @@
  */
 
 import React, { useCallback, useRef, useState } from 'react'
-import { Box, Button, Card, Container, Flex, Heading, Spinner, Stack, Text } from '@liiift-studio/sanity-ui-compat'
+import { Box, Button, Card, Container, Flex, Heading, Spinner, Stack, Text } from '@overpunch/sanity-ui-compat'
 import type { RangeKey, ReportName, SourceName, SourceStatus } from '../types'
 import { knownShortfall, useReport, type ReportState } from './useReport'
 import { decodeView, mergeIntoHash, type ViewState } from './urlState'
@@ -15,7 +15,7 @@ import type { ReportEnvelope } from '../types'
 import { daysBetween, shiftDays } from '../core/ranges'
 import { NoticeList, Section, panelStack } from './Figure'
 import { COMPARISON, COMPARISON_STYLE, COMPARISON_TEXT, withAlpha } from './palette'
-import { Badge } from '@liiift-studio/sanity-ui-compat'
+import { Badge } from '@overpunch/sanity-ui-compat'
 import { AcquisitionPanel, DataHealthPanel, JourneyPanel, OverviewPanel, TypefaceInterestPanel } from './panels'
 
 /**

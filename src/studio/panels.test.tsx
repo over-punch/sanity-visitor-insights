@@ -60,7 +60,7 @@ import visitorInsights from '../index'
 import { ContainmentBar, Delta, LicenceLadder, SPACE, EstimateDotPlot, FunnelChart, RatioFigure, MetricFigure, NoticeList, ProportionChart, Section, SectionTitle, SortableTable, isContainment, splitGrid } from './Figure'
 import { holdsPreviousAnswer } from './useReport'
 import { ok, partial, unavailable } from '../types'
-import { UI } from '@liiift-studio/sanity-ui-compat'
+import { UI } from '@overpunch/sanity-ui-compat'
 
 // @sanity/ui primitives read their palette from theme context and throw without it. Reached through
 // the compat namespace rather than a direct import, because @sanity/ui v4 declares its barrel
@@ -696,7 +696,7 @@ describe('panels tolerate an older route response', () => {
 /**
  * Layout that survives the compat shim falling back to a plain div.
  *
- * `@liiift-studio/sanity-ui-compat` renders a plain element when it cannot resolve a UI kit
+ * `@overpunch/sanity-ui-compat` renders a plain element when it cannot resolve a UI kit
  * component for the Studio version in use. A `gap={3}` on that fallback is a design token being
  * handed to CSS, which means nothing — so the Caveat badge and its notice text rendered on top of
  * one another and the panel read "Caveasubscribe is counted about twice per signup".

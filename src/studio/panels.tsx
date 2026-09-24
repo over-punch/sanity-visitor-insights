@@ -14,7 +14,7 @@
  */
 
 import React from 'react'
-import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@liiift-studio/sanity-ui-compat'
+import { Badge, Card, Flex, Heading, Label, Stack, Text } from '@overpunch/sanity-ui-compat'
 import { ChartData, ContainmentBar, Delta, SPACE, panelStack, stackBlock, stackGroup, stackPair, formatDay, LicenceLadder, EstimateDotPlot, RatioFigure, FunnelChart, MetricFigure, NoticeList, MIN_DELTA_BASE, MIN_RATE_DENOMINATOR, ProportionChart, Section, SectionTitle, isContainment, SortableTable, formatCount, formatMoney, formatPercent, splitGrid } from './Figure'
 import { CrossSourceTimeline } from './CrossSourceTimeline'
 import { SEND_WINDOW_DAYS } from '../core/ranges'

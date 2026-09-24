@@ -5,7 +5,7 @@
  * being available to a consuming site that wants to exercise these reports before it has
  * credentials to point at.
  *
- *   import { createFakeGa4Client } from '@liiift-studio/sanity-visitor-insights/testing'
+ *   import { createFakeGa4Client } from '@overpunch/sanity-visitor-insights/testing'
  */
 
 export * from './testing/fakes'
